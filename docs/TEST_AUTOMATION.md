@@ -1,6 +1,22 @@
 # Automatización de pruebas en tablet
 
-`scripts/test-tablet-stress.ps1` ejecuta pruebas de carga sobre la variante debug de Canvas Studio mediante ADB. Está orientado a una Samsung Galaxy Tab S8 (`SM-X700`) conectada por USB o depuración inalámbrica.
+La prueba principal es `scripts/test-raster-engine.ps1`. Ejecuta instrumentación Android sobre el motor tiled, sin capturas ni coordenadas de pantalla. Está orientada a una Samsung Galaxy Tab S8 (`SM-X700`) conectada por USB o depuración inalámbrica.
+
+Cada iteración comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. También comprueba la recuperación asíncrona de tiles visibles.
+
+```powershell
+.\scripts\test-raster-engine.ps1
+```
+
+Para una prueba prolongada sin recompilar ni reinstalar:
+
+```powershell
+.\scripts\test-raster-engine.ps1 -SkipBuild -SkipInstall -Iterations 50
+```
+
+## Prueba complementaria de interfaz
+
+`scripts/test-tablet-stress.ps1` conserva el recorrido ADB de extremo a extremo para comprobaciones manuales de interfaz y métricas. No debe usarse como oráculo principal de persistencia de trazos, porque las coordenadas y la canalización de entrada varían según la rotación y configuración del dispositivo.
 
 ## Qué valida
 

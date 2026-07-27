@@ -16,6 +16,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.Shader
+import android.graphics.drawable.Drawable
 import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -112,6 +113,20 @@ class DrawingView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
+    }
+    private val deferredStrokeOverlay = object : Drawable() {
+        override fun draw(canvas: Canvas) {
+            canvas.save()
+            canvas.concat(transform)
+            canvas.clipRect(documentBounds)
+            drawDeferredStrokePreview(canvas)
+            canvas.restore()
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
+        @Deprecated("Deprecated in Android")
+        override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
     }
     private val cursorOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(190, 16, 18, 22)
@@ -238,11 +253,18 @@ class DrawingView(context: Context) : View(context) {
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var usePlatformLowLatencyPreview: Boolean = false
+
+    fun supportsPlatformLowLatencyPreview(): Boolean =
+        tool == DrawingTool.BRUSH && shouldDeferActiveRaster(brushSettings)
+
+    fun platformPreviewSizePx(): Float = brushSettings.sizePx * currentScale
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
         setLayerType(LAYER_TYPE_HARDWARE, null)
+        overlay.add(deferredStrokeOverlay)
         createEmptyDocument(documentWidth, documentHeight)
     }
 
@@ -632,14 +654,19 @@ class DrawingView(context: Context) : View(context) {
         BrushKind.AIRBRUSH,
         BrushKind.CHARCOAL,
         BrushKind.CHALK,
+        BrushKind.DRY_BRUSH,
+        BrushKind.BRISTLE,
+        BrushKind.WATERCOLOR,
+        BrushKind.OIL,
         -> true
         else -> false
     }
 
+    private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
+        isStampBrush(settings.kind) && settings.sizePx >= 48f
+
     private fun minimumInputDistance(settings: BrushSettings): Float {
-        if (!isStampBrush(settings.kind)) return 0.18f
-        val spacingDistance = settings.sizePx * settings.spacing.coerceIn(0.025f, 0.5f)
-        return (spacingDistance * 0.52f).coerceIn(0.75f, 6f)
+        return inputSamplingDistance(settings, isStampBrush(settings.kind))
     }
 
     private fun requiresFinalStrokeRebuild(settings: BrushSettings): Boolean {
@@ -653,8 +680,9 @@ class DrawingView(context: Context) : View(context) {
     private fun stampSpacing(settings: BrushSettings): Float {
         val requested = settings.spacing.coerceIn(0.025f, 0.5f)
         val floor = when (settings.kind) {
-            BrushKind.CHARCOAL, BrushKind.CHALK -> 0.13f
-            BrushKind.PAINT -> 0.09f
+            BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH -> 0.13f
+            BrushKind.BRISTLE -> 0.1f
+            BrushKind.PAINT, BrushKind.WATERCOLOR, BrushKind.OIL -> 0.09f
             BrushKind.AIRBRUSH -> 0.1f
             BrushKind.MARKER -> 0.08f
             else -> requested
@@ -752,6 +780,7 @@ class DrawingView(context: Context) : View(context) {
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        deferredStrokeOverlay.setBounds(0, 0, w, h)
         if (w > 0 && h > 0 && !fittedOnce) {
             resetView()
             fittedOnce = true
@@ -1248,6 +1277,7 @@ class DrawingView(context: Context) : View(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
+                requestUnbufferedDispatch(event)
                 val isInsideDocument = documentBounds.contains(current[0], current[1])
                 if (!isInsideDocument) return true
                 when (eventTool) {
@@ -1354,6 +1384,7 @@ class DrawingView(context: Context) : View(context) {
         activeStrokeSettings = null
         activeRenderedPointCount = 0
         strokeFramePosted = false
+        deferredStrokeOverlay.invalidateSelf()
     }
 
     private fun beginStroke(
@@ -1377,6 +1408,10 @@ class DrawingView(context: Context) : View(context) {
         if (!layer.editingMask && layer.alphaLocked && drawingTool == DrawingTool.ERASER) {
             clearActiveStrokeState()
             onEngineMessage?.invoke("Desactiva Bloquear alfa para usar el borrador en esta capa.")
+            return
+        }
+        if (shouldDeferActiveRaster(settings)) {
+            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
             return
         }
         val point = points.first()
@@ -1416,7 +1451,50 @@ class DrawingView(context: Context) : View(context) {
         val distance = hypot(x - previous.x, y - previous.y)
         if (distance < minimumInputDistance(settings)) return
         points += StrokePoint(x, y, pressure, tilt, time)
-        scheduleActiveStrokeRender()
+        if (shouldDeferActiveRaster(settings)) {
+            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
+        } else {
+            scheduleActiveStrokeRender()
+        }
+    }
+
+    /**
+     * Preview large textured strokes without touching sparse tiles for every input sample.
+     * The exact brush is rasterized once in finishStroke(), avoiding overdraw and tile churn.
+     */
+    private fun drawDeferredStrokePreview(canvas: Canvas) {
+        val points = activeStrokePoints ?: return
+        val settings = activeStrokeSettings ?: return
+        if (!shouldDeferActiveRaster(settings) || points.isEmpty()) return
+        val drawingTool = activeInputTool ?: tool
+        val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = if (drawingTool == DrawingTool.ERASER) Color.WHITE else settings.color
+            alpha = if (drawingTool == DrawingTool.ERASER) {
+                150
+            } else {
+                (settings.opacity.coerceIn(0.15f, 1f) * 220f).toInt()
+            }
+        }
+        symmetryMatrices().forEach { matrix ->
+            var previous = transformPoint(points.first(), matrix)
+            if (points.size == 1) {
+                previewPaint.strokeWidth =
+                    settings.sizePx * previous.pressure.coerceIn(settings.minSize, 1f)
+                canvas.drawPoint(previous.x, previous.y, previewPaint)
+            } else {
+                for (index in 1 until points.size) {
+                    val current = transformPoint(points[index], matrix)
+                    previewPaint.strokeWidth = settings.sizePx *
+                        ((previous.pressure + current.pressure) * 0.5f)
+                            .coerceIn(settings.minSize, 1f)
+                    canvas.drawLine(previous.x, previous.y, current.x, current.y, previewPaint)
+                    previous = current
+                }
+            }
+        }
     }
 
     private fun scheduleActiveStrokeRender() {
@@ -1487,6 +1565,28 @@ class DrawingView(context: Context) : View(context) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
         val settings = activeStrokeSettings ?: brushSettings
+        if (shouldDeferActiveRaster(settings)) {
+            val layer = activeLayer()
+            val first = points.firstOrNull()
+            if (layer != null && first != null) {
+                symmetryMatrices().forEachIndexed { index, matrix ->
+                    val transformed = transformPoint(first, matrix)
+                    drawOnLayer(layer, strokeSegmentBounds(transformed, transformed, settings)) { canvas ->
+                        drawBrushStamp(
+                            canvas = canvas,
+                            x = transformed.x,
+                            y = transformed.y,
+                            pressure = transformed.pressure * taperFactor(settings, 0f),
+                            tilt = transformed.tilt,
+                            drawingTool = completedTool,
+                            settings = settings,
+                            stampIndex = 0,
+                            angleRadians = (2.0 * PI * index / max(1, symmetryMatrices().size)).toFloat(),
+                        )
+                    }
+                }
+            }
+        }
         renderActiveStrokePending(Int.MAX_VALUE)
         val completedPoints = points.toList()
         clearActiveStrokeState()
@@ -2183,8 +2283,31 @@ class DrawingView(context: Context) : View(context) {
 
         when (settings.kind) {
             BrushKind.CHARCOAL, BrushKind.CHALK -> {
-                val particles = if (settings.kind == BrushKind.CHARCOAL) 5 else 4
+                val particles = when {
+                    diameter >= 144f -> 2
+                    diameter >= 96f -> 3
+                    settings.kind == BrushKind.CHARCOAL -> 5
+                    else -> 4
+                }
                 val baseAlpha = strokePaint.alpha
+                // A translucent directional core keeps very large charcoal/chalk strokes
+                // continuous; particles alone look like disconnected circles above ~100 px.
+                canvas.save()
+                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                strokePaint.alpha = (
+                    baseAlpha * if (settings.kind == BrushKind.CHARCOAL) .2f else .14f
+                ).toInt().coerceIn(1, 255)
+                canvas.drawOval(
+                    RectF(
+                        stampX - radius * .82f,
+                        stampY - radius * .2f,
+                        stampX + radius * .82f,
+                        stampY + radius * .2f,
+                    ),
+                    strokePaint,
+                )
+                canvas.restore()
+                strokePaint.alpha = baseAlpha
                 val spread = radius * (0.48f + tilt * settings.tiltResponse + settings.scatter)
                 repeat(particles) { particle ->
                     val particleSeed = seed xor (particle + 1) * 83492791
@@ -2212,7 +2335,8 @@ class DrawingView(context: Context) : View(context) {
                 val baseAlpha = strokePaint.alpha
                 canvas.drawCircle(stampX, stampY, radius, strokePaint)
                 if (settings.grain > 0f) {
-                    repeat(2) { particle ->
+                    val grainParticles = if (diameter >= 120f) 1 else 2
+                    repeat(grainParticles) { particle ->
                         val particleSeed = seed xor particle * 265443576
                         val px = (((particleSeed and 0xFFFF) / 32767.5f) - 1f) * radius * .55f
                         val py = ((((particleSeed ushr 16) and 0xFFFF) / 32767.5f) - 1f) * radius * .55f
@@ -2221,6 +2345,79 @@ class DrawingView(context: Context) : View(context) {
                     }
                     strokePaint.alpha = baseAlpha
                 }
+            }
+
+            BrushKind.DRY_BRUSH -> {
+                val baseAlpha = strokePaint.alpha
+                canvas.save()
+                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                repeat(4) { bristle ->
+                    if (((seed ushr (bristle * 3)) and 0x3) != 0) {
+                        val offset = (bristle - 1.5f) * radius * .28f
+                        strokePaint.alpha = (baseAlpha * (.3f + bristle * .09f)).toInt().coerceIn(1, 255)
+                        canvas.drawOval(
+                            RectF(
+                                stampX - radius * .7f,
+                                stampY + offset - radius * .08f,
+                                stampX + radius * .7f,
+                                stampY + offset + radius * .08f,
+                            ),
+                            strokePaint,
+                        )
+                    }
+                }
+                canvas.restore()
+                strokePaint.alpha = baseAlpha
+            }
+
+            BrushKind.BRISTLE -> {
+                val baseAlpha = strokePaint.alpha
+                canvas.save()
+                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                repeat(5) { bristle ->
+                    val offset = (bristle - 2f) * radius * .19f
+                    strokePaint.alpha = (baseAlpha * (.42f + bristle * .08f)).toInt().coerceIn(1, 255)
+                    canvas.drawOval(
+                        RectF(
+                            stampX - radius,
+                            stampY + offset - radius * .055f,
+                            stampX + radius,
+                            stampY + offset + radius * .055f,
+                        ),
+                        strokePaint,
+                    )
+                }
+                canvas.restore()
+                strokePaint.alpha = baseAlpha
+            }
+
+            BrushKind.WATERCOLOR -> {
+                val baseAlpha = strokePaint.alpha
+                strokePaint.alpha = (baseAlpha * .58f).toInt().coerceIn(1, 255)
+                canvas.drawCircle(stampX, stampY, radius, strokePaint)
+                strokePaint.style = Paint.Style.STROKE
+                strokePaint.strokeWidth = max(1f, radius * .07f)
+                strokePaint.alpha = (baseAlpha * (.22f + settings.grain * .22f)).toInt().coerceIn(1, 255)
+                canvas.drawCircle(stampX + noiseX * radius * .08f, stampY + noiseY * radius * .08f, radius * .88f, strokePaint)
+                strokePaint.style = Paint.Style.FILL
+                strokePaint.alpha = baseAlpha
+            }
+
+            BrushKind.OIL -> {
+                val baseAlpha = strokePaint.alpha
+                canvas.save()
+                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                canvas.drawOval(
+                    RectF(stampX - radius, stampY - radius * .48f, stampX + radius, stampY + radius * .48f),
+                    strokePaint,
+                )
+                strokePaint.alpha = (baseAlpha * .2f).toInt().coerceIn(1, 255)
+                canvas.drawOval(
+                    RectF(stampX - radius * .72f, stampY - radius * .3f, stampX + radius * .72f, stampY - radius * .12f),
+                    strokePaint,
+                )
+                canvas.restore()
+                strokePaint.alpha = baseAlpha
             }
 
             BrushKind.AIRBRUSH -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
@@ -2244,7 +2441,7 @@ class DrawingView(context: Context) : View(context) {
                 2f,
                 settings.sizePx * (0.12f + (1f - settings.hardness) * 0.22f),
             )
-            BrushKind.PAINT -> if (settings.hardness < 0.62f) {
+            BrushKind.PAINT, BrushKind.WATERCOLOR -> if (settings.hardness < 0.62f) {
                 max(1f, settings.sizePx * (1f - settings.hardness) * 0.08f)
             } else {
                 0f

@@ -8,6 +8,12 @@ import kotlin.math.pow
 fun calibratedPressure(rawPressure: Float, curve: Float): Float =
     rawPressure.coerceIn(0f, 1f).pow(curve.coerceIn(0.35f, 2.5f))
 
+fun inputSamplingDistance(settings: BrushSettings, stampBased: Boolean): Float {
+    if (!stampBased) return 0.18f
+    val spacingDistance = settings.sizePx * settings.spacing.coerceIn(0.025f, 0.5f)
+    return (spacingDistance * 0.82f).coerceIn(0.75f, 28f)
+}
+
 enum class DrawingTool {
     BRUSH,
     ERASER,
@@ -48,6 +54,10 @@ enum class BrushKind {
     AIRBRUSH,
     CHARCOAL,
     CHALK,
+    DRY_BRUSH,
+    BRISTLE,
+    WATERCOLOR,
+    OIL,
 }
 
 data class BrushPreset(
@@ -408,8 +418,8 @@ val premiumBrushes = listOf(
     BrushPreset("g-nib", "Plumilla G", "Tinta", BrushKind.INK, 38f, 1f, .94f, .04f, .34f, 1f, .02f, true, false, .68f, .22f, .36f, .32f, 0f, 0f, .24f),
     BrushPreset("flat-marker", "Rotulador plano", "Marcadores", BrushKind.MARKER, 64f, .46f, .9f, .065f, .1f, .78f, .74f, false, true, 1.1f, .3f, 0f, 0f, 0f, .08f, 0f),
     BrushPreset("hard-airbrush", "Aerógrafo duro", "Aerógrafo", BrushKind.AIRBRUSH, 96f, .28f, .42f, .055f, .08f, .52f, .38f, true, true, 1.18f, 0f, 0f, 0f, .02f, .04f, 0f),
-    BrushPreset("dry-brush", "Pincel seco", "Pintura", BrushKind.CHALK, 74f, .68f, .5f, .1f, .1f, .58f, .18f, true, true, .92f, .58f, .04f, .05f, .18f, .7f, .08f),
-    BrushPreset("bristle", "Pincel de cerdas", "Pintura", BrushKind.CHARCOAL, 88f, .76f, .62f, .08f, .12f, .64f, .2f, true, true, .84f, .48f, .06f, .06f, .14f, .54f, .06f),
-    BrushPreset("granulated-watercolor", "Acuarela granulada", "Acuarela", BrushKind.PAINT, 104f, .26f, .18f, .075f, .14f, .42f, .32f, true, true, 1.24f, .32f, 0f, .04f, .08f, .74f, 0f),
-    BrushPreset("thick-oil", "Óleo espeso", "Óleo", BrushKind.PAINT, 92f, .9f, .82f, .07f, .16f, .8f, .26f, true, true, .86f, .24f, .04f, .06f, .06f, .32f, .04f),
+    BrushPreset("dry-brush", "Pincel seco", "Pintura", BrushKind.DRY_BRUSH, 74f, .68f, .5f, .1f, .1f, .58f, .18f, true, true, .92f, .58f, .04f, .05f, .18f, .7f, .08f),
+    BrushPreset("bristle", "Pincel de cerdas", "Pintura", BrushKind.BRISTLE, 88f, .76f, .62f, .08f, .12f, .64f, .2f, true, true, .84f, .48f, .06f, .06f, .14f, .54f, .06f),
+    BrushPreset("granulated-watercolor", "Acuarela granulada", "Acuarela", BrushKind.WATERCOLOR, 104f, .26f, .18f, .075f, .14f, .42f, .32f, true, true, 1.24f, .32f, 0f, .04f, .08f, .74f, 0f),
+    BrushPreset("thick-oil", "Óleo espeso", "Óleo", BrushKind.OIL, 92f, .9f, .82f, .07f, .16f, .8f, .26f, true, true, .86f, .24f, .04f, .06f, .06f, .32f, .04f),
 )

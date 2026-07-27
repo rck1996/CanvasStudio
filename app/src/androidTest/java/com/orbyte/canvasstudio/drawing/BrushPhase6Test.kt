@@ -19,4 +19,26 @@ class BrushPhase6Test {
         assertTrue(premiumBrushes.any { it.name == "Acuarela granulada" })
         assertTrue(premiumBrushes.any { it.name == "Plumilla G" })
     }
+
+    @Test
+    fun largeStampBrushesUseAdaptiveInputSampling() {
+        val small = BrushSettings(sizePx = 24f, spacing = .1f, kind = BrushKind.CHALK)
+        val large = BrushSettings(sizePx = 180f, spacing = .13f, kind = BrushKind.CHALK)
+        assertTrue(inputSamplingDistance(large, true) > inputSamplingDistance(small, true) * 5f)
+        assertTrue(inputSamplingDistance(large, true) <= 28f)
+    }
+
+    @Test
+    fun materialBrushNamesUseDedicatedRenderingFamilies() {
+        val expected = mapOf(
+            "Pincel seco" to BrushKind.DRY_BRUSH,
+            "Pincel de cerdas" to BrushKind.BRISTLE,
+            "Acuarela granulada" to BrushKind.WATERCOLOR,
+            "Óleo espeso" to BrushKind.OIL,
+        )
+        expected.forEach { (name, kind) ->
+            assertEquals(kind, premiumBrushes.single { it.name == name }.kind)
+        }
+        assertEquals(expected.size, expected.values.distinct().size)
+    }
 }

@@ -69,13 +69,30 @@ function Get-ConnectedTablet {
 
 function Get-WindowXml {
     $remotePath = '/sdcard/canvasstudio-test-window.xml'
-    Invoke-Adb @('shell', 'uiautomator', 'dump', $remotePath) | Out-Null
-    return Invoke-Adb @('exec-out', 'cat', $remotePath)
+    # Samsung occasionally rejects a dump while Compose is settling after an
+    # activity transition. Retry the read-only capture instead of failing a run.
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        try {
+            Invoke-Adb @('shell', 'uiautomator', 'dump', $remotePath) | Out-Null
+            return Invoke-Adb @('exec-out', 'cat', $remotePath)
+        } catch {
+            if ($attempt -eq 2) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }
 
 function Open-TestProject {
     $window = Get-WindowXml
     if ($window -match 'content-desc="Deshacer"') { return $true }
+    # Fresh installs show a one-time onboarding dialog before the gallery.  Dismiss it
+    # so this stress runner can be used on a clean tablet without manual preparation.
+    if ($window -match 'Bienvenido a Canvas Studio') {
+        Invoke-Adb @('shell', 'input', 'tap', 1735, 1110) | Out-Null
+        Start-Sleep -Seconds 2
+        $window = Get-WindowXml
+        if ($window -match 'content-desc="Deshacer"') { return $true }
+    }
     if ($window -notmatch 'Mis proyectos') { return $false }
     Invoke-Adb @('shell', 'input', 'tap', $ProjectTapX, $ProjectTapY) | Out-Null
     Start-Sleep -Seconds 6
@@ -99,7 +116,7 @@ function Test-UniqueStrokeVisibility {
         [Parameter(Mandatory)][string]$CandidatePath,
         [Parameter(Mandatory)][object[]]$Strokes,
         [Parameter(Mandatory)][int]$ExpectedCount,
-        [ValidateRange(0.5, 1.0)][double]$InputToCaptureScale = 0.78
+        [ValidateRange(0.5, 1.0)][double]$InputToCaptureScale = 1.0
     )
 
     Add-Type -AssemblyName System.Drawing
@@ -114,8 +131,7 @@ function Test-UniqueStrokeVisibility {
         for ($index = 0; $index -lt $ExpectedCount; $index++) {
             $stroke = $Strokes[$index]
             $changedPixels = 0
-            # adb input coordinates are scaled by Samsung's rotated display pipeline before
-            # they appear in screencap. Convert them so the comparison samples the real mark.
+            # Modern Samsung screencap and adb input use the same physical display coordinates.
             $left = [Math]::Max(0, [Math]::Round($stroke[0] * $InputToCaptureScale) - 5)
             $top = [Math]::Max(0, [Math]::Round($stroke[1] * $InputToCaptureScale) - 5)
             $right = [Math]::Min($baseline.Width - 1, [Math]::Round($stroke[2] * $InputToCaptureScale) + 5)
@@ -151,11 +167,32 @@ function Select-BrushPreset {
     $window = Get-WindowXml
     $brushesTab = Get-TextBounds $window 'Pinceles'
     if (-not $brushesTab.Success) { throw 'No se encontró la pestaña Pinceles en el editor.' }
-    $tabX = [int](($brushesTab.Groups[1].Value + $brushesTab.Groups[3].Value) / 2)
-    $tabY = [int](($brushesTab.Groups[2].Value + $brushesTab.Groups[4].Value) / 2)
+    $tabX = [int](([int]$brushesTab.Groups[1].Value + [int]$brushesTab.Groups[3].Value) / 2)
+    $tabY = [int](([int]$brushesTab.Groups[2].Value + [int]$brushesTab.Groups[4].Value) / 2)
     Invoke-Adb @('shell', 'input', 'tap', $tabX, $tabY) | Out-Null
     Start-Sleep -Milliseconds 500
-    $match = $null
+    $window = Get-WindowXml
+    for ($openAttempt = 0; $openAttempt -lt 2 -and $window -notmatch 'Biblioteca de pinceles'; $openAttempt++) {
+        $brushesTab = Get-TextBounds $window 'Pinceles'
+        if (-not $brushesTab.Success) { break }
+        $tabX = [int](([int]$brushesTab.Groups[1].Value + [int]$brushesTab.Groups[3].Value) / 2)
+        $tabY = [int](([int]$brushesTab.Groups[2].Value + [int]$brushesTab.Groups[4].Value) / 2)
+        Invoke-Adb @('shell', 'input', 'tap', $tabX, $tabY) | Out-Null
+        Start-Sleep -Milliseconds 700
+        $window = Get-WindowXml
+    }
+    if ($window -notmatch 'Biblioteca de pinceles') { throw 'No se pudo abrir la biblioteca de pinceles.' }
+    # Filtering is deterministic even when the dock has remembered a previous
+    # scroll position, unlike repeatedly swiping a virtualized preset list.
+    $search = Get-TextBounds $window 'Buscar pinceles'
+    if ($search.Success) {
+        $searchX = [int](([int]$search.Groups[1].Value + [int]$search.Groups[3].Value) / 2)
+        $searchY = [int](([int]$search.Groups[2].Value + [int]$search.Groups[4].Value) / 2)
+        Invoke-Adb @('shell', 'input', 'tap', $searchX, $searchY) | Out-Null
+        Invoke-Adb @('shell', 'input', 'text', $Name) | Out-Null
+        Start-Sleep -Milliseconds 450
+    }
+    $match = Get-TextBounds (Get-WindowXml) $Name
     for ($attempt = 0; $attempt -lt 5 -and -not $match.Success; $attempt++) {
         $window = Get-WindowXml
         $match = Get-TextBounds $window $Name
@@ -165,8 +202,8 @@ function Select-BrushPreset {
         }
     }
     if (-not $match.Success) { throw "No se encontró el preset '$Name' en el panel de pinceles." }
-    $x = [int](($match.Groups[1].Value + $match.Groups[3].Value) / 2)
-    $y = [int](($match.Groups[2].Value + $match.Groups[4].Value) / 2)
+    $x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
+    $y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
     Invoke-Adb @('shell', 'input', 'tap', $x, $y) | Out-Null
     Start-Sleep -Milliseconds 350
 }

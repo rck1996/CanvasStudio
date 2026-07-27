@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -119,6 +121,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
@@ -126,6 +130,7 @@ import com.orbyte.canvasstudio.drawing.BrushSettings
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
 import com.orbyte.canvasstudio.drawing.GuideMode
+import com.orbyte.canvasstudio.drawing.InkDrawingContainer
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.LayerGroupUiModel
 import com.orbyte.canvasstudio.drawing.LayerUiModel
@@ -237,7 +242,31 @@ fun EditorScreen(
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
+    var brushLibraryOpen by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val applyBrushPreset: (BrushPreset) -> Unit = { preset ->
+        selectedPreset = preset
+        brushSettings = brushSettings.copy(
+            sizePx = preset.sizePx,
+            opacity = preset.opacity,
+            hardness = preset.hardness,
+            spacing = preset.spacing,
+            stabilization = preset.stabilization,
+            flow = preset.flow,
+            minSize = preset.minSize,
+            pressureSize = preset.pressureSize,
+            pressureOpacity = preset.pressureOpacity,
+            pressureCurve = preset.pressureCurve,
+            tiltResponse = preset.tiltResponse,
+            taperStart = preset.taperStart,
+            taperEnd = preset.taperEnd,
+            scatter = preset.scatter,
+            grain = preset.grain,
+            velocitySize = preset.velocitySize,
+            kind = preset.kind,
+        )
+        selectedTool = DrawingTool.BRUSH
+    }
 
     LaunchedEffect(changeTick) {
         if (changeTick == 0) return@LaunchedEffect
@@ -450,14 +479,15 @@ fun EditorScreen(
                     selectedTool = selectedTool,
                     compact = compactWorkspace,
                     onSelect = { selectedTool = it },
-                    onTune = { selectedDock = DockTab.BRUSHES },
+                    onTune = { brushLibraryOpen = true },
                 )
             }
 
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 AndroidView(
                     factory = { viewContext ->
-                        DrawingView(viewContext).apply {
+                        InkDrawingContainer(viewContext).also { container ->
+                            container.drawingView.apply {
                             configureDocument(document.width, document.height)
                             val loaded = if (document.isLocal) loadProject(document.id) else false
                             if (!loaded) {
@@ -506,9 +536,11 @@ fun EditorScreen(
                             }
                             refreshLayerState()
                             drawingView = this
+                            }
                         }
                     },
-                    update = { view ->
+                    update = { container ->
+                        val view = container.drawingView
                         view.tool = selectedTool
                         view.brushSettings = brushSettings
                         view.setGridVisible(gridVisible)
@@ -590,29 +622,7 @@ fun EditorScreen(
                     selectedPreset = selectedPreset,
                     brushes = premiumBrushes + customBrushes,
                     brushSettings = brushSettings,
-                    onPresetSelected = { preset ->
-                        selectedPreset = preset
-                        brushSettings = brushSettings.copy(
-                            sizePx = preset.sizePx,
-                            opacity = preset.opacity,
-                            hardness = preset.hardness,
-                            spacing = preset.spacing,
-                            stabilization = preset.stabilization,
-                            flow = preset.flow,
-                            minSize = preset.minSize,
-                            pressureSize = preset.pressureSize,
-                            pressureOpacity = preset.pressureOpacity,
-                            pressureCurve = preset.pressureCurve,
-                            tiltResponse = preset.tiltResponse,
-                            taperStart = preset.taperStart,
-                            taperEnd = preset.taperEnd,
-                            scatter = preset.scatter,
-                            grain = preset.grain,
-                            velocitySize = preset.velocitySize,
-                            kind = preset.kind,
-                        )
-                        selectedTool = DrawingTool.BRUSH
-                    },
+                    onPresetSelected = applyBrushPreset,
                     onBrushSettingsChanged = { brushSettings = it },
                     onSaveCustomBrush = { brushName ->
                         val custom = BrushPreset(
@@ -676,6 +686,17 @@ fun EditorScreen(
             }
         }
         }
+    }
+
+    if (brushLibraryOpen) {
+        ExpandedBrushLibraryDialog(
+            brushes = premiumBrushes + customBrushes,
+            selectedPreset = selectedPreset,
+            settings = brushSettings,
+            onPresetSelected = applyBrushPreset,
+            onSettingsChanged = { brushSettings = it },
+            onDismiss = { brushLibraryOpen = false },
+        )
     }
 
     if (showHelp) {
@@ -1223,6 +1244,123 @@ private fun DockTabButton(
 }
 
 @Composable
+private fun ExpandedBrushLibraryDialog(
+    brushes: List<BrushPreset>,
+    selectedPreset: BrushPreset,
+    settings: BrushSettings,
+    onPresetSelected: (BrushPreset) -> Unit,
+    onSettingsChanged: (BrushSettings) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var category by remember { mutableStateOf("Todos") }
+    var query by remember { mutableStateOf("") }
+    val categories = listOf("Todos") + brushes.map(BrushPreset::category).distinct()
+    val visible = brushes.filter { preset ->
+        (category == "Todos" || preset.category == category) &&
+            (query.isBlank() || preset.name.contains(query.trim(), ignoreCase = true))
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize().padding(34.dp),
+            color = StudioPalette.Surface,
+            shape = RoundedCornerShape(18.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+        ) {
+            Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Biblioteca de pinceles",
+                        color = StudioPalette.Text,
+                        style = MaterialTheme.typography.headlineSmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = onDismiss) { Text("Listo") }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    LazyColumn(
+                        modifier = Modifier.width(190.dp).fillMaxHeight()
+                            .background(StudioPalette.SurfaceRaised, RoundedCornerShape(12.dp))
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        items(categories, key = { it }) { item ->
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().clickable { category = item },
+                                color = if (category == item) StudioPalette.AccentSoft else Color.Transparent,
+                                shape = RoundedCornerShape(9.dp),
+                            ) {
+                                Text(
+                                    item,
+                                    color = if (category == item) Color.White else StudioPalette.TextMuted,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                                )
+                            }
+                        }
+                    }
+
+                    Column(Modifier.weight(1f).fillMaxHeight()) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it.take(40) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                            placeholder = { Text("Buscar pinceles") },
+                        )
+                        Spacer(Modifier.height(9.dp))
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            items(visible, key = BrushPreset::id) { preset ->
+                                BrushPresetRow(
+                                    preset,
+                                    selected = preset.id == selectedPreset.id,
+                                ) { onPresetSelected(preset) }
+                            }
+                        }
+                    }
+
+                    Column(
+                        Modifier.width(360.dp).fillMaxHeight()
+                            .background(StudioPalette.SurfaceRaised, RoundedCornerShape(12.dp))
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp),
+                    ) {
+                        Text(selectedPreset.name, color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
+                        Text("General", color = StudioPalette.Accent, style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(12.dp))
+                        SettingSlider("Tamaño", settings.sizePx, 2f..180f, "${settings.sizePx.toInt()} px") {
+                            onSettingsChanged(settings.copy(sizePx = it))
+                        }
+                        SettingSlider("Tamaño mínimo", settings.minSize, .02f..1f, "${(settings.minSize * 100).toInt()}%") {
+                            onSettingsChanged(settings.copy(minSize = it))
+                        }
+                        SettingSlider("Opacidad", settings.opacity, .05f..1f, "${(settings.opacity * 100).toInt()}%") {
+                            onSettingsChanged(settings.copy(opacity = it))
+                        }
+                        SettingSlider("Espaciado", settings.spacing, .025f..0.4f, "${(settings.spacing * 100).toInt()}%") {
+                            onSettingsChanged(settings.copy(spacing = it))
+                        }
+                        SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
+                            onSettingsChanged(settings.copy(grain = it))
+                        }
+                        SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
+                            onSettingsChanged(settings.copy(stabilization = it))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BrushDock(
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
@@ -1298,9 +1436,16 @@ private fun BrushDock(
             }
         }
         Spacer(Modifier.height(13.dp))
-        visibleBrushes.forEach { preset ->
-            BrushPresetRow(preset, selected = preset.id == selectedPreset.id) { onPresetSelected(preset) }
-            Spacer(Modifier.height(7.dp))
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            items(visibleBrushes, key = BrushPreset::id) { preset ->
+                BrushPresetRow(
+                    preset,
+                    selected = preset.id == selectedPreset.id,
+                ) { onPresetSelected(preset) }
+            }
         }
         if (visibleBrushes.isEmpty()) {
             Text(
@@ -1324,7 +1469,15 @@ private fun BrushDock(
         SettingSlider("Dureza", settings.hardness, 0f..1f, "${(settings.hardness * 100).toInt()}%") {
             onSettingsChanged(settings.copy(hardness = it))
         }
-        if (settings.kind == BrushKind.AIRBRUSH || settings.kind == BrushKind.CHARCOAL || settings.kind == BrushKind.CHALK) {
+        if (settings.kind in setOf(
+                BrushKind.AIRBRUSH,
+                BrushKind.CHARCOAL,
+                BrushKind.CHALK,
+                BrushKind.DRY_BRUSH,
+                BrushKind.BRISTLE,
+                BrushKind.WATERCOLOR,
+            )
+        ) {
             SettingSlider("Espaciado", settings.spacing, 0.025f..0.4f, "${(settings.spacing * 100).toInt()}%") {
                 onSettingsChanged(settings.copy(spacing = it))
             }
@@ -1471,6 +1624,30 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
                         )
                     }
                 }
+            }
+            BrushKind.DRY_BRUSH, BrushKind.BRISTLE -> {
+                repeat(if (preset.kind == BrushKind.BRISTLE) 5 else 3) { index ->
+                    val offset = (index - 2f) * 2.1f
+                    drawPath(
+                        path,
+                        Color.White.copy(alpha = .24f + index * .09f),
+                        style = Stroke((previewWidth * .16f).coerceAtLeast(1f), cap = StrokeCap.Round),
+                    )
+                    drawLine(
+                        Color.White.copy(alpha = .16f),
+                        Offset(size.width * .16f, y + offset),
+                        Offset(size.width * .86f, y - 4f + offset),
+                        strokeWidth = 1f,
+                    )
+                }
+            }
+            BrushKind.WATERCOLOR -> {
+                drawPath(path, Color.White.copy(alpha = .12f), style = Stroke(previewWidth * 2.4f, cap = StrokeCap.Round))
+                drawPath(path, Color.White.copy(alpha = .22f), style = Stroke(previewWidth * 1.55f, cap = StrokeCap.Round))
+            }
+            BrushKind.OIL -> {
+                drawPath(path, Color.White.copy(alpha = .76f), style = Stroke(previewWidth * 1.35f, cap = StrokeCap.Square))
+                drawPath(path, Color.White.copy(alpha = .2f), style = Stroke((previewWidth * .28f).coerceAtLeast(1f), cap = StrokeCap.Round))
             }
             BrushKind.PENCIL -> {
                 drawPath(path, Color.White.copy(alpha = preset.opacity.coerceAtLeast(.42f)), style = Stroke(previewWidth * .62f, cap = StrokeCap.Round))

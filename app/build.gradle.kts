@@ -16,8 +16,8 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "2.0.0-beta01"
+        versionCode = 21
+        versionName = "2.0.0-beta02"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
@@ -75,6 +75,7 @@ android {
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.12.00")
+    val inkVersion = "1.0.0"
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -85,6 +86,13 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    implementation("androidx.ink:ink-authoring:$inkVersion")
+    implementation("androidx.ink:ink-brush:$inkVersion")
+    implementation("androidx.ink:ink-geometry:$inkVersion")
+    implementation("androidx.ink:ink-nativeloader:$inkVersion")
+    implementation("androidx.ink:ink-rendering:$inkVersion")
+    implementation("androidx.ink:ink-strokes:$inkVersion")
+    implementation("androidx.ink:ink-storage:$inkVersion")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     androidTestImplementation("androidx.test:runner:1.6.2")

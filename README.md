@@ -9,7 +9,7 @@ Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un 
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
-![Vista conceptual de Canvas Studio](docs/mockup-reference.png)
+![Identidad visual de Canvas Studio](docs/canvas-studio-logo.png)
 
 ## Capturas en dispositivo real
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="canvasstudio/projects/" />
+        <exclude domain="file" path="canvasstudio/versions/" />
+    </cloud-backup>
+    <device-transfer />
+</data-extraction-rules>

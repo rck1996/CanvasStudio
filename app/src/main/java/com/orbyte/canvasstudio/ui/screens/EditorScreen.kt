@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Gradient
+import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Lock
@@ -232,6 +233,7 @@ fun EditorScreen(
     var selectionActive by remember { mutableStateOf(false) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
+    var showHelp by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(changeTick) {
@@ -434,6 +436,7 @@ fun EditorScreen(
             },
             zenMode = zenMode,
             onToggleZen = { zenMode = !zenMode },
+            onShowHelp = { showHelp = true },
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -657,6 +660,25 @@ fun EditorScreen(
         }
     }
 
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("Ayuda rápida") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("S Pen: presión e inclinación controlan el trazo; el botón lateral activa el borrador temporal.")
+                    Text("Vista: usa dos dedos para mover, ampliar y girar. Restablecer vista vuelve al encuadre inicial.")
+                    Text("Rendimiento: los tiles visibles permanecen en memoria y se guardan incrementalmente.")
+                    Text("Teclado: B pincel, E borrador, H mano, Ctrl+Z deshacer. El perfil puede cambiarse en Ajustes.")
+                    Text("La cuadrícula solo es una guía visual y nunca se exporta.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHelp = false }) { Text("Entendido") }
+            },
+        )
+    }
+
     if (renameLayerOpen) {
         AlertDialog(
             onDismissRequest = { renameLayerOpen = false },
@@ -710,6 +732,7 @@ private fun EditorTopBar(
     onCycleGuides: () -> Unit,
     zenMode: Boolean,
     onToggleZen: () -> Unit,
+    onShowHelp: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     BoxWithConstraints(
@@ -815,6 +838,11 @@ private fun EditorTopBar(
                         text = { Text("Guardar ahora") },
                         leadingIcon = { Icon(Icons.Outlined.Save, null) },
                         onClick = { menuExpanded = false; onSaveNow() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Ayuda rápida") },
+                        leadingIcon = { Icon(Icons.Outlined.HelpOutline, null) },
+                        onClick = { menuExpanded = false; onShowHelp() },
                     )
                     DropdownMenuItem(
                         text = { Text(if (gridVisible) "Ocultar cuadrícula" else "Mostrar cuadrícula") },

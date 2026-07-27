@@ -1,4 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.io.FileInputStream
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -14,18 +16,43 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "1.6.0-phase4.1"
+        versionCode = 20
+        versionName = "2.0.0-beta01"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
     }
 
+    val signingPropertiesFile = rootProject.file("keystore.properties")
+    val signingProperties = Properties().apply {
+        if (signingPropertiesFile.isFile) {
+            FileInputStream(signingPropertiesFile).use(::load)
+        }
+    }
+    signingConfigs {
+        if (signingPropertiesFile.isFile) {
+            create("release") {
+                storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         debug {
             // Keeps development builds installable alongside a signed release, without touching user projects.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

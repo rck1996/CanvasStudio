@@ -4,8 +4,8 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Alpha avanzada / fase 4.1  
-> **Versión incluida en este repositorio:** `1.6.0-phase4.1`  
+> **Estado del proyecto:** Beta para tablets / fase 5
+> **Versión incluida en este repositorio:** `2.0.0-beta01`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -717,7 +717,9 @@ Para revisar el proyecto sin instalar:
 ./gradlew check
 ```
 
-Este repositorio no incluye todavía configuración de firma de producción, Play App Signing ni un flujo CI oficial.
+El repositorio incluye configuración opcional de firma mediante `keystore.properties`;
+consulta [`docs/BETA_RELEASE.md`](docs/BETA_RELEASE.md). Las credenciales y el keystore
+real no se versionan.
 
 ---
 
@@ -1040,13 +1042,9 @@ Canvas Studio todavía no es una versión final de producción.
 
 ### Experiencia de producto
 
-- Sin tutorial inicial completo.
-- Sin personalización de atajos.
 - Sin papelera recuperable.
-- Sin historial de versiones local.
 - Sin sincronización entre dispositivos.
-- Sin AAB firmado ni configuración de Play Store.
-- Sin pruebas instrumentadas incluidas actualmente en el repositorio.
+- Sin configuración de ficha ni publicación en Play Store.
 
 ---
 

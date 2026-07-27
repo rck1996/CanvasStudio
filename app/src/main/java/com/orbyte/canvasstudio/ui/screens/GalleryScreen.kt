@@ -90,6 +90,7 @@ import com.orbyte.canvasstudio.model.CanvasPreset
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
+import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.canvasPresets
 import com.orbyte.canvasstudio.model.constrainCanvasSize
@@ -104,6 +105,7 @@ fun GalleryScreen(
     onOpenProject: (ProjectCard) -> Unit,
     onDuplicateProject: (ProjectCard) -> Unit,
     onDeleteProject: (ProjectCard) -> Unit,
+    onRestoreLatestVersion: (ProjectCard) -> Unit,
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
@@ -183,6 +185,7 @@ fun GalleryScreen(
                             onClick = { onOpenProject(project) },
                             onDuplicate = { onDuplicateProject(project) },
                             onDelete = { onDeleteProject(project) },
+                            onRestoreLatestVersion = { onRestoreLatestVersion(project) },
                         )
                     }
                 }
@@ -388,9 +391,15 @@ private fun GalleryProjectCard(
     onClick: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onRestoreLatestVersion: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val hasLocalVersion = remember(project.id, project.modifiedEpoch) {
+        project.isLocal && ProjectVersionStore.list(context, project.id).isNotEmpty()
+    }
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmRestore by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = StudioPalette.Surface,
@@ -433,6 +442,16 @@ private fun GalleryProjectCard(
                         )
                         if (project.isLocal) {
                             DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (hasLocalVersion) "Restaurar versión anterior"
+                                        else "Sin versiones anteriores",
+                                    )
+                                },
+                                enabled = hasLocalVersion,
+                                onClick = { menuExpanded = false; confirmRestore = true },
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Eliminar del dispositivo") },
                                 onClick = { menuExpanded = false; confirmDelete = true },
                             )
@@ -458,6 +477,25 @@ private fun GalleryProjectCard(
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }
+            },
+        )
+    }
+
+    if (confirmRestore) {
+        AlertDialog(
+            onDismissRequest = { confirmRestore = false },
+            title = { Text("Restaurar versión") },
+            text = { Text("Se restaurará la versión local más reciente disponible de ${project.title}.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRestore = false
+                        onRestoreLatestVersion()
+                    },
+                ) { Text("Restaurar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestore = false }) { Text("Cancelar") }
             },
         )
     }

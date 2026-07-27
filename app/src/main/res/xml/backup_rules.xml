@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Raster projects can exceed Android backup quotas and must be exported explicitly. -->
+    <exclude domain="file" path="canvasstudio/projects/" />
+    <exclude domain="file" path="canvasstudio/versions/" />
+</full-backup-content>

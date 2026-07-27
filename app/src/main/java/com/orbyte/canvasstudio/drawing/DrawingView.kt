@@ -32,6 +32,7 @@ import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import com.orbyte.canvasstudio.model.ProjectRepository
+import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.constrainCanvasSize
 import kotlin.math.abs
 import kotlin.math.PI
@@ -3220,6 +3221,7 @@ class DrawingView(context: Context) : View(context) {
                     }.orEmpty().forEach(File::delete)
                     File(directory, "flattened.png").delete()
                     File(directory, "flattened.tmp").delete()
+                    ProjectVersionStore.maybeSnapshot(context, projectId, directory)
 
                     post {
                         layerSnapshots.forEach { snapshot ->

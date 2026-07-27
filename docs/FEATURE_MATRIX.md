@@ -16,6 +16,6 @@
 | Guías | Cuadrícula, simetría vertical/radial y perspectiva 1/2 puntos editables | Snapping, reglas y rejillas personalizadas |
 | Importación | Imagen como capa | OpenRaster y PSD de entrada |
 | Exportación | PNG y OpenRaster con capas | PSD básico, TIFF y PDF |
-| Autoguardado | Incremental y metadata recuperable | Diario de recuperación y versiones locales |
+| Autoguardado | Incremental, metadata recuperable y tres versiones locales | Interfaz visual para restaurar versiones |
 | Documentos grandes | 64 Mpx, 16.384 px/lado | Exportación tiled por streaming |
 | Color | HSV y paleta rápida | ICC, CMYK, gamut warning y 16 bits |

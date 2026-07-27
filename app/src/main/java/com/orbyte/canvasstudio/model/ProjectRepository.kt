@@ -31,8 +31,9 @@ object ProjectRepository {
 
     fun deleteProject(context: Context, projectId: String): Boolean {
         val directory = File(projectsRoot(context), safeId(projectId))
-        if (!directory.exists()) return true
-        return directory.deleteRecursively()
+        val deleted = !directory.exists() || directory.deleteRecursively()
+        if (deleted) ProjectVersionStore.deleteAll(context, projectId)
+        return deleted
     }
 
     fun duplicateProject(context: Context, sourceId: String, newTitle: String? = null): ProjectCard? {

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0-beta01
+
+- identidad final aplicada al launcher, splash, documentación y galería;
+- contraste del logo ajustado y verificado en una Galaxy Tab S8;
+- versiones locales automáticas, limitadas y restaurables de forma atómica;
+- onboarding inicial y ayuda contextual del editor;
+- perfiles persistentes de atajos por letras o números;
+- reglas explícitas de backup y transferencia de Android;
+- configuración de firma externa y generación release APK/AAB;
+- suite ampliada a ocho pruebas y 4.000 trazos gruesos verificados en dispositivo real.
+
 ## Fase 5 · estabilidad en desarrollo
 
 - Autoguardado inmediato al enviar el editor a segundo plano o retirar su composición.

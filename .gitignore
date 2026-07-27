@@ -4,5 +4,8 @@
 local.properties
 **/build/
 *.iml
+*.jks
+*.keystore
+keystore.properties
 .DS_Store
 graphify-out/

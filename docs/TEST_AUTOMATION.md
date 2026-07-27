@@ -2,7 +2,7 @@
 
 La prueba principal es `scripts/test-raster-engine.ps1`. Ejecuta instrumentación Android sobre el motor tiled, sin capturas ni coordenadas de pantalla. Está orientada a una Samsung Galaxy Tab S8 (`SM-X700`) conectada por USB o depuración inalámbrica.
 
-Cada iteración comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. También comprueba la recuperación asíncrona de tiles visibles.
+Cada iteración ejecuta cuatro pruebas: comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. También comprueba la recuperación asíncrona de tiles visibles, una metadata principal corrupta y un guardado interrumpido que dejó metadata temporal.
 
 ```powershell
 .\scripts\test-raster-engine.ps1

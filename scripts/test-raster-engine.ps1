@@ -11,7 +11,6 @@ if ($PSVersionTable.PSVersion.Major -ge 7) { $PSNativeCommandUseErrorActionPrefe
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $appApk = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
 $testApk = Join-Path $projectRoot 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
-$testClass = 'com.orbyte.canvasstudio.drawing.SparseTileSurfaceTest'
 $runner = 'com.orbyte.canvasstudio.debug.test/androidx.test.runner.AndroidJUnitRunner'
 
 function Find-Adb {
@@ -51,8 +50,8 @@ if (-not $SkipInstall) {
 
 $started = Get-Date
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
-    $result = & $adb -s $Serial shell am instrument -w -r -e class $testClass $runner
-    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(2 tests\)') {
+    $result = & $adb -s $Serial shell am instrument -w -r $runner
+    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(4 tests\)') {
         $result | Out-Host
         throw "La iteración $iteration falló."
     }

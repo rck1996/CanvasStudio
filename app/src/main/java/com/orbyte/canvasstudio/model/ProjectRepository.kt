@@ -100,13 +100,36 @@ object ProjectRepository {
 
     private fun recoverMetadata(directory: File): File {
         val primary = File(directory, "project.properties")
-        if (primary.isFile) return primary
+        if (isUsableMetadata(primary)) return primary
+        val temporary = File(directory, "project.properties.tmp")
         val backup = File(directory, "project.properties.bak")
-        if (backup.isFile) {
-            runCatching { backup.copyTo(primary, overwrite = true) }
+        val recoverySource = when {
+            isUsableMetadata(temporary) -> temporary
+            isUsableMetadata(backup) -> backup
+            else -> return primary
         }
-        return primary
+        val recoveryCopy = File(directory, "project.properties.recover")
+        return runCatching {
+            recoverySource.copyTo(recoveryCopy, overwrite = true)
+            if (primary.exists()) check(primary.delete())
+            check(recoveryCopy.renameTo(primary))
+            if (recoverySource == temporary) temporary.delete()
+            primary
+        }.getOrElse {
+            recoveryCopy.delete()
+            recoverySource
+        }
     }
+
+    private fun isUsableMetadata(file: File): Boolean = runCatching {
+        if (!file.isFile) return@runCatching false
+        val properties = Properties().apply {
+            FileInputStream(file).use { input -> load(input) }
+        }
+        properties.getProperty("id")?.isNotBlank() == true &&
+            properties.getProperty("width")?.toIntOrNull()?.let { it > 0 } == true &&
+            properties.getProperty("height")?.toIntOrNull()?.let { it > 0 } == true
+    }.getOrDefault(false)
 
     private fun safeId(id: String): String = id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
 }

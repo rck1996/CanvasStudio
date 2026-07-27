@@ -1,5 +1,13 @@
 # Changelog
 
+## Fase 5 · estabilidad en desarrollo
+
+- Autoguardado inmediato al enviar el editor a segundo plano o retirar su composición.
+- Recuperación atómica desde `project.properties.tmp` cuando un guardado fue interrumpido.
+- Restauración desde `project.properties.bak` cuando la metadata principal está dañada.
+- Suite instrumentada de cuatro pruebas para trazos tiled, prefetch y recuperación de metadata.
+- Nuevo icono adaptativo, iconos por densidad y logotipo oficial de Canvas Studio.
+
 ## Fase 4.1 · 1.6.0
 
 - Grupos de capas de un nivel con visibilidad, opacidad, colapso y persistencia.

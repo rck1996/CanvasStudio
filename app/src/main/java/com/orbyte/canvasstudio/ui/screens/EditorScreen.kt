@@ -88,6 +88,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -107,6 +108,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -228,6 +232,7 @@ fun EditorScreen(
     var selectionActive by remember { mutableStateOf(false) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(changeTick) {
         if (changeTick == 0) return@LaunchedEffect
@@ -239,6 +244,29 @@ fun EditorScreen(
             dpi = document.dpi,
             includePreview = false,
         )
+    }
+
+    DisposableEffect(lifecycleOwner, document.id) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                drawingView?.saveProject(
+                    projectId = document.id,
+                    title = document.title,
+                    dpi = document.dpi,
+                    includePreview = false,
+                )
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            drawingView?.saveProject(
+                projectId = document.id,
+                title = document.title,
+                dpi = document.dpi,
+                includePreview = false,
+            )
+        }
     }
 
     val exportLauncher = rememberLauncherForActivityResult(

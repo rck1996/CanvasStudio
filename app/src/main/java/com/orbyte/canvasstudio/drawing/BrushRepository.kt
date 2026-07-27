@@ -47,6 +47,7 @@ object BrushRepository {
         put("minSize", brush.minSize.toDouble())
         put("pressureSize", brush.pressureSize)
         put("pressureOpacity", brush.pressureOpacity)
+        put("pressureCurve", brush.pressureCurve.toDouble())
         put("tiltResponse", brush.tiltResponse.toDouble())
         put("taperStart", brush.taperStart.toDouble())
         put("taperEnd", brush.taperEnd.toDouble())
@@ -70,6 +71,7 @@ object BrushRepository {
             minSize = item.optDouble("minSize", .22).toFloat(),
             pressureSize = item.optBoolean("pressureSize", true),
             pressureOpacity = item.optBoolean("pressureOpacity", false),
+            pressureCurve = item.optDouble("pressureCurve", 1.0).toFloat(),
             tiltResponse = item.optDouble("tiltResponse", 0.0).toFloat(),
             taperStart = item.optDouble("taperStart", .08).toFloat(),
             taperEnd = item.optDouble("taperEnd", .06).toFloat(),

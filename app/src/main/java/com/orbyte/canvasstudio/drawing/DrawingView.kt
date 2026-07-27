@@ -16,6 +16,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.Shader
+import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.os.SystemClock
@@ -1177,6 +1178,18 @@ class DrawingView(context: Context) : View(context) {
         symmetryMatrices().mapIndexed { index, matrix -> transformCommand(command, matrix, keepId = index == 0) }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        val canceledPalmPointer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
+            event.flags and MotionEvent.FLAG_CANCELED == MotionEvent.FLAG_CANCELED
+        if (canceledPalmPointer) {
+            clearActiveStrokeState()
+            shapeStart = null
+            shapeEnd = null
+            rebuildAllLayers()
+            parent?.requestDisallowInterceptTouchEvent(false)
+            onEngineMessage?.invoke("Contacto de palma ignorado.")
+            return true
+        }
         if (handlePerspectiveEdit(event)) return true
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
@@ -2255,7 +2268,7 @@ class DrawingView(context: Context) : View(context) {
         tilt: Float,
         isPreview: Boolean = false,
     ) {
-        val safePressure = pressure.coerceIn(0f, 1f)
+        val safePressure = calibratedPressure(pressure, settings.pressureCurve)
         val minimum = settings.minSize.coerceIn(0.02f, 1f)
         val pressureFactor = if (settings.pressureSize) {
             minimum + safePressure * (1f - minimum)

@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,6 +65,7 @@ import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Transform
@@ -207,6 +209,7 @@ fun EditorScreen(
                 minSize = selectedPreset.minSize,
                 pressureSize = selectedPreset.pressureSize,
                 pressureOpacity = selectedPreset.pressureOpacity,
+                pressureCurve = selectedPreset.pressureCurve,
                 tiltResponse = selectedPreset.tiltResponse,
                 taperStart = selectedPreset.taperStart,
                 taperEnd = selectedPreset.taperEnd,
@@ -529,8 +532,21 @@ fun EditorScreen(
                         modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        QuickDial("Tamaño", brushSettings.sizePx / 180f, "${brushSettings.sizePx.toInt()} px")
-                        QuickDial("Opacidad", brushSettings.opacity, "${(brushSettings.opacity * 100).toInt()}%")
+                        QuickDial(
+                            label = "Tamaño",
+                            progress = brushSettings.sizePx / 180f,
+                            value = "${brushSettings.sizePx.toInt()} px",
+                            onDecrease = { brushSettings = brushSettings.copy(sizePx = (brushSettings.sizePx / 1.16f).coerceAtLeast(2f)) },
+                            onIncrease = { brushSettings = brushSettings.copy(sizePx = (brushSettings.sizePx * 1.16f).coerceAtMost(180f)) },
+                        )
+                        QuickDial(
+                            label = "Opacidad",
+                            progress = brushSettings.opacity,
+                            value = "${(brushSettings.opacity * 100).toInt()}%",
+                            onDecrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity - .1f).coerceAtLeast(.05f)) },
+                            onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
+                            color = Color(brushSettings.color),
+                        )
                     }
                 }
 
@@ -586,6 +602,7 @@ fun EditorScreen(
                             minSize = preset.minSize,
                             pressureSize = preset.pressureSize,
                             pressureOpacity = preset.pressureOpacity,
+                            pressureCurve = preset.pressureCurve,
                             tiltResponse = preset.tiltResponse,
                             taperStart = preset.taperStart,
                             taperEnd = preset.taperEnd,
@@ -612,6 +629,7 @@ fun EditorScreen(
                             minSize = brushSettings.minSize,
                             pressureSize = brushSettings.pressureSize,
                             pressureOpacity = brushSettings.pressureOpacity,
+                            pressureCurve = brushSettings.pressureCurve,
                             tiltResponse = brushSettings.tiltResponse,
                             taperStart = brushSettings.taperStart,
                             taperEnd = brushSettings.taperEnd,
@@ -925,6 +943,7 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .background(if (selected) StudioPalette.Accent else Color.Transparent, RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
@@ -939,13 +958,20 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
 }
 
 @Composable
-private fun QuickDial(label: String, progress: Float, value: String) {
+private fun QuickDial(
+    label: String,
+    progress: Float,
+    value: String,
+    onDecrease: () -> Unit,
+    onIncrease: () -> Unit,
+    color: Color? = null,
+) {
     Surface(
         color = Color(0xEA171A1F),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
-        Row(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(
                     progress = { progress.coerceIn(0f, 1f) },
@@ -960,6 +986,16 @@ private fun QuickDial(label: String, progress: Float, value: String) {
             Column {
                 Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
                 Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+            }
+            color?.let {
+                Spacer(Modifier.width(8.dp))
+                Box(Modifier.size(22.dp).background(it, CircleShape).border(1.dp, Color.White.copy(alpha = .6f), CircleShape))
+            }
+            IconButton(onClick = onDecrease, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
+            }
+            IconButton(onClick = onIncrease, modifier = Modifier.size(40.dp)) {
+                Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
             }
         }
     }
@@ -1196,15 +1232,21 @@ private fun BrushDock(
     onSaveCustomBrush: (String) -> Unit,
 ) {
     var selectedCategory by remember { mutableStateOf("Todos") }
+    var brushQuery by remember { mutableStateOf("") }
     var saveBrushDialogOpen by remember { mutableStateOf(false) }
     var customBrushName by remember(selectedPreset.id) {
         mutableStateOf("${selectedPreset.name} personalizado")
     }
     val categories = listOf("Todos") + brushes.map(BrushPreset::category).distinct()
-    val visibleBrushes = if (selectedCategory == "Todos") {
+    val categoryBrushes = if (selectedCategory == "Todos") {
         brushes
     } else {
         brushes.filter { it.category == selectedCategory }
+    }
+    val visibleBrushes = categoryBrushes.filter {
+        brushQuery.isBlank() ||
+            it.name.contains(brushQuery.trim(), ignoreCase = true) ||
+            it.category.contains(brushQuery.trim(), ignoreCase = true)
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp)) {
@@ -1222,6 +1264,15 @@ private fun BrushDock(
             }
         }
         Spacer(Modifier.height(13.dp))
+        OutlinedTextField(
+            value = brushQuery,
+            onValueChange = { brushQuery = it.take(40) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Outlined.Search, "Buscar pinceles") },
+            placeholder = { Text("Buscar pinceles") },
+        )
+        Spacer(Modifier.height(10.dp))
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -1251,6 +1302,13 @@ private fun BrushDock(
             BrushPresetRow(preset, selected = preset.id == selectedPreset.id) { onPresetSelected(preset) }
             Spacer(Modifier.height(7.dp))
         }
+        if (visibleBrushes.isEmpty()) {
+            Text(
+                "No hay pinceles que coincidan con la búsqueda.",
+                color = StudioPalette.TextMuted,
+                modifier = Modifier.padding(vertical = 18.dp),
+            )
+        }
         Spacer(Modifier.height(10.dp))
         Text("Ajustes del pincel", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(9.dp))
@@ -1273,6 +1331,14 @@ private fun BrushDock(
         }
         SettingSlider("Tamaño mínimo", settings.minSize, 0.02f..1f, "${(settings.minSize * 100).toInt()}%") {
             onSettingsChanged(settings.copy(minSize = it))
+        }
+        SettingSlider(
+            "Curva de presión",
+            settings.pressureCurve,
+            0.35f..2.5f,
+            String.format(Locale.US, "%.2f", settings.pressureCurve),
+        ) {
+            onSettingsChanged(settings.copy(pressureCurve = it))
         }
         SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
             onSettingsChanged(settings.copy(tiltResponse = it))

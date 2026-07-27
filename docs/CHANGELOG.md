@@ -1,5 +1,14 @@
 # Changelog
 
+## Fase 6 · en desarrollo
+
+- rechazo explícito de eventos de palma cancelados;
+- curva editable de presión;
+- HUD interactivo de tamaño, opacidad y color;
+- búsqueda de pinceles y diez presets nuevos;
+- objetivos táctiles ampliados;
+- suite instrumentada ampliada a diez pruebas.
+
 ## 2.0.0-beta01
 
 - identidad final aplicada al launcher, splash, documentación y galería;

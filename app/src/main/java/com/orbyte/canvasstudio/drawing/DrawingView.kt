@@ -715,18 +715,11 @@ class DrawingView(context: Context) : View(context) {
             deselect()
             return true
         }
-        val shortcutTool = when (keyCode) {
-            KeyEvent.KEYCODE_B -> DrawingTool.BRUSH
-            KeyEvent.KEYCODE_E -> DrawingTool.ERASER
-            KeyEvent.KEYCODE_H -> DrawingTool.HAND
-            KeyEvent.KEYCODE_I -> DrawingTool.EYEDROPPER
-            KeyEvent.KEYCODE_L -> DrawingTool.LINE
-            KeyEvent.KEYCODE_G -> DrawingTool.GRADIENT
-            KeyEvent.KEYCODE_F -> DrawingTool.FILL
-            KeyEvent.KEYCODE_M -> if (event.isShiftPressed) DrawingTool.SELECT_ELLIPSE else DrawingTool.SELECT_RECTANGLE
-            KeyEvent.KEYCODE_V -> DrawingTool.TRANSFORM
-            else -> null
-        }
+        val shortcutTool = ShortcutPreferences.toolForKey(
+            profile = ShortcutPreferences.load(context),
+            keyCode = keyCode,
+            shiftPressed = event.isShiftPressed,
+        )
         if (shortcutTool != null) {
             tool = shortcutTool
             onToolShortcut?.invoke(shortcutTool)

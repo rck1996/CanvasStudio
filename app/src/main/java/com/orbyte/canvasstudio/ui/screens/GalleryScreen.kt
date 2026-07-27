@@ -73,6 +73,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,6 +83,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.orbyte.canvasstudio.R
+import com.orbyte.canvasstudio.drawing.ShortcutPreferences
+import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.PreviewStyle
@@ -100,8 +105,10 @@ fun GalleryScreen(
     onDuplicateProject: (ProjectCard) -> Unit,
     onDeleteProject: (ProjectCard) -> Unit,
 ) {
+    val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
     val filteredProjects = remember(projects, searchQuery) {
         val query = searchQuery.trim()
         if (query.isBlank()) projects else projects.filter { project ->
@@ -190,9 +197,35 @@ fun GalleryScreen(
             title = { Text("Canvas Studio") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Alpha Premium 1.1", fontWeight = FontWeight.SemiBold)
+                    Text("Canvas Studio 1.6", fontWeight = FontWeight.SemiBold)
                     Text("Guardado local, sin cuenta y sin servicios en segundo plano.")
-                    Text("Atajos: B pincel · E borrador · H mover · Ctrl+Z deshacer.")
+                    Text("Perfil de atajos", fontWeight = FontWeight.SemiBold)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ShortcutProfile.entries.forEach { profile ->
+                            Button(
+                                onClick = {
+                                    shortcutProfile = profile
+                                    ShortcutPreferences.save(context, profile)
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (shortcutProfile == profile) {
+                                        StudioPalette.Accent
+                                    } else {
+                                        StudioPalette.SurfaceRaised
+                                    },
+                                ),
+                            ) {
+                                Text(profile.label)
+                            }
+                        }
+                    }
+                    Text(
+                        if (shortcutProfile == ShortcutProfile.STANDARD) {
+                            "B pincel · E borrador · H mover · Ctrl+Z deshacer."
+                        } else {
+                            "1 pincel · 2 borrador · 3 mover · 8 selección."
+                        },
+                    )
                 }
             },
             confirmButton = {
@@ -216,20 +249,17 @@ private fun GallerySidebar(
             .border(1.dp, StudioPalette.Border)
             .padding(18.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(42.dp)
-                    .background(StudioPalette.Accent, RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.Rounded.Brush, null, tint = Color.White, modifier = Modifier.size(23.dp))
-            }
-            Spacer(Modifier.width(11.dp))
-            Column {
-                Text("Canvas", color = StudioPalette.Text, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-                Text("STUDIO", color = StudioPalette.Accent, fontSize = 10.sp, letterSpacing = 2.sp)
-            }
+        Surface(
+            modifier = Modifier.fillMaxWidth().height(88.dp),
+            color = Color(0xFFE8EEF6),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Image(
+                painter = painterResource(R.drawable.canvas_studio_logo),
+                contentDescription = "Canvas Studio",
+                modifier = Modifier.fillMaxSize().padding(horizontal = 6.dp, vertical = 4.dp),
+                contentScale = ContentScale.Fit,
+            )
         }
         Spacer(Modifier.height(24.dp))
         Button(

@@ -51,7 +51,7 @@ if (-not $SkipInstall) {
 $started = Get-Date
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     $result = & $adb -s $Serial shell am instrument -w -r $runner
-    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(4 tests\)') {
+    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(6 tests\)') {
         $result | Out-Host
         throw "La iteración $iteration falló."
     }

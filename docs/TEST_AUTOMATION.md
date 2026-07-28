@@ -31,7 +31,8 @@ Para una prueba prolongada sin recompilar ni reinstalar:
 Los artefactos se generan localmente en `build/reports/tablet-stress/`; el directorio no se versiona.
 
 La suite determinista `scripts/test-raster-engine.ps1` ejecuta catorce pruebas instrumentadas:
-persistencia de 200 trazos gruesos, presión de caché, precarga visible, recuperación de
+persistencia de 200 trazos gruesos, una matriz adicional de 539 trazos entre las 11
+familias de pincel, presión de caché, precarga visible, recuperación de
 metadata, versiones locales, perfiles de atajos, presets y handoff de tinta. Con `-Iterations 20` verifica 4.000
 trazos persistidos sin depender de reconocimiento visual.
 

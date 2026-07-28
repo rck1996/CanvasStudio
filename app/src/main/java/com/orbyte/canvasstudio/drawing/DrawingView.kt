@@ -1,5 +1,6 @@
 package com.orbyte.canvasstudio.drawing
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -13,6 +14,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.Shader
@@ -126,6 +128,7 @@ class DrawingView(context: Context) : View(context) {
         override fun setAlpha(alpha: Int) = Unit
         override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
         @Deprecated("Deprecated in Android")
+        @Suppress("DEPRECATION")
         override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
     }
     private val cursorOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -202,7 +205,10 @@ class DrawingView(context: Context) : View(context) {
     private var hoverVisible = false
     private var gridVisible = false
     private var rulersVisible = false
+    private var rulersUseCentimeters = false
+    private var documentDpi = 300
     private var angleSnappingEnabled = false
+    private var perspectiveSnappingEnabled = false
     private var verticalSymmetry = false
     private var radialSymmetryCount = 1
     private var guideMode = GuideMode.NONE
@@ -237,6 +243,8 @@ class DrawingView(context: Context) : View(context) {
     private var shapeStart: StrokePoint? = null
     private var shapeEnd: StrokePoint? = null
     private var selectionPath: Path? = null
+    private var selectionInverted = false
+    private var selectionFeatherPx = 0f
     private var selectionPoints: MutableList<StrokePoint>? = null
     private var selectionStart: StrokePoint? = null
     private var selectionEnd: StrokePoint? = null
@@ -269,7 +277,12 @@ class DrawingView(context: Context) : View(context) {
     var usePlatformLowLatencyPreview: Boolean = false
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
-        tool == DrawingTool.BRUSH && shouldDeferActiveRaster(brushSettings)
+        tool == DrawingTool.BRUSH &&
+            shouldDeferActiveRaster(brushSettings) &&
+            platformInkPreviewCompatible(brushSettings.kind)
+
+    private fun hasCompatiblePlatformPreview(settings: BrushSettings): Boolean =
+        usePlatformLowLatencyPreview && platformInkPreviewCompatible(settings.kind)
 
     fun platformPreviewSizePx(): Float = brushSettings.sizePx * currentScale
 
@@ -456,6 +469,8 @@ class DrawingView(context: Context) : View(context) {
         clearActiveStrokeState()
         cancelSelectionTransform(rebuild = false)
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -612,7 +627,7 @@ class DrawingView(context: Context) : View(context) {
             )
         }
         is GradientCommand -> {
-            if (command.clipPoints.isNotEmpty()) {
+            if (command.clipPoints.isNotEmpty() && !command.clipInverted) {
                 RectF(
                     command.clipPoints.minOf { it.x },
                     command.clipPoints.minOf { it.y },
@@ -1126,10 +1141,11 @@ class DrawingView(context: Context) : View(context) {
     private fun drawRulers(canvas: Canvas) {
         if (!rulersVisible) return
         val scale = currentScale.coerceAtLeast(.1f)
-        val spacing = when {
-            scale >= 1.2f -> 100f
-            scale >= .55f -> 250f
-            else -> 500f
+        val baseSpacing = if (rulersUseCentimeters) documentDpi / 2.54f else 100f
+        val spacing = baseSpacing * when {
+            scale >= 1.2f -> 1f
+            scale >= .55f -> if (rulersUseCentimeters) 2f else 2.5f
+            else -> 5f
         }
         val tick = 12f / scale
         rulerPaint.strokeWidth = 1.5f / scale
@@ -1137,13 +1153,23 @@ class DrawingView(context: Context) : View(context) {
         var x = 0f
         while (x <= documentWidth) {
             canvas.drawLine(x, 0f, x, tick, rulerPaint)
-            if (x > 0f) canvas.drawText(x.toInt().toString(), x + 4f / scale, tick, rulerTextPaint)
+            if (x > 0f) {
+                val label = if (rulersUseCentimeters) {
+                    "${(x * 2.54f / documentDpi).toInt()} cm"
+                } else x.toInt().toString()
+                canvas.drawText(label, x + 4f / scale, tick, rulerTextPaint)
+            }
             x += spacing
         }
         var y = 0f
         while (y <= documentHeight) {
             canvas.drawLine(0f, y, tick, y, rulerPaint)
-            if (y > 0f) canvas.drawText(y.toInt().toString(), tick + 3f / scale, y - 3f / scale, rulerTextPaint)
+            if (y > 0f) {
+                val label = if (rulersUseCentimeters) {
+                    "${(y * 2.54f / documentDpi).toInt()} cm"
+                } else y.toInt().toString()
+                canvas.drawText(label, tick + 3f / scale, y - 3f / scale, rulerTextPaint)
+            }
             y += spacing
         }
     }
@@ -1164,9 +1190,8 @@ class DrawingView(context: Context) : View(context) {
         }
         configurePaint(previewPaint, tool, brushSettings, 1f, 0f, isPreview = true)
         val selection = selectionPath
-        if (selection != null) {
-            canvas.save()
-            canvas.clipPath(selection)
+        val selectionSave = selection?.let {
+            beginSelectionMask(canvas, it, selectionInverted, selectionFeatherPx)
         }
         symmetryMatrices().forEach { matrix ->
             drawShapeWithPaint(
@@ -1177,7 +1202,9 @@ class DrawingView(context: Context) : View(context) {
                 previewPaint,
             )
         }
-        if (selection != null) canvas.restore()
+        if (selection != null && selectionSave != null) {
+            endSelectionMask(canvas, selectionSave, selection, selectionInverted, selectionFeatherPx)
+        }
     }
 
     private fun drawShapeWithPaint(
@@ -1246,6 +1273,7 @@ class DrawingView(context: Context) : View(context) {
     private fun symmetryCommands(command: DrawCommand): List<DrawCommand> =
         symmetryMatrices().mapIndexed { index, matrix -> transformCommand(command, matrix, keepId = index == 0) }
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val canceledPalmPointer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
@@ -1431,8 +1459,33 @@ class DrawingView(context: Context) : View(context) {
         tilt: Float,
         time: Long,
     ): StrokePoint {
-        val start = shapeStart
-        if (!angleSnappingEnabled || start == null) return StrokePoint(x, y, pressure, tilt, time)
+        val start = shapeStart ?: return StrokePoint(x, y, pressure, tilt, time)
+        if (
+            perspectiveSnappingEnabled &&
+            guideMode != GuideMode.NONE &&
+            tool in setOf(DrawingTool.LINE, DrawingTool.GRADIENT)
+        ) {
+            val vanishingPoints = if (guideMode == GuideMode.PERSPECTIVE_TWO_POINT) {
+                listOf(perspectivePoint1X to perspectivePoint1Y, perspectivePoint2X to perspectivePoint2Y)
+            } else {
+                listOf(perspectivePoint1X to perspectivePoint1Y)
+            }
+            val candidate = vanishingPoints.mapNotNull { (vx, vy) ->
+                val rayX = vx - start.x
+                val rayY = vy - start.y
+                val lengthSquared = rayX * rayX + rayY * rayY
+                if (lengthSquared < 1f) null else {
+                    val projection = ((x - start.x) * rayX + (y - start.y) * rayY) / lengthSquared
+                    val snappedX = start.x + rayX * projection
+                    val snappedY = start.y + rayY * projection
+                    Triple(snappedX, snappedY, hypot(x - snappedX, y - snappedY))
+                }
+            }.minByOrNull { it.third }
+            if (candidate != null) {
+                return StrokePoint(candidate.first, candidate.second, pressure, tilt, time)
+            }
+        }
+        if (!angleSnappingEnabled) return StrokePoint(x, y, pressure, tilt, time)
         val dx = x - start.x
         val dy = y - start.y
         return when (tool) {
@@ -1495,7 +1548,7 @@ class DrawingView(context: Context) : View(context) {
             return
         }
         if (shouldDeferActiveRaster(settings)) {
-            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
+            if (!hasCompatiblePlatformPreview(settings)) deferredStrokeOverlay.invalidateSelf()
             return
         }
         val point = points.first()
@@ -1536,7 +1589,7 @@ class DrawingView(context: Context) : View(context) {
         if (distance < minimumInputDistance(settings)) return
         points += StrokePoint(x, y, pressure, tilt, time)
         if (shouldDeferActiveRaster(settings)) {
-            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
+            if (!hasCompatiblePlatformPreview(settings)) deferredStrokeOverlay.invalidateSelf()
         } else {
             scheduleActiveStrokeRender()
         }
@@ -1680,6 +1733,8 @@ class DrawingView(context: Context) : View(context) {
             tool = completedTool,
             settings = settings,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
@@ -1706,6 +1761,8 @@ class DrawingView(context: Context) : View(context) {
             endY = end.y,
             settings = brushSettings,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
@@ -1732,6 +1789,8 @@ class DrawingView(context: Context) : View(context) {
             startColor = color,
             endColor = transparent,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             drawCommand(layer.surface, command)
@@ -1760,6 +1819,8 @@ class DrawingView(context: Context) : View(context) {
         )
         selectionPoints = points
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1778,6 +1839,8 @@ class DrawingView(context: Context) : View(context) {
         val points = ellipseSelectionPoints(bounds)
         selectionPoints = points.toMutableList()
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1807,6 +1870,8 @@ class DrawingView(context: Context) : View(context) {
         }
         selectionPath = pathFromPoints(points, close = true)
         selectionPoints = points.toMutableList()
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1837,6 +1902,10 @@ class DrawingView(context: Context) : View(context) {
 
     private fun beginSelectionTransform(): Boolean {
         if (transformBitmap != null) return true
+        if (selectionInverted) {
+            onEngineMessage?.invoke("Invierte nuevamente la selecciÃ³n antes de transformarla.")
+            return false
+        }
         val layer = activeLayer() ?: return false
         if (layer.alphaLocked) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para transformar la selección.")
@@ -1994,6 +2063,8 @@ class DrawingView(context: Context) : View(context) {
     fun deselect() {
         cancelSelectionTransform(rebuild = true)
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -2011,6 +2082,8 @@ class DrawingView(context: Context) : View(context) {
         )
         selectionPoints = points
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -2046,7 +2119,34 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun invertSelection() {
+        cancelSelectionTransform(rebuild = true)
+        if (selectionPath == null) {
+            selectAll()
+            return
+        }
+        selectionInverted = !selectionInverted
+        onSelectionChanged?.invoke(true)
+        invalidate()
+    }
+
+    fun setSelectionFeather(radiusPx: Float) {
+        if (selectionPath == null) return
+        val normalized = radiusPx.coerceIn(0f, 64f)
+        if (selectionFeatherPx == normalized) return
+        selectionFeatherPx = normalized
+        onEngineMessage?.invoke(
+            if (normalized == 0f) "Suavizado de selecciÃ³n desactivado."
+            else "Borde de selecciÃ³n suavizado ${normalized.toInt()} px.",
+        )
+        invalidate()
+    }
+
     fun flipSelection(horizontal: Boolean) {
+        if (selectionInverted) {
+            onEngineMessage?.invoke("Invierte nuevamente la selecciÃ³n antes de transformarla.")
+            return
+        }
         if (!beginSelectionTransform()) return
         val path = currentSelectionDisplayPath() ?: return
         val bounds = RectF().also { path.computeBounds(it, true) }
@@ -2066,10 +2166,10 @@ class DrawingView(context: Context) : View(context) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para borrar la selección.")
             return
         }
-        val bounds = RectF().also { path.computeBounds(it, true) }
+        val bounds = if (selectionInverted) RectF(documentBounds) else RectF().also { path.computeBounds(it, true) }
         val empty = Bitmap.createBitmap(
-            max(1, ceil(bounds.width()).toInt()),
-            max(1, ceil(bounds.height()).toInt()),
+            if (selectionInverted) 1 else max(1, ceil(bounds.width()).toInt()),
+            if (selectionInverted) 1 else max(1, ceil(bounds.height()).toInt()),
             Bitmap.Config.ARGB_8888,
         )
         val matrix = Matrix().apply { postTranslate(bounds.left, bounds.top) }
@@ -2082,6 +2182,7 @@ class DrawingView(context: Context) : View(context) {
             sourceBoundsBottom = bounds.bottom,
             bitmap = empty,
             matrixValues = values,
+            sourceInverted = selectionInverted,
         )
         drawCommand(layer.surface, command)
         recordCommands(layer, listOf(command))
@@ -2092,6 +2193,8 @@ class DrawingView(context: Context) : View(context) {
 
     private fun deselectWithoutRebuild() {
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -2111,6 +2214,7 @@ class DrawingView(context: Context) : View(context) {
         val layerId = layer.id
         val fillColor = brushSettings.color
         val fillSelection = selectionPath?.let(::Path)
+        val fillSelectionInverted = selectionInverted
         onEngineMessage?.invoke("Calculando relleno…")
         prefetchExecutor.execute {
             val bitmap = runCatching { layer.surface.renderBitmap(MAX_FLOOD_FILL_PIXELS) }.getOrNull()
@@ -2122,7 +2226,15 @@ class DrawingView(context: Context) : View(context) {
                 bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
                 val seed = y * width + x
                 val selectionRegion = fillSelection?.let { path ->
-                    Region().apply { setPath(path, Region(0, 0, width, height)) }
+                    val documentRegion = Region(0, 0, width, height)
+                    Region().apply {
+                        setPath(path, documentRegion)
+                        if (fillSelectionInverted) {
+                            val inside = Region(this)
+                            set(documentRegion)
+                            op(inside, Region.Op.DIFFERENCE)
+                        }
+                    }
                 }
                 if (selectionRegion != null && !selectionRegion.contains(x, y)) return@execute
                 val targetColor = pixels[seed]
@@ -2213,10 +2325,20 @@ class DrawingView(context: Context) : View(context) {
         val selection = selectionPath?.let(::Path)
         val clippedBlock: (Canvas) -> Unit = { canvas ->
             if (selection != null) {
-                canvas.save()
-                canvas.clipPath(selection)
+                val saveCount = beginSelectionMask(
+                    canvas,
+                    selection,
+                    selectionInverted,
+                    selectionFeatherPx,
+                )
                 block(canvas)
-                canvas.restore()
+                endSelectionMask(
+                    canvas,
+                    saveCount,
+                    selection,
+                    selectionInverted,
+                    selectionFeatherPx,
+                )
             } else {
                 block(canvas)
             }
@@ -2231,9 +2353,15 @@ class DrawingView(context: Context) : View(context) {
     private fun drawCommand(canvas: Canvas, command: DrawCommand) {
         when (command) {
             is StrokeCommand -> {
-                if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
+                    ?.let { pathFromPoints(it, close = true) }
+                val clipSave = clipPath?.let {
+                    beginSelectionMask(
+                        canvas,
+                        it,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 }
                 command.points.firstOrNull()?.let { first ->
                     drawBrushStamp(
@@ -2260,18 +2388,40 @@ class DrawingView(context: Context) : View(context) {
                         progress,
                     )
                 }
-                if (command.clipPoints.isNotEmpty()) canvas.restore()
+                if (clipPath != null && clipSave != null) {
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
+                }
             }
             is ShapeCommand -> {
-                if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
+                    ?.let { pathFromPoints(it, close = true) }
+                val clipSave = clipPath?.let {
+                    beginSelectionMask(
+                        canvas,
+                        it,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 }
                 configurePaint(strokePaint, command.tool, command.settings, 1f, 0f)
                 val start = StrokePoint(command.startX, command.startY, 1f, 0f, 0L)
                 val end = StrokePoint(command.endX, command.endY, 1f, 0f, 0L)
                 drawShapeWithPaint(canvas, command.tool, start, end, strokePaint)
-                if (command.clipPoints.isNotEmpty()) canvas.restore()
+                if (clipPath != null && clipSave != null) {
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
+                }
             }
             is GradientCommand -> {
                 val gradientPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2287,10 +2437,21 @@ class DrawingView(context: Context) : View(context) {
                     )
                 }
                 if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                    val clipPath = pathFromPoints(command.clipPoints, close = true)
+                    val clipSave = beginSelectionMask(
+                        canvas,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                     canvas.drawRect(documentBounds, gradientPaint)
-                    canvas.restore()
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 } else {
                     canvas.drawRect(documentBounds, gradientPaint)
                 }
@@ -2305,7 +2466,14 @@ class DrawingView(context: Context) : View(context) {
                     style = Paint.Style.FILL
                     xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
                 }
-                canvas.drawPath(sourcePath, clearPaint)
+                if (command.sourceInverted) {
+                    canvas.save()
+                    applySelectionClip(canvas, sourcePath, inverted = true)
+                    canvas.drawRect(documentBounds, clearPaint)
+                    canvas.restore()
+                } else {
+                    canvas.drawPath(sourcePath, clearPaint)
+                }
                 clearPaint.xfermode = null
                 val matrix = Matrix().apply { setValues(command.matrixValues) }
                 canvas.drawBitmap(
@@ -2315,6 +2483,57 @@ class DrawingView(context: Context) : View(context) {
                 )
             }
         }
+    }
+
+    private fun applySelectionClip(canvas: Canvas, path: Path, inverted: Boolean) {
+        if (inverted) canvas.clipOutPath(path) else canvas.clipPath(path)
+    }
+
+    private fun beginSelectionMask(
+        canvas: Canvas,
+        path: Path,
+        inverted: Boolean,
+        featherPx: Float,
+    ): Int {
+        val feather = featherPx.coerceAtLeast(0f)
+        return if (feather <= 0.01f) {
+            canvas.save().also { applySelectionClip(canvas, path, inverted) }
+        } else {
+            val clipBounds = Rect()
+            canvas.getClipBounds(clipBounds)
+            canvas.saveLayer(RectF(clipBounds), null)
+        }
+    }
+
+    private fun endSelectionMask(
+        canvas: Canvas,
+        saveCount: Int,
+        path: Path,
+        inverted: Boolean,
+        featherPx: Float,
+    ) {
+        val feather = featherPx.coerceAtLeast(0f)
+        if (feather > 0.01f) {
+            val maskPath = if (inverted) {
+                path
+            } else {
+                Path().apply {
+                    fillType = Path.FillType.EVEN_ODD
+                    addRect(documentBounds, Path.Direction.CW)
+                    addPath(path)
+                }
+            }
+            val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.FILL
+                maskFilter = BlurMaskFilter(feather, BlurMaskFilter.Blur.NORMAL)
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            }
+            canvas.drawPath(maskPath, maskPaint)
+            maskPaint.xfermode = null
+            maskPaint.maskFilter = null
+        }
+        canvas.restoreToCount(saveCount)
     }
 
     private fun drawStrokeSegment(
@@ -3056,9 +3275,32 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun setRulerUnitCentimeters(enabled: Boolean) {
+        if (rulersUseCentimeters == enabled) return
+        rulersUseCentimeters = enabled
+        invalidate()
+    }
+
+    fun setDocumentDpi(dpi: Int) {
+        documentDpi = dpi.coerceIn(36, 1200)
+        if (rulersVisible && rulersUseCentimeters) invalidate()
+    }
+
     fun setAngleSnappingEnabled(enabled: Boolean) {
         angleSnappingEnabled = enabled
     }
+
+    fun setPerspectiveSnappingEnabled(enabled: Boolean) {
+        perspectiveSnappingEnabled = enabled
+    }
+
+    fun areRulersVisible(): Boolean = rulersVisible
+
+    fun areRulersUsingCentimeters(): Boolean = rulersUseCentimeters
+
+    fun isAngleSnappingEnabled(): Boolean = angleSnappingEnabled
+
+    fun isPerspectiveSnappingEnabled(): Boolean = perspectiveSnappingEnabled
 
     fun setVerticalSymmetry(enabled: Boolean) {
         if (verticalSymmetry == enabled) return
@@ -3398,6 +3640,10 @@ class DrawingView(context: Context) : View(context) {
         }
         val groupReferences = layerGroups.map { group -> group.copy() }
         val savedGuideMode = guideMode
+        val savedRulersVisible = rulersVisible
+        val savedRulersUseCentimeters = rulersUseCentimeters
+        val savedAngleSnappingEnabled = angleSnappingEnabled
+        val savedPerspectiveSnappingEnabled = perspectiveSnappingEnabled
         val savedPerspectiveEditing = perspectiveEditing
         val savedPerspectivePoint1X = perspectivePoint1X
         val savedPerspectivePoint1Y = perspectivePoint1Y
@@ -3518,6 +3764,10 @@ class DrawingView(context: Context) : View(context) {
                             setProperty("group.$index.collapsed", group.collapsed.toString())
                         }
                         setProperty("guideMode", savedGuideMode.name)
+                        setProperty("rulersVisible", savedRulersVisible.toString())
+                        setProperty("rulersUseCentimeters", savedRulersUseCentimeters.toString())
+                        setProperty("angleSnappingEnabled", savedAngleSnappingEnabled.toString())
+                        setProperty("perspectiveSnappingEnabled", savedPerspectiveSnappingEnabled.toString())
                         setProperty("perspectiveEditing", savedPerspectiveEditing.toString())
                         setProperty("perspective.point1.x", savedPerspectivePoint1X.toString())
                         setProperty("perspective.point1.y", savedPerspectivePoint1Y.toString())
@@ -3630,6 +3880,11 @@ class DrawingView(context: Context) : View(context) {
             guideMode = runCatching {
                 GuideMode.valueOf(properties.getProperty("guideMode", GuideMode.NONE.name))
             }.getOrDefault(GuideMode.NONE)
+            rulersVisible = properties.getProperty("rulersVisible", "false").toBoolean()
+            rulersUseCentimeters = properties.getProperty("rulersUseCentimeters", "false").toBoolean()
+            angleSnappingEnabled = properties.getProperty("angleSnappingEnabled", "false").toBoolean()
+            perspectiveSnappingEnabled =
+                properties.getProperty("perspectiveSnappingEnabled", "false").toBoolean()
             perspectiveEditing = properties.getProperty("perspectiveEditing", "false").toBoolean() &&
                 guideMode != GuideMode.NONE
             perspectivePoint1X = properties.getProperty("perspective.point1.x", (documentWidth * 0.5f).toString())

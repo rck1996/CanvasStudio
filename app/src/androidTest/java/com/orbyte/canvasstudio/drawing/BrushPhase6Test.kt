@@ -41,4 +41,14 @@ class BrushPhase6Test {
         }
         assertEquals(expected.size, expected.values.distinct().size)
     }
+
+    @Test
+    fun platformPreviewIsLimitedToVisuallyCompatibleBrushFamilies() {
+        assertTrue(platformInkPreviewCompatible(BrushKind.MARKER))
+        assertTrue(platformInkPreviewCompatible(BrushKind.PAINT))
+        assertTrue(platformInkPreviewCompatible(BrushKind.OIL))
+        assertTrue(!platformInkPreviewCompatible(BrushKind.AIRBRUSH))
+        assertTrue(!platformInkPreviewCompatible(BrushKind.CHARCOAL))
+        assertTrue(!platformInkPreviewCompatible(BrushKind.WATERCOLOR))
+    }
 }

@@ -16,8 +16,8 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 23
-        versionName = "2.0.0-beta04"
+        versionCode = 24
+        versionName = "2.0.0-beta05"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
@@ -44,6 +44,10 @@ android {
             // Keeps development builds installable alongside a signed release, without touching user projects.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // The desktop sandbox may expose a different default debug keystore between
+            // invocations. Reusing the configured local signing identity keeps the app and
+            // instrumentation APK installable as a stable pair on the tablet.
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
         release {
             isMinifyEnabled = true

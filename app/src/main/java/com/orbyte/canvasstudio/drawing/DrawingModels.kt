@@ -14,6 +14,17 @@ fun inputSamplingDistance(settings: BrushSettings, stampBased: Boolean): Float {
     return (spacingDistance * 0.82f).coerceIn(0.75f, 28f)
 }
 
+/**
+ * AndroidX Ink currently previews a solid pressure pen. Limit that front buffer to brush
+ * families whose final raster is visually close to it; transparent and broken-media brushes
+ * use DrawingView's local overlay so a solid temporary stroke cannot appear to disappear.
+ */
+fun platformInkPreviewCompatible(kind: BrushKind): Boolean = kind in setOf(
+    BrushKind.MARKER,
+    BrushKind.PAINT,
+    BrushKind.OIL,
+)
+
 enum class DrawingTool {
     BRUSH,
     ERASER,
@@ -122,6 +133,8 @@ data class StrokeCommand(
     val tool: DrawingTool,
     val settings: BrushSettings,
     val clipPoints: List<StrokePoint> = emptyList(),
+    val clipInverted: Boolean = false,
+    val clipFeatherPx: Float = 0f,
 ) : DrawCommand
 
 data class ShapeCommand(
@@ -133,6 +146,8 @@ data class ShapeCommand(
     val endY: Float,
     val settings: BrushSettings,
     val clipPoints: List<StrokePoint> = emptyList(),
+    val clipInverted: Boolean = false,
+    val clipFeatherPx: Float = 0f,
 ) : DrawCommand
 
 data class GradientCommand(
@@ -144,6 +159,8 @@ data class GradientCommand(
     val startColor: Int,
     val endColor: Int,
     val clipPoints: List<StrokePoint> = emptyList(),
+    val clipInverted: Boolean = false,
+    val clipFeatherPx: Float = 0f,
 ) : DrawCommand
 
 /**
@@ -168,6 +185,7 @@ data class TransformSelectionCommand(
     val sourceBoundsBottom: Float,
     val bitmap: Bitmap,
     val matrixValues: FloatArray,
+    val sourceInverted: Boolean = false,
 ) : DrawCommand
 
 data class LayerUiModel(

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.0-beta05
+
+- corregida la vista previa ampliada para que responda inmediatamente a tamaño, opacidad, flujo, dureza, grano y familia;
+- eliminado el falso efecto de desaparición al evitar el preview frontal sólido en pinceles translúcidos o texturizados;
+- matriz automática de 539 trazos gruesos distribuida entre las 11 familias de render;
+- selección invertida persistente en pincel, forma, degradado, relleno, borrado e historial;
+- feather raster por tile con transición alfa real y límites de memoria locales;
+- snapping directo de líneas y degradados a perspectiva de uno o dos puntos;
+- reglas en píxeles o centímetros calculadas desde el DPI y persistidas por proyecto;
+- semántica TalkBack ampliada para pinceles, parámetros y capas;
+- firma debug estable para automatización reproducible;
+- 22 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
 ## 2.0.0-beta04
 
 - biblioteca profesional de tres paneles con búsqueda, favoritos y recientes;

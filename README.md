@@ -5,7 +5,7 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
 > **Estado del proyecto:** Beta para tablets / fase 6
-> **Versión incluida en este repositorio:** `2.0.0-beta04`
+> **Versión incluida en este repositorio:** `2.0.0-beta05`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -19,7 +19,7 @@ Las siguientes capturas fueron obtenidas de la variante de depuración ejecutada
 
 ![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
 
-![Biblioteca de pinceles beta04 en una Galaxy Tab S8](docs/images/brush-library-beta04-tab-s8.png)
+![Biblioteca de pinceles beta05 con preview reactivo a 168 px en una Galaxy Tab S8](docs/images/brush-library-beta05-tab-s8.png)
 
 ---
 
@@ -441,7 +441,7 @@ Los comandos simétricos se agrupan en el historial para que una operación de d
 
 Durante el modo de edición de perspectiva se bloquea temporalmente el dibujo para evitar trazos accidentales.
 
-No existe todavía snapping de trazos a las guías, reglas graduadas ni rejillas de perspectiva personalizadas.
+Las líneas y los degradados pueden ajustarse directamente al punto de fuga más cercano. Las reglas admiten píxeles o centímetros calculados desde el DPI del documento y estas preferencias se conservan al reabrir el proyecto. Las rejillas de perspectiva personalizadas y las reglas arrastrables quedan para una versión posterior.
 
 ---
 
@@ -1122,24 +1122,30 @@ Comprueba:
 
 ## Hoja de ruta
 
-### Fase 6.2 — experiencia creativa
+### Fase 6.3 — precisión profesional
 
-- administración e intercambio de pinceles: completado;
-- favoritos, recientes y biblioteca de tres paneles: completado;
-- búsqueda de capas y acciones persistentes: completado;
-- selección expandible/contraíble: completado;
-- reglas y ajuste angular opcionales: completado;
-- accesibilidad inicial y objetivos táctiles: completado;
-- feather, invertir selección y reglas arrastrables: siguiente iteración.
+- selección invertida y feather raster de 0 a 64 px: completado;
+- expansión, contracción, volteo y transformación: completado;
+- snapping directo a perspectiva de uno o dos puntos: completado;
+- reglas en píxeles o centímetros según DPI: completado;
+- persistencia de preferencias de precisión por documento: completado.
 
-### Trabajo técnico pendiente
+### Fase 6.4 — cierre beta
 
-- mejorar grupos y máscaras;
-- selección con feather e invertir;
-- snapping directo a líneas de perspectiva;
-- reglas arrastrables y unidades físicas;
-- importación y exportación PSD básica;
-- mayor precisión en modos de fusión.
+- preview reactivo a tamaño, opacidad, flujo, dureza y textura: completado;
+- handoff visual especializado por familia de pincel: completado;
+- semántica TalkBack ampliada para pinceles, sliders y capas: completado;
+- requisito de tablet y actividad redimensionable verificados: completado;
+- firma debug reproducible y suite instrumentada de 22 pruebas: completado;
+- matriz automática de 539 trazos gruesos en 11 familias: completado.
+
+### Siguiente etapa: fase 7.0 estable
+
+- pulido final de distribución y publicación;
+- grupos anidados y selección múltiple de capas;
+- reglas arrastrables;
+- importación/exportación PSD básica;
+- mayor precisión de modos de fusión y gestión de color.
 
 ### Fase 5 — Beta publicable
 

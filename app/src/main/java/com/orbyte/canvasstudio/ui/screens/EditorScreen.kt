@@ -243,8 +243,11 @@ fun EditorScreen(
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
+    var brushDockResetTick by remember { mutableIntStateOf(0) }
+    val availableBrushes = remember(customBrushes) { premiumBrushes + customBrushes }
     val lifecycleOwner = LocalLifecycleOwner.current
     val applyBrushPreset: (BrushPreset) -> Unit = { preset ->
+        brushDockResetTick += 1
         selectedPreset = preset
         brushSettings = brushSettings.copy(
             sizePx = preset.sizePx,
@@ -618,9 +621,13 @@ fun EditorScreen(
                 RightDock(
                     dockWidth = if (compactWorkspace) 316.dp else 360.dp,
                     selectedTab = selectedDock,
-                    onSelectTab = { selectedDock = it },
+                    onSelectTab = {
+                        selectedDock = it
+                        if (it == DockTab.BRUSHES) brushDockResetTick += 1
+                    },
+                    brushDockResetTick = brushDockResetTick,
                     selectedPreset = selectedPreset,
-                    brushes = premiumBrushes + customBrushes,
+                    brushes = availableBrushes,
                     brushSettings = brushSettings,
                     onPresetSelected = applyBrushPreset,
                     onBrushSettingsChanged = { brushSettings = it },
@@ -690,7 +697,7 @@ fun EditorScreen(
 
     if (brushLibraryOpen) {
         ExpandedBrushLibraryDialog(
-            brushes = premiumBrushes + customBrushes,
+            brushes = availableBrushes,
             selectedPreset = selectedPreset,
             settings = brushSettings,
             onPresetSelected = applyBrushPreset,
@@ -1118,6 +1125,7 @@ private fun RightDock(
     dockWidth: androidx.compose.ui.unit.Dp,
     selectedTab: DockTab,
     onSelectTab: (DockTab) -> Unit,
+    brushDockResetTick: Int,
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
     brushSettings: BrushSettings,
@@ -1182,6 +1190,7 @@ private fun RightDock(
                 selectedPreset = selectedPreset,
                 brushes = brushes,
                 settings = brushSettings,
+                resetTick = brushDockResetTick,
                 onPresetSelected = onPresetSelected,
                 onSettingsChanged = onBrushSettingsChanged,
                 onSaveCustomBrush = onSaveCustomBrush,
@@ -1365,6 +1374,7 @@ private fun BrushDock(
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
     settings: BrushSettings,
+    resetTick: Int,
     onPresetSelected: (BrushPreset) -> Unit,
     onSettingsChanged: (BrushSettings) -> Unit,
     onSaveCustomBrush: (String) -> Unit,
@@ -1374,6 +1384,10 @@ private fun BrushDock(
     var saveBrushDialogOpen by remember { mutableStateOf(false) }
     var customBrushName by remember(selectedPreset.id) {
         mutableStateOf("${selectedPreset.name} personalizado")
+    }
+    val dockScrollState = rememberScrollState()
+    LaunchedEffect(selectedPreset.id, resetTick) {
+        dockScrollState.scrollTo(0)
     }
     val categories = listOf("Todos") + brushes.map(BrushPreset::category).distinct()
     val categoryBrushes = if (selectedCategory == "Todos") {
@@ -1387,7 +1401,7 @@ private fun BrushDock(
             it.category.contains(brushQuery.trim(), ignoreCase = true)
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(dockScrollState).padding(14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("Biblioteca de pinceles", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)

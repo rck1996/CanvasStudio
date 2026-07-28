@@ -29,6 +29,7 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
     }
     private var activeInkStroke: InProgressStrokeId? = null
     private var activePointerId: Int = -1
+    private val rasterHandoff = RasterHandoffGate<InProgressStrokeId>(RASTER_HANDOFF_FRAMES)
 
     init {
         isFocusable = true
@@ -43,9 +44,27 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
         )
         inkView.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                inkView.removeFinishedStrokes(strokes.keys)
+                // The Ink front buffer must remain visible until DrawingView has presented the
+                // raster source of truth. Removing it immediately can clear the low-latency
+                // surface before the backing tile frame is ready, which looks like older strokes
+                // are progressively disappearing during a dense drawing session.
+                rasterHandoff.enqueue(strokes.keys)
+                drawingView.postInvalidateOnAnimation()
             }
         })
+        drawingView.onRasterFramePresented = {
+            if (rasterHandoff.hasPending()) {
+                val completed = rasterHandoff.onRasterFramePresented()
+                if (completed != null) {
+                    drawingView.post {
+                        inkView.removeFinishedStrokes(completed)
+                        drawingView.postInvalidateOnAnimation()
+                    }
+                } else {
+                    drawingView.postInvalidateOnAnimation()
+                }
+            }
+        }
         inkView.eagerInit()
         post { requestFocus() }
     }
@@ -122,11 +141,17 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
         val cacheKey = "$color:${size.toBits()}"
         return previewBrushCache.getOrPut(cacheKey) {
             Brush.createWithColorIntArgb(
-            pressurePenFamily,
-            color,
-            size,
-            0.1f,
+                pressurePenFamily,
+                color,
+                size,
+                0.1f,
             )
         }
+    }
+
+    private companion object {
+        // One frame commits the tile update and the second safely hands presentation back from
+        // AndroidX Ink. This is short enough to be imperceptible and prevents front-buffer holes.
+        const val RASTER_HANDOFF_FRAMES = 2
     }
 }

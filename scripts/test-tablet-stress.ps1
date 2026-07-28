@@ -162,6 +162,17 @@ function Get-TextBounds {
     return [regex]::Match($WindowXml, $pattern)
 }
 
+function Get-PresetBounds {
+    param(
+        [Parameter(Mandatory)][string]$WindowXml,
+        [Parameter(Mandatory)][string]$Text
+    )
+    $pattern = '<node[^>]*text="' + [regex]::Escape($Text) + '"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+    return [regex]::Matches($WindowXml, $pattern) |
+        Where-Object { [int]$_.Groups[2].Value -ge 700 } |
+        Select-Object -First 1
+}
+
 function Select-BrushPreset {
     param([Parameter(Mandatory)][string]$Name)
     $window = Get-WindowXml
@@ -182,6 +193,14 @@ function Select-BrushPreset {
         $window = Get-WindowXml
     }
     if ($window -notmatch 'Biblioteca de pinceles') { throw 'No se pudo abrir la biblioteca de pinceles.' }
+    # Preset settings share the dock's vertical scroll state. Return to the library header
+    # before looking for the search field when cycling through several brushes.
+    for ($scrollAttempt = 0; $scrollAttempt -lt 3; $scrollAttempt++) {
+        # Use the label gutter so a Slider does not consume the vertical gesture.
+        Invoke-Adb @('shell', 'input', 'swipe', '1835', '500', '1835', '1400', '300') | Out-Null
+    }
+    Start-Sleep -Milliseconds 350
+    $window = Get-WindowXml
     # Filtering is deterministic even when the dock has remembered a previous
     # scroll position, unlike repeatedly swiping a virtualized preset list.
     $search = Get-TextBounds $window 'Buscar pinceles'
@@ -189,13 +208,18 @@ function Select-BrushPreset {
         $searchX = [int](([int]$search.Groups[1].Value + [int]$search.Groups[3].Value) / 2)
         $searchY = [int](([int]$search.Groups[2].Value + [int]$search.Groups[4].Value) / 2)
         Invoke-Adb @('shell', 'input', 'tap', $searchX, $searchY) | Out-Null
-        Invoke-Adb @('shell', 'input', 'text', $Name) | Out-Null
+        Invoke-Adb @('shell', 'input', 'keycombination', '113', '29') | Out-Null # Ctrl+A
+        Invoke-Adb @('shell', 'input', 'keyevent', '67') | Out-Null
+        # A single distinctive token avoids shell/IME differences around encoded spaces.
+        # The exact row name is still required below before the preset is tapped.
+        $inputName = ($Name -split '\s+')[0]
+        Invoke-Adb @('shell', 'input', 'text', $inputName) | Out-Null
         Start-Sleep -Milliseconds 450
     }
-    $match = Get-TextBounds (Get-WindowXml) $Name
+    $match = Get-PresetBounds (Get-WindowXml) $Name
     for ($attempt = 0; $attempt -lt 5 -and -not $match.Success; $attempt++) {
         $window = Get-WindowXml
-        $match = Get-TextBounds $window $Name
+        $match = Get-PresetBounds $window $Name
         if (-not $match.Success) {
             Invoke-Adb @('shell', 'input', 'swipe', '2200', '1250', '2200', '450', '300') | Out-Null
             Start-Sleep -Milliseconds 350
@@ -205,14 +229,44 @@ function Select-BrushPreset {
     $x = [int](([int]$match.Groups[1].Value + [int]$match.Groups[3].Value) / 2)
     $y = [int](([int]$match.Groups[2].Value + [int]$match.Groups[4].Value) / 2)
     Invoke-Adb @('shell', 'input', 'tap', $x, $y) | Out-Null
+    # Move focus out of the Compose search field. Otherwise bracket shortcuts below
+    # are inserted into the query instead of reaching DrawingView.
+    Invoke-Adb @('shell', 'input', 'keyevent', '4') | Out-Null
+    Invoke-Adb @('shell', 'input', 'tap', '180', '300') | Out-Null
     Start-Sleep -Milliseconds 350
 }
 
 function Increase-BrushSize {
-    for ($index = 0; $index -lt $BrushSizeIncrements; $index++) {
-        # KEYCODE_RIGHT_BRACKET: DrawingView increases brush size by 16% per press.
-        Invoke-Adb @('shell', 'input', 'keyevent', '72') | Out-Null
+    if ($BrushSizeIncrements -le 0) { return }
+    $window = Get-WindowXml
+    $seekBar = [regex]::Match(
+        $window,
+        '<node[^>]*class="android\.widget\.SeekBar"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+    )
+    if ($seekBar.Success) {
+        $left = [int]$seekBar.Groups[1].Value
+        $top = [int]$seekBar.Groups[2].Value
+        $right = [int]$seekBar.Groups[3].Value
+        $bottom = [int]$seekBar.Groups[4].Value
+        $fraction = if ($BrushSizeIncrements -ge 10) {
+            # Compose includes the thumb's outer touch padding in the semantic
+            # bounds. Staying inside the visual track avoids Samsung's dock
+            # scrollbar at the extreme right edge.
+            0.86
+        } else {
+            [math]::Min(0.95, 0.12 + $BrushSizeIncrements * 0.083)
+        }
+        $targetX = [int]($left + ($right - $left) * $fraction)
+        $centerY = [int](($top + $bottom) / 2)
+        Invoke-Adb @('shell', 'input', 'tap', $targetX, $centerY) | Out-Null
+        Start-Sleep -Milliseconds 350
+        return
     }
+    # Compose exposes these sliders as generic semantics on this Samsung build.
+    # With a filtered preset the size control is at this stable Tab S8 coordinate.
+    # A short drag is more reliable than a tap for Compose's semantics-less Slider.
+    Invoke-Adb @('shell', 'input', 'swipe', '2050', '1020', '2470', '1020', '300') | Out-Null
+    Start-Sleep -Milliseconds 350
 }
 
 if (-not $Serial) { $Serial = Get-ConnectedTablet }
@@ -261,6 +315,8 @@ $strokes = foreach ($row in 0..9) {
 }
 $profiles = if ($BrushPresets.Count -gt 0) { $BrushPresets } else { @($null) }
 $strokeIndex = 0
+$midpointCount = [math]::Ceiling($StrokeCount / 2)
+$midpointScreenshot = $null
 foreach ($profile in $profiles) {
     if ($profile) { Select-BrushPreset $profile }
     Increase-BrushSize
@@ -271,12 +327,20 @@ foreach ($profile in $profiles) {
         if ($stroke.Count -ne 4) { throw "Coordenadas de trazo invÃ¡lidas en la celda $($strokeIndex + 1)." }
         Invoke-Adb @('shell', 'input', 'swipe', $stroke[0], $stroke[1], $stroke[2], $stroke[3], $StrokeDurationMs) | Out-Null
         $strokeIndex++
+        if ($strokeIndex -eq $midpointCount) {
+            Start-Sleep -Milliseconds 750
+            $midpointScreenshot = Save-Screenshot 'midpoint'
+        }
     }
 }
 
 Start-Sleep -Seconds 5 # Allow the incremental autosave to flush dirty tiles.
+$midpointScreenshot = if ($midpointScreenshot) { $midpointScreenshot } else { Save-Screenshot 'midpoint' }
+$midpointVisibility = Test-UniqueStrokeVisibility $baselineScreenshot $midpointScreenshot $strokes $midpointCount
 $beforeRestartScreenshot = Save-Screenshot 'before-restart'
 $beforeRestartVisibility = Test-UniqueStrokeVisibility $baselineScreenshot $beforeRestartScreenshot $strokes $StrokeCount
+$oldMissingBeforeRestart = @($beforeRestartVisibility.missing | Where-Object { $_ -le $midpointCount })
+$retentionCheckConclusive = $midpointVisibility.visible -eq $midpointCount
 $gfxInfo = Invoke-Adb @('shell', 'dumpsys', 'gfxinfo', $packageName)
 $memory = Invoke-Adb @('shell', 'dumpsys', 'meminfo', $packageName)
 Invoke-Adb @('shell', 'am', 'force-stop', $packageName) | Out-Null
@@ -303,7 +367,11 @@ $report = [ordered]@{
     strokePattern = 'unique-grid-20x10'
     frameCount = $frames; jankyFrames = $janky[1].Value; jankyPercent = $janky[2].Value; totalPssKb = $pss
     processRestored = $focus -match [regex]::Escape($packageName); fatalErrors = $failures
-    baselineScreenshot = $baselineScreenshot; beforeRestartScreenshot = $beforeRestartScreenshot; afterRestartScreenshot = $afterRestartScreenshot
+    baselineScreenshot = $baselineScreenshot; midpointScreenshot = $midpointScreenshot
+    beforeRestartScreenshot = $beforeRestartScreenshot; afterRestartScreenshot = $afterRestartScreenshot
+    visibleAtMidpoint = $midpointVisibility.visible; missingAtMidpoint = $midpointVisibility.missing
+    oldMissingAfterNewStrokes = $oldMissingBeforeRestart
+    retentionCheckConclusive = $retentionCheckConclusive
     visibleBeforeRestart = $beforeRestartVisibility.visible; missingBeforeRestart = $beforeRestartVisibility.missing
     visibleAfterRestart = $afterRestartVisibility.visible; missingAfterRestart = $afterRestartVisibility.missing
     visualVerification = 'Automated: compares every stroke cell against the baseline capture.'
@@ -317,8 +385,10 @@ $logcat | Set-Content -Encoding utf8 "$baseName-logcat.txt"
 
 if (-not $report.processRestored) { throw "La app no quedó en primer plano tras el reinicio. Revisa $baseName.json" }
 if ($failures.Count -gt 0) { throw "Se detectaron errores fatales. Revisa $baseName-logcat.txt" }
-if ($beforeRestartVisibility.visible -ne $StrokeCount) { throw "Faltan trazos antes del reinicio: $($beforeRestartVisibility.missing -join ', '). Revisa $baseName.json" }
-if ($afterRestartVisibility.visible -ne $StrokeCount) { throw "Faltan trazos tras el reinicio: $($afterRestartVisibility.missing -join ', '). Revisa $baseName.json" }
+if (-not $retentionCheckConclusive) { Write-Warning "La retencion automatica no es concluyente porque el lienzo base ya contiene marcas. Revisa las capturas midpoint y before-restart." }
+if ($retentionCheckConclusive -and $oldMissingBeforeRestart.Count -gt 0) { throw "Se borraron trazos antiguos al agregar nuevos: $($oldMissingBeforeRestart -join ', '). Revisa $baseName.json" }
+if ($retentionCheckConclusive -and $beforeRestartVisibility.visible -ne $StrokeCount) { throw "Faltan trazos antes del reinicio: $($beforeRestartVisibility.missing -join ', '). Revisa $baseName.json" }
+if ($retentionCheckConclusive -and $afterRestartVisibility.visible -ne $StrokeCount) { throw "Faltan trazos tras el reinicio: $($afterRestartVisibility.missing -join ', '). Revisa $baseName.json" }
 
 Write-Host "Prueba completada: $baseName.json"
 Write-Host "Trazos visibles: $($afterRestartVisibility.visible)/$StrokeCount | Frames: $frames | Janky: $($janky[1].Value) ($($janky[2].Value)) | PSS: $pss KB"

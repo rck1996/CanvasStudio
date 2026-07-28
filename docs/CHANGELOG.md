@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.0-beta03
+
+- corregida la desaparición visual de trazos al retirar demasiado pronto el front buffer de AndroidX Ink;
+- entrega segura de dos frames entre la previsualización de baja latencia y el raster tiled;
+- prueba instrumentada específica para impedir regresiones del handoff;
+- setters de cuadrícula, simetría y guías idempotentes para evitar invalidaciones al cambiar pincel;
+- la biblioteca vuelve al inicio al tocar Pinceles o elegir un preset;
+- prueba ADB ampliada con captura intermedia, verificación de retención y pinceles gruesos;
+- 14 pruebas instrumentadas ejecutadas en tres ciclos: 600 trazos persistidos;
+- 120 trazos de Carboncillo a 159 px conservados antes y después de reiniciar en una Galaxy Tab S8.
+
 ## Fase 6 · en desarrollo
 
 - rechazo explícito de eventos de palma cancelados;
@@ -7,7 +18,7 @@
 - HUD interactivo de tamaño, opacidad y color;
 - búsqueda de pinceles y diez presets nuevos;
 - objetivos táctiles ampliados;
-- suite instrumentada ampliada a diez pruebas.
+- suite instrumentada ampliada a catorce pruebas.
 
 ## 2.0.0-beta01
 

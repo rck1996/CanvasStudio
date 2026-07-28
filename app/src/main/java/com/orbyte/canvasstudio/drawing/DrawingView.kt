@@ -253,6 +253,7 @@ class DrawingView(context: Context) : View(context) {
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var onRasterFramePresented: (() -> Unit)? = null
     var usePlatformLowLatencyPreview: Boolean = false
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
@@ -815,6 +816,7 @@ class DrawingView(context: Context) : View(context) {
         drawBrushCursor(canvas)
         scheduleTilePrefetch(prefetchedBounds, force = hasMissingVisibleTiles(prefetchedBounds))
         scheduleEngineStatusUpdate()
+        onRasterFramePresented?.invoke()
     }
 
     private fun hasMissingVisibleTiles(bounds: RectF): Boolean = layers
@@ -2930,23 +2932,28 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setGridVisible(visible: Boolean) {
+        if (gridVisible == visible) return
         gridVisible = visible
         invalidate()
     }
 
     fun setVerticalSymmetry(enabled: Boolean) {
+        if (verticalSymmetry == enabled) return
         verticalSymmetry = enabled
         if (enabled) radialSymmetryCount = 1
         invalidate()
     }
 
     fun setRadialSymmetry(count: Int) {
-        radialSymmetryCount = count.coerceIn(1, 16)
+        val coercedCount = count.coerceIn(1, 16)
+        if (radialSymmetryCount == coercedCount) return
+        radialSymmetryCount = coercedCount
         if (radialSymmetryCount > 1) verticalSymmetry = false
         invalidate()
     }
 
     fun setGuideMode(mode: GuideMode) {
+        if (guideMode == mode) return
         guideMode = mode
         if (mode == GuideMode.NONE) {
             perspectiveEditing = false
@@ -2956,7 +2963,9 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setPerspectiveEditing(enabled: Boolean) {
-        perspectiveEditing = enabled && guideMode != GuideMode.NONE
+        val effectiveEnabled = enabled && guideMode != GuideMode.NONE
+        if (perspectiveEditing == effectiveEnabled) return
+        perspectiveEditing = effectiveEnabled
         draggedPerspectivePoint = 0
         invalidate()
     }

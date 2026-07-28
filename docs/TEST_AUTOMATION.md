@@ -2,7 +2,7 @@
 
 La prueba principal es `scripts/test-raster-engine.ps1`. Ejecuta instrumentación Android sobre el motor tiled, sin capturas ni coordenadas de pantalla. Está orientada a una Samsung Galaxy Tab S8 (`SM-X700`) conectada por USB o depuración inalámbrica.
 
-Cada iteración ejecuta cuatro pruebas: comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. También comprueba la recuperación asíncrona de tiles visibles, una metadata principal corrupta y un guardado interrumpido que dejó metadata temporal.
+Cada iteración ejecuta catorce pruebas. La prueba de carga comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. La suite también cubre recuperación asíncrona de tiles visibles, metadata dañada o interrumpida, versiones locales, atajos, comportamiento de presets y la entrega segura entre AndroidX Ink y el raster.
 
 ```powershell
 .\scripts\test-raster-engine.ps1
@@ -30,9 +30,9 @@ Para una prueba prolongada sin recompilar ni reinstalar:
 
 Los artefactos se generan localmente en `build/reports/tablet-stress/`; el directorio no se versiona.
 
-La suite determinista `scripts/test-raster-engine.ps1` ejecuta ocho pruebas instrumentadas:
+La suite determinista `scripts/test-raster-engine.ps1` ejecuta catorce pruebas instrumentadas:
 persistencia de 200 trazos gruesos, presión de caché, precarga visible, recuperación de
-metadata, versiones locales y perfiles de atajos. Con `-Iterations 20` verifica 4.000
+metadata, versiones locales, perfiles de atajos, presets y handoff de tinta. Con `-Iterations 20` verifica 4.000
 trazos persistidos sin depender de reconocimiento visual.
 
 ## Ejemplos

@@ -52,6 +52,7 @@ import androidx.compose.material.icons.outlined.CropSquare
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FileDownload
+import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Gesture
@@ -69,6 +70,8 @@ import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SelectAll
+import androidx.compose.material.icons.outlined.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Transform
 import androidx.compose.material.icons.outlined.Visibility
@@ -113,6 +116,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -235,6 +243,8 @@ fun EditorScreen(
     var zoomLabel by remember { mutableIntStateOf(100) }
     var rotationLabel by remember { mutableIntStateOf(0) }
     var gridVisible by remember { mutableStateOf(false) }
+    var rulersVisible by remember { mutableStateOf(false) }
+    var angleSnappingEnabled by remember { mutableStateOf(false) }
     var symmetryMode by remember { mutableIntStateOf(0) }
     var guideMode by remember { mutableStateOf(GuideMode.NONE) }
     var perspectiveEditing by remember { mutableStateOf(false) }
@@ -244,11 +254,19 @@ fun EditorScreen(
     var showHelp by remember { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
     var brushDockResetTick by remember { mutableIntStateOf(0) }
+    var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
+    var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
     val availableBrushes = remember(customBrushes) { premiumBrushes + customBrushes }
     val lifecycleOwner = LocalLifecycleOwner.current
+    val updateCustomBrushes: (List<BrushPreset>) -> Unit = { brushes ->
+        val normalized = brushes.takeLast(BrushRepository.MAX_CUSTOM_BRUSHES)
+        customBrushes = normalized
+        BrushRepository.save(context, normalized)
+    }
     val applyBrushPreset: (BrushPreset) -> Unit = { preset ->
         brushDockResetTick += 1
         selectedPreset = preset
+        recentBrushIds = BrushRepository.recordRecent(context, preset.id, recentBrushIds)
         brushSettings = brushSettings.copy(
             sizePx = preset.sizePx,
             opacity = preset.opacity,
@@ -387,6 +405,56 @@ fun EditorScreen(
         }
     }
 
+    val exportBrushesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching {
+                    context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
+                        writer.write(BrushRepository.exportJson(customBrushes))
+                    } ?: error("No se pudo abrir el archivo de destino.")
+                }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        if (result.isSuccess) "Biblioteca de pinceles exportada"
+                        else result.exceptionOrNull()?.message ?: "No se pudo exportar.",
+                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val importBrushesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching {
+                    val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                        ?: error("No se pudo abrir el archivo.")
+                    BrushRepository.importJson(raw)
+                }
+                withContext(Dispatchers.Main) {
+                    result.onSuccess { imported ->
+                        val merged = (customBrushes + imported)
+                            .distinctBy { it.name.lowercase(Locale.ROOT) to it.kind }
+                            .takeLast(BrushRepository.MAX_CUSTOM_BRUSHES)
+                        updateCustomBrushes(merged)
+                    }
+                    Toast.makeText(
+                        context,
+                        if (result.isSuccess) "${result.getOrNull()?.size ?: 0} pinceles importados"
+                        else result.exceptionOrNull()?.message ?: "No se pudo importar.",
+                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize().background(StudioPalette.Background)) {
         EditorTopBar(
             document = document,
@@ -433,6 +501,16 @@ fun EditorScreen(
             onToggleGrid = {
                 gridVisible = !gridVisible
                 drawingView?.setGridVisible(gridVisible)
+            },
+            rulersVisible = rulersVisible,
+            onToggleRulers = {
+                rulersVisible = !rulersVisible
+                drawingView?.setRulersVisible(rulersVisible)
+            },
+            angleSnappingEnabled = angleSnappingEnabled,
+            onToggleAngleSnapping = {
+                angleSnappingEnabled = !angleSnappingEnabled
+                drawingView?.setAngleSnappingEnabled(angleSnappingEnabled)
             },
             symmetryLabel = when (symmetryMode) {
                 1 -> "Simetría vertical"
@@ -527,6 +605,8 @@ fun EditorScreen(
                             }
                             onSelectionChanged = { selectionActive = it }
                             setGridVisible(gridVisible)
+                            setRulersVisible(rulersVisible)
+                            setAngleSnappingEnabled(angleSnappingEnabled)
                             when (symmetryMode) {
                                 1 -> setVerticalSymmetry(true)
                                 2 -> setRadialSymmetry(4)
@@ -547,6 +627,8 @@ fun EditorScreen(
                         view.tool = selectedTool
                         view.brushSettings = brushSettings
                         view.setGridVisible(gridVisible)
+                        view.setRulersVisible(rulersVisible)
+                        view.setAngleSnappingEnabled(angleSnappingEnabled)
                         when (symmetryMode) {
                             1 -> view.setVerticalSymmetry(true)
                             2 -> view.setRadialSymmetry(4)
@@ -589,6 +671,8 @@ fun EditorScreen(
                     SelectionToolbar(
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
                         onTransform = { selectedTool = DrawingTool.TRANSFORM },
+                        onExpand = { drawingView?.adjustSelectionBounds(16f) },
+                        onContract = { drawingView?.adjustSelectionBounds(-16f) },
                         onFlipHorizontal = { drawingView?.flipSelection(horizontal = true) },
                         onFlipVertical = { drawingView?.flipSelection(horizontal = false) },
                         onDelete = { drawingView?.deleteSelectionContents() },
@@ -654,9 +738,7 @@ fun EditorScreen(
                             grain = brushSettings.grain,
                             velocitySize = brushSettings.velocitySize,
                         )
-                        val updatedBrushes = (customBrushes + custom).takeLast(40)
-                        customBrushes = updatedBrushes
-                        BrushRepository.save(context, updatedBrushes)
+                        updateCustomBrushes(customBrushes + custom)
                         selectedPreset = custom
                     },
                     layers = layerModels,
@@ -698,10 +780,43 @@ fun EditorScreen(
     if (brushLibraryOpen) {
         ExpandedBrushLibraryDialog(
             brushes = availableBrushes,
+            customBrushIds = customBrushes.mapTo(mutableSetOf(), BrushPreset::id),
+            favoriteBrushIds = favoriteBrushIds,
+            recentBrushIds = recentBrushIds,
             selectedPreset = selectedPreset,
             settings = brushSettings,
             onPresetSelected = applyBrushPreset,
             onSettingsChanged = { brushSettings = it },
+            onToggleFavorite = { preset ->
+                favoriteBrushIds = if (preset.id in favoriteBrushIds) {
+                    favoriteBrushIds - preset.id
+                } else {
+                    favoriteBrushIds + preset.id
+                }
+                BrushRepository.saveFavorites(context, favoriteBrushIds)
+            },
+            onDuplicate = { preset ->
+                val duplicate = preset.copy(
+                    id = "custom-${System.currentTimeMillis()}",
+                    name = "${preset.name} copia",
+                    category = "Personalizados",
+                )
+                updateCustomBrushes(customBrushes + duplicate)
+                applyBrushPreset(duplicate)
+            },
+            onRename = { preset, name ->
+                val renamed = preset.copy(name = name)
+                updateCustomBrushes(customBrushes.map { if (it.id == preset.id) renamed else it })
+                if (selectedPreset.id == preset.id) selectedPreset = renamed
+            },
+            onDelete = { preset ->
+                updateCustomBrushes(customBrushes.filterNot { it.id == preset.id })
+                favoriteBrushIds = favoriteBrushIds - preset.id
+                BrushRepository.saveFavorites(context, favoriteBrushIds)
+                if (selectedPreset.id == preset.id) applyBrushPreset(premiumBrushes.first())
+            },
+            onImport = { importBrushesLauncher.launch("application/json") },
+            onExport = { exportBrushesLauncher.launch("canvas-studio-brushes.json") },
             onDismiss = { brushLibraryOpen = false },
         )
     }
@@ -772,6 +887,10 @@ private fun EditorTopBar(
     onSaveNow: () -> Unit,
     gridVisible: Boolean,
     onToggleGrid: () -> Unit,
+    rulersVisible: Boolean,
+    onToggleRulers: () -> Unit,
+    angleSnappingEnabled: Boolean,
+    onToggleAngleSnapping: () -> Unit,
     symmetryLabel: String,
     onCycleSymmetry: () -> Unit,
     guideLabel: String,
@@ -896,6 +1015,21 @@ private fun EditorTopBar(
                         onClick = { menuExpanded = false; onToggleGrid() },
                     )
                     DropdownMenuItem(
+                        text = { Text(if (rulersVisible) "Ocultar reglas" else "Mostrar reglas") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ShowChart, null) },
+                        onClick = { menuExpanded = false; onToggleRulers() },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (angleSnappingEnabled) "Desactivar ajuste de ángulo"
+                                else "Ajustar ángulos a 15°",
+                            )
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.CenterFocusStrong, null) },
+                        onClick = { menuExpanded = false; onToggleAngleSnapping() },
+                    )
+                    DropdownMenuItem(
                         text = { Text(symmetryLabel) },
                         leadingIcon = { Icon(Icons.Outlined.CenterFocusStrong, null) },
                         onClick = { menuExpanded = false; onCycleSymmetry() },
@@ -973,6 +1107,11 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .background(if (selected) StudioPalette.Accent else Color.Transparent, RoundedCornerShape(11.dp))
+            .semantics {
+                this.selected = selected
+                role = Role.Button
+                contentDescription = "${spec.label}${if (selected) ", seleccionada" else ""}"
+            }
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1059,6 +1198,8 @@ private fun PerspectiveToolbar(
 private fun SelectionToolbar(
     modifier: Modifier = Modifier,
     onTransform: () -> Unit,
+    onExpand: () -> Unit,
+    onContract: () -> Unit,
     onFlipHorizontal: () -> Unit,
     onFlipVertical: () -> Unit,
     onDelete: () -> Unit,
@@ -1078,6 +1219,8 @@ private fun SelectionToolbar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onTransform) { Text("Transformar") }
+            TextButton(onClick = onExpand) { Text("Expandir 16 px") }
+            TextButton(onClick = onContract) { Text("Contraer 16 px") }
             TextButton(onClick = onFlipHorizontal) { Text("Voltear H") }
             TextButton(onClick = onFlipVertical) { Text("Voltear V") }
             TextButton(onClick = onDelete) { Text("Borrar") }
@@ -1241,6 +1384,11 @@ private fun DockTabButton(
         modifier = modifier
             .fillMaxHeight()
             .background(if (selected) StudioPalette.SurfaceHover else Color.Transparent, RoundedCornerShape(9.dp))
+            .semantics {
+                this.selected = selected
+                role = Role.Tab
+                contentDescription = "Panel $label${if (selected) ", seleccionado" else ""}"
+            }
             .clickable(onClick = onClick)
             .padding(horizontal = 7.dp),
         horizontalArrangement = Arrangement.Center,
@@ -1255,18 +1403,40 @@ private fun DockTabButton(
 @Composable
 private fun ExpandedBrushLibraryDialog(
     brushes: List<BrushPreset>,
+    customBrushIds: Set<String>,
+    favoriteBrushIds: Set<String>,
+    recentBrushIds: List<String>,
     selectedPreset: BrushPreset,
     settings: BrushSettings,
     onPresetSelected: (BrushPreset) -> Unit,
     onSettingsChanged: (BrushSettings) -> Unit,
+    onToggleFavorite: (BrushPreset) -> Unit,
+    onDuplicate: (BrushPreset) -> Unit,
+    onRename: (BrushPreset, String) -> Unit,
+    onDelete: (BrushPreset) -> Unit,
+    onImport: () -> Unit,
+    onExport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var category by remember { mutableStateOf("Todos") }
     var query by remember { mutableStateOf("") }
-    val categories = listOf("Todos") + brushes.map(BrushPreset::category).distinct()
+    var renameTarget by remember { mutableStateOf<BrushPreset?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    val categories = listOf("Todos", "Favoritos", "Recientes") + brushes.map(BrushPreset::category).distinct()
+    val recentOrder = recentBrushIds.withIndex().associate { it.value to it.index }
     val visible = brushes.filter { preset ->
-        (category == "Todos" || preset.category == category) &&
-            (query.isBlank() || preset.name.contains(query.trim(), ignoreCase = true))
+        when (category) {
+            "Todos" -> true
+            "Favoritos" -> preset.id in favoriteBrushIds
+            "Recientes" -> preset.id in recentBrushIds
+            else -> preset.category == category
+        } && (
+            query.isBlank() ||
+                preset.name.contains(query.trim(), ignoreCase = true) ||
+                preset.category.contains(query.trim(), ignoreCase = true)
+            )
+    }.let { filtered ->
+        if (category == "Recientes") filtered.sortedBy { recentOrder[it.id] ?: Int.MAX_VALUE } else filtered
     }
 
     Dialog(
@@ -1281,12 +1451,28 @@ private fun ExpandedBrushLibraryDialog(
         ) {
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Biblioteca de pinceles",
-                        color = StudioPalette.Text,
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.weight(1f),
-                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "Biblioteca de pinceles",
+                            color = StudioPalette.Text,
+                            style = MaterialTheme.typography.headlineSmall,
+                        )
+                        Text(
+                            "${brushes.size} pinceles · ${customBrushIds.size} personalizados",
+                            color = StudioPalette.TextMuted,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    TextButton(onClick = onImport) {
+                        Icon(Icons.Outlined.FileUpload, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Importar")
+                    }
+                    TextButton(onClick = onExport, enabled = customBrushIds.isNotEmpty()) {
+                        Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Exportar")
+                    }
                     TextButton(onClick = onDismiss) { Text("Listo") }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -1328,9 +1514,39 @@ private fun ExpandedBrushLibraryDialog(
                         ) {
                             items(visible, key = BrushPreset::id) { preset ->
                                 BrushPresetRow(
-                                    preset,
+                                    preset = preset,
                                     selected = preset.id == selectedPreset.id,
-                                ) { onPresetSelected(preset) }
+                                    favorite = preset.id in favoriteBrushIds,
+                                    onToggleFavorite = { onToggleFavorite(preset) },
+                                    onDuplicate = { onDuplicate(preset) },
+                                    onRename = if (preset.id in customBrushIds) {
+                                        {
+                                            renameTarget = preset
+                                            renameText = preset.name
+                                        }
+                                    } else {
+                                        null
+                                    },
+                                    onDelete = if (preset.id in customBrushIds) {
+                                        { onDelete(preset) }
+                                    } else {
+                                        null
+                                    },
+                                    onClick = { onPresetSelected(preset) },
+                                )
+                            }
+                            if (visible.isEmpty()) {
+                                item {
+                                    Text(
+                                        when (category) {
+                                            "Favoritos" -> "Marca pinceles con la estrella para encontrarlos aquí."
+                                            "Recientes" -> "Los pinceles que uses aparecerán aquí."
+                                            else -> "No hay pinceles que coincidan con la búsqueda."
+                                        },
+                                        color = StudioPalette.TextMuted,
+                                        modifier = Modifier.padding(18.dp),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1342,7 +1558,13 @@ private fun ExpandedBrushLibraryDialog(
                             .padding(16.dp),
                     ) {
                         Text(selectedPreset.name, color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
-                        Text("General", color = StudioPalette.Accent, style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            selectedPreset.kind.displayName(),
+                            color = StudioPalette.Accent,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        BrushStrokePreview(selectedPreset, Modifier.fillMaxWidth().height(72.dp))
                         Spacer(Modifier.height(12.dp))
                         SettingSlider("Tamaño", settings.sizePx, 2f..180f, "${settings.sizePx.toInt()} px") {
                             onSettingsChanged(settings.copy(sizePx = it))
@@ -1366,6 +1588,33 @@ private fun ExpandedBrushLibraryDialog(
                 }
             }
         }
+    }
+
+    renameTarget?.let { preset ->
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Renombrar pincel") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it.take(40) },
+                    label = { Text("Nombre") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = renameText.isNotBlank(),
+                    onClick = {
+                        onRename(preset, renameText.trim())
+                        renameTarget = null
+                    },
+                ) { Text("Guardar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Cancelar") }
+            },
+        )
     }
 }
 
@@ -1587,7 +1836,16 @@ private fun BrushToggle(label: String, checked: Boolean, onCheckedChange: (Boole
 }
 
 @Composable
-private fun BrushPresetRow(preset: BrushPreset, selected: Boolean, onClick: () -> Unit) {
+private fun BrushPresetRow(
+    preset: BrushPreset,
+    selected: Boolean,
+    favorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onDuplicate: (() -> Unit)? = null,
+    onRename: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
@@ -1600,8 +1858,46 @@ private fun BrushPresetRow(preset: BrushPreset, selected: Boolean, onClick: () -
                 Text(preset.category, color = StudioPalette.TextMuted, fontSize = 10.sp)
             }
             BrushStrokePreview(preset, Modifier.weight(1f).height(34.dp))
+            onToggleFavorite?.let { toggle ->
+                IconButton(onClick = toggle, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        if (favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                        if (favorite) "Quitar de favoritos" else "Añadir a favoritos",
+                        tint = if (favorite) StudioPalette.Accent else StudioPalette.TextMuted,
+                    )
+                }
+            }
+            onDuplicate?.let { duplicate ->
+                IconButton(onClick = duplicate, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.ContentCopy, "Duplicar pincel", tint = StudioPalette.TextMuted)
+                }
+            }
+            onRename?.let { rename ->
+                IconButton(onClick = rename, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.MoreHoriz, "Renombrar pincel", tint = StudioPalette.TextMuted)
+                }
+            }
+            onDelete?.let { delete ->
+                IconButton(onClick = delete, modifier = Modifier.size(40.dp)) {
+                    Icon(Icons.Outlined.Delete, "Eliminar pincel", tint = StudioPalette.TextMuted)
+                }
+            }
         }
     }
+}
+
+private fun BrushKind.displayName(): String = when (this) {
+    BrushKind.PENCIL -> "Lápiz"
+    BrushKind.INK -> "Tinta"
+    BrushKind.MARKER -> "Rotulador"
+    BrushKind.PAINT -> "Pintura"
+    BrushKind.AIRBRUSH -> "Aerógrafo"
+    BrushKind.CHARCOAL -> "Carboncillo"
+    BrushKind.CHALK -> "Tiza"
+    BrushKind.DRY_BRUSH -> "Pincel seco"
+    BrushKind.BRISTLE -> "Cerdas"
+    BrushKind.WATERCOLOR -> "Acuarela"
+    BrushKind.OIL -> "Óleo"
 }
 
 @Composable
@@ -1883,15 +2179,34 @@ private fun LayersDock(
 ) {
     val active = layers.firstOrNull { it.isActive }
     val activeGroup = groups.firstOrNull { it.id == active?.groupId }
+    var layerQuery by remember { mutableStateOf("") }
+    val visibleLayers = layers.filter { layer ->
+        layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
+    }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Capas", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
-                    Text("Composición raster no destructiva", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "${layers.size} capas · composición raster",
+                        color = StudioPalette.TextMuted,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
                 IconButton(onClick = onCreateGroup) { Icon(Icons.Outlined.Layers, "Crear grupo", tint = StudioPalette.TextMuted) }
                 IconButton(onClick = onAdd) { Icon(Icons.Outlined.Add, "Añadir capa", tint = StudioPalette.TextMuted) }
+            }
+            if (layers.size >= 6) {
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = layerQuery,
+                    onValueChange = { layerQuery = it.take(48) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    leadingIcon = { Icon(Icons.Outlined.Search, "Buscar capas") },
+                    placeholder = { Text("Buscar capas") },
+                )
             }
             Spacer(Modifier.height(10.dp))
             Surface(
@@ -1967,7 +2282,7 @@ private fun LayersDock(
         HorizontalDivider(color = StudioPalette.Border)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(10.dp)) {
             val emittedGroups = mutableSetOf<String>()
-            layers.forEach { layer ->
+            visibleLayers.forEach { layer ->
                 val group = layer.groupId?.let { id -> groups.firstOrNull { it.id == id } }
                 if (group != null && emittedGroups.add(group.id)) {
                     LayerGroupRow(
@@ -1986,6 +2301,13 @@ private fun LayersDock(
                     )
                     Spacer(Modifier.height(7.dp))
                 }
+            }
+            if (visibleLayers.isEmpty()) {
+                Text(
+                    "No hay capas que coincidan con la búsqueda.",
+                    color = StudioPalette.TextMuted,
+                    modifier = Modifier.padding(12.dp),
+                )
             }
             Surface(
                 modifier = Modifier.fillMaxWidth(),

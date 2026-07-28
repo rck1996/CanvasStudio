@@ -165,6 +165,16 @@ class DrawingView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeWidth = 1.5f
     }
+    private val rulerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(185, 47, 117, 255)
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f
+    }
+    private val rulerTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(210, 47, 117, 255)
+        style = Paint.Style.FILL
+        textSize = 11f
+    }
 
     private var documentWidth = 1800
     private var documentHeight = 1200
@@ -191,6 +201,8 @@ class DrawingView(context: Context) : View(context) {
     private var hoverY = 0f
     private var hoverVisible = false
     private var gridVisible = false
+    private var rulersVisible = false
+    private var angleSnappingEnabled = false
     private var verticalSymmetry = false
     private var radialSymmetryCount = 1
     private var guideMode = GuideMode.NONE
@@ -808,6 +820,7 @@ class DrawingView(context: Context) : View(context) {
         }
         drawGridOverlay(canvas)
         drawPerspectiveGuides(canvas)
+        drawRulers(canvas)
         drawShapePreview(canvas)
         drawSelectionOverlay(canvas)
         canvas.restore()
@@ -1110,6 +1123,31 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
+    private fun drawRulers(canvas: Canvas) {
+        if (!rulersVisible) return
+        val scale = currentScale.coerceAtLeast(.1f)
+        val spacing = when {
+            scale >= 1.2f -> 100f
+            scale >= .55f -> 250f
+            else -> 500f
+        }
+        val tick = 12f / scale
+        rulerPaint.strokeWidth = 1.5f / scale
+        rulerTextPaint.textSize = 11f / scale
+        var x = 0f
+        while (x <= documentWidth) {
+            canvas.drawLine(x, 0f, x, tick, rulerPaint)
+            if (x > 0f) canvas.drawText(x.toInt().toString(), x + 4f / scale, tick, rulerTextPaint)
+            x += spacing
+        }
+        var y = 0f
+        while (y <= documentHeight) {
+            canvas.drawLine(0f, y, tick, y, rulerPaint)
+            if (y > 0f) canvas.drawText(y.toInt().toString(), tick + 3f / scale, y - 3f / scale, rulerTextPaint)
+            y += spacing
+        }
+    }
+
     private fun drawShapePreview(canvas: Canvas) {
         val start = shapeStart ?: return
         val end = shapeEnd ?: return
@@ -1334,7 +1372,13 @@ class DrawingView(context: Context) : View(context) {
                         appendStrokePoint(points, current[0], current[1], pressure, tilt, event.eventTime)
                     }
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE, DrawingTool.GRADIENT -> {
-                        shapeEnd = StrokePoint(current[0], current[1], pressure, tilt, event.eventTime)
+                        shapeEnd = snappedShapePoint(
+                            x = current[0],
+                            y = current[1],
+                            pressure = pressure,
+                            tilt = tilt,
+                            time = event.eventTime,
+                        )
                         invalidate()
                     }
                     DrawingTool.SELECT_RECTANGLE, DrawingTool.SELECT_ELLIPSE -> {
@@ -1378,6 +1422,44 @@ class DrawingView(context: Context) : View(context) {
             }
         }
         return true
+    }
+
+    private fun snappedShapePoint(
+        x: Float,
+        y: Float,
+        pressure: Float,
+        tilt: Float,
+        time: Long,
+    ): StrokePoint {
+        val start = shapeStart
+        if (!angleSnappingEnabled || start == null) return StrokePoint(x, y, pressure, tilt, time)
+        val dx = x - start.x
+        val dy = y - start.y
+        return when (tool) {
+            DrawingTool.LINE, DrawingTool.GRADIENT -> {
+                val distance = hypot(dx, dy)
+                val step = Math.PI / 12.0
+                val angle = kotlin.math.round(atan2(dy.toDouble(), dx.toDouble()) / step) * step
+                StrokePoint(
+                    x = start.x + kotlin.math.cos(angle).toFloat() * distance,
+                    y = start.y + kotlin.math.sin(angle).toFloat() * distance,
+                    pressure = pressure,
+                    tilt = tilt,
+                    timestampMillis = time,
+                )
+            }
+            DrawingTool.RECTANGLE, DrawingTool.ELLIPSE -> {
+                val side = max(abs(dx), abs(dy))
+                StrokePoint(
+                    x = start.x + side * if (dx < 0f) -1f else 1f,
+                    y = start.y + side * if (dy < 0f) -1f else 1f,
+                    pressure = pressure,
+                    tilt = tilt,
+                    timestampMillis = time,
+                )
+            }
+            else -> StrokePoint(x, y, pressure, tilt, time)
+        }
     }
 
     private fun clearActiveStrokeState() {
@@ -1929,6 +2011,37 @@ class DrawingView(context: Context) : View(context) {
         )
         selectionPoints = points
         selectionPath = pathFromPoints(points, close = true)
+        onSelectionChanged?.invoke(true)
+        invalidate()
+    }
+
+    fun adjustSelectionBounds(deltaPx: Float) {
+        cancelSelectionTransform(rebuild = true)
+        val current = persistentSelectionPoints()
+        if (current.size < 3 || deltaPx == 0f) return
+        val bounds = RectF().apply {
+            current.forEachIndexed { index, point ->
+                if (index == 0) set(point.x, point.y, point.x, point.y) else union(point.x, point.y)
+            }
+        }
+        val targetWidth = bounds.width() + deltaPx * 2f
+        val targetHeight = bounds.height() + deltaPx * 2f
+        if (targetWidth < 4f || targetHeight < 4f) {
+            onEngineMessage?.invoke("La selección ya es demasiado pequeña para contraerla.")
+            return
+        }
+        val scaleX = targetWidth / bounds.width().coerceAtLeast(1f)
+        val scaleY = targetHeight / bounds.height().coerceAtLeast(1f)
+        val centerX = bounds.centerX()
+        val centerY = bounds.centerY()
+        val adjusted = current.map { point ->
+            point.copy(
+                x = (centerX + (point.x - centerX) * scaleX).coerceIn(0f, documentWidth.toFloat()),
+                y = (centerY + (point.y - centerY) * scaleY).coerceIn(0f, documentHeight.toFloat()),
+            )
+        }
+        selectionPoints = adjusted.toMutableList()
+        selectionPath = pathFromPoints(adjusted, close = true)
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -2935,6 +3048,16 @@ class DrawingView(context: Context) : View(context) {
         if (gridVisible == visible) return
         gridVisible = visible
         invalidate()
+    }
+
+    fun setRulersVisible(visible: Boolean) {
+        if (rulersVisible == visible) return
+        rulersVisible = visible
+        invalidate()
+    }
+
+    fun setAngleSnappingEnabled(enabled: Boolean) {
+        angleSnappingEnabled = enabled
     }
 
     fun setVerticalSymmetry(enabled: Boolean) {

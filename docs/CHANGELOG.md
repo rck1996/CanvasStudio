@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.0-beta04
+
+- biblioteca profesional de tres paneles con búsqueda, favoritos y recientes;
+- duplicado de presets y renombrado/eliminación de pinceles personalizados;
+- importación y exportación de bibliotecas JSON versionadas, con un máximo de 80 presets propios;
+- vista previa ampliada del material y controles accesibles en la biblioteca;
+- búsqueda automática en el panel cuando un documento contiene seis o más capas;
+- expansión y contracción de selecciones en incrementos de 16 px;
+- reglas documentales opcionales y ajuste angular de 15° para líneas y degradados;
+- cuadrados y círculos exactos cuando el ajuste angular está activo;
+- semántica de selección para herramientas y pestañas principales;
+- suite instrumentada ampliada a 17 pruebas, validada en una Galaxy Tab S8;
+- captura real actualizada de la biblioteca añadida al README.
+
 ## 2.0.0-beta03
 
 - corregida la desaparición visual de trazos al retirar demasiado pronto el front buffer de AndroidX Ink;

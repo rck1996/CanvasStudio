@@ -7,6 +7,11 @@ import org.json.JSONObject
 object BrushRepository {
     private const val PREFERENCES = "canvas_studio_brushes"
     private const val KEY_CUSTOM_BRUSHES = "custom_brushes_v1"
+    private const val KEY_FAVORITES = "favorite_brushes_v1"
+    private const val KEY_RECENTS = "recent_brushes_v1"
+    private const val EXPORT_VERSION = 1
+    const val MAX_CUSTOM_BRUSHES = 80
+    const val MAX_RECENT_BRUSHES = 12
 
     fun load(context: Context): List<BrushPreset> {
         val raw = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
@@ -26,11 +31,83 @@ object BrushRepository {
 
     fun save(context: Context, brushes: List<BrushPreset>) {
         val array = JSONArray()
-        brushes.takeLast(40).forEach { brush -> array.put(encode(brush)) }
+        brushes.takeLast(MAX_CUSTOM_BRUSHES).forEach { brush -> array.put(encode(brush)) }
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_CUSTOM_BRUSHES, array.toString())
             .apply()
+    }
+
+    fun loadFavorites(context: Context): Set<String> =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getStringSet(KEY_FAVORITES, emptySet())
+            ?.toSet()
+            .orEmpty()
+
+    fun saveFavorites(context: Context, ids: Set<String>) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putStringSet(KEY_FAVORITES, ids)
+            .apply()
+    }
+
+    fun loadRecents(context: Context): List<String> {
+        val raw = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(KEY_RECENTS, null)
+            ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                repeat(array.length()) { index ->
+                    array.optString(index).takeIf(String::isNotBlank)?.let(::add)
+                }
+            }.distinct().take(MAX_RECENT_BRUSHES)
+        }.getOrDefault(emptyList())
+    }
+
+    fun recordRecent(context: Context, brushId: String, previous: List<String>): List<String> {
+        val updated = (listOf(brushId) + previous.filterNot { it == brushId })
+            .take(MAX_RECENT_BRUSHES)
+        val array = JSONArray()
+        updated.forEach(array::put)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_RECENTS, array.toString())
+            .apply()
+        return updated
+    }
+
+    fun exportJson(brushes: List<BrushPreset>): String = JSONObject().apply {
+        put("format", "CanvasStudioBrushLibrary")
+        put("version", EXPORT_VERSION)
+        put("brushes", JSONArray().apply {
+            brushes.takeLast(MAX_CUSTOM_BRUSHES).forEach { put(encode(it)) }
+        })
+    }.toString(2)
+
+    fun importJson(raw: String): List<BrushPreset> = runCatching {
+        val root = JSONObject(raw)
+        require(root.optString("format") == "CanvasStudioBrushLibrary") {
+            "El archivo no es una biblioteca de Canvas Studio."
+        }
+        require(root.optInt("version", -1) in 1..EXPORT_VERSION) {
+            "La versión de la biblioteca no es compatible."
+        }
+        val array = root.getJSONArray("brushes")
+        buildList {
+            repeat(array.length().coerceAtMost(MAX_CUSTOM_BRUSHES)) { index ->
+                decode(array.optJSONObject(index) ?: return@repeat)?.let { brush ->
+                    add(
+                        brush.copy(
+                            id = "custom-${System.currentTimeMillis()}-$index",
+                            category = "Personalizados",
+                        ),
+                    )
+                }
+            }
+        }
+    }.getOrElse { error ->
+        throw IllegalArgumentException(error.message ?: "No se pudo importar la biblioteca.", error)
     }
 
     private fun encode(brush: BrushPreset): JSONObject = JSONObject().apply {

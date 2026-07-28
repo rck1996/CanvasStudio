@@ -5,7 +5,7 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
 > **Estado del proyecto:** Beta para tablets / fase 6
-> **Versión incluida en este repositorio:** `2.0.0-beta03`
+> **Versión incluida en este repositorio:** `2.0.0-beta04`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -18,6 +18,8 @@ Las siguientes capturas fueron obtenidas de la variante de depuración ejecutada
 ![Editor de Canvas Studio en una Galaxy Tab S8](docs/images/editor-tab-s8.png)
 
 ![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
+
+![Biblioteca de pinceles beta04 en una Galaxy Tab S8](docs/images/brush-library-beta04-tab-s8.png)
 
 ---
 
@@ -112,14 +114,14 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 | Creación de lienzo | Presets, medidas personalizadas, orientación, DPI y límites defensivos |
 | Navegación | Zoom, desplazamiento, rotación, restablecimiento y modo zen |
 | Dibujo | Pincel, borrador, línea, rectángulo, elipse, relleno, degradado y cuentagotas |
-| Pinceles | Presión, inclinación, estabilización, flujo, espaciado, taper, grano, dispersión y velocidad |
+| Pinceles | 22 presets, favoritos, recientes, búsqueda, duplicado, administración e intercambio JSON |
 | Capas | Crear, duplicar, borrar, limpiar, renombrar, reordenar, ocultar y cambiar opacidad |
 | Composición | Siete modos de fusión, bloqueo alfa y clipping |
 | Grupos | Grupos de un nivel con visibilidad, opacidad y colapso |
 | Máscaras | Máscara raster por capa, activación, edición, eliminación e historial separado |
-| Selección | Rectangular, elíptica, lazo y seleccionar todo |
+| Selección | Rectangular, elíptica, lazo, seleccionar todo, expandir y contraer |
 | Transformación | Mover, escalar, rotar, voltear y borrar contenido seleccionado |
-| Asistencias | Cuadrícula, simetría vertical, simetría radial y perspectiva editable |
+| Asistencias | Cuadrícula opcional, reglas, ajuste angular de 15°, simetría y perspectiva editable |
 | Importación | Imágenes compatibles con Android como una capa nueva |
 | Exportación | PNG aplanado y OpenRaster `.ora` con capas |
 | Persistencia | Autoguardado incremental, metadata transaccional y recuperación de respaldo |
@@ -222,7 +224,7 @@ Desplaza el lienzo sin modificar el contenido.
 
 ## Motor de pinceles
 
-Canvas Studio incluye un motor de pinceles configurable y doce presets base.
+Canvas Studio incluye un motor configurable con 22 presets, agrupados por material y comportamiento.
 
 ### Presets incluidos
 
@@ -253,6 +255,14 @@ Canvas Studio incluye un motor de pinceles configurable y doce presets base.
 - Carboncillo
 - Tiza seca
 
+#### Presets creativos adicionales
+
+- Lápiz azul y Lápiz de color
+- Entintado manga y Plumilla G
+- Rotulador plano y Aerógrafo duro
+- Pincel seco y Pincel de cerdas
+- Acuarela granulada y Óleo espeso
+
 ### Parámetros disponibles
 
 - tamaño;
@@ -276,7 +286,7 @@ Canvas Studio incluye un motor de pinceles configurable y doce presets base.
 
 La configuración actual puede guardarse con un nombre personalizado. Los presets personalizados se almacenan mediante `SharedPreferences` y se conservan entre sesiones.
 
-El límite actual es de 40 pinceles personalizados. Todavía no existe importación de puntas o texturas externas ni un administrador completo para editar, ordenar o eliminar presets.
+La biblioteca permite marcar favoritos, consultar recientes, duplicar cualquier preset y renombrar o eliminar los personalizados. También importa y exporta colecciones en el formato JSON versionado de Canvas Studio. El límite actual es de 80 pinceles personalizados; las puntas y texturas bitmap externas siguen fuera del alcance de esta beta.
 
 ### Procesamiento de trazos
 
@@ -908,7 +918,7 @@ CanvasStudio/
 
 ## Pruebas recomendadas
 
-La aplicación sigue en etapa Alpha, por lo que cada entrega debe verificarse en hardware real.
+La aplicación sigue en etapa beta, por lo que cada entrega debe verificarse en hardware real.
 
 ### Prueba rápida de humo
 
@@ -1112,12 +1122,22 @@ Comprueba:
 
 ## Hoja de ruta
 
-### Cierre de fase 4
+### Fase 6.2 — experiencia creativa
+
+- administración e intercambio de pinceles: completado;
+- favoritos, recientes y biblioteca de tres paneles: completado;
+- búsqueda de capas y acciones persistentes: completado;
+- selección expandible/contraíble: completado;
+- reglas y ajuste angular opcionales: completado;
+- accesibilidad inicial y objetivos táctiles: completado;
+- feather, invertir selección y reglas arrastrables: siguiente iteración.
+
+### Trabajo técnico pendiente
 
 - mejorar grupos y máscaras;
-- selección con feather, invertir, expandir y contraer;
-- perspectiva con snapping;
-- herramientas de reglas;
+- selección con feather e invertir;
+- snapping directo a líneas de perspectiva;
+- reglas arrastrables y unidades físicas;
 - importación y exportación PSD básica;
 - mayor precisión en modos de fusión.
 

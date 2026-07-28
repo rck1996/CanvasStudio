@@ -20,17 +20,29 @@
   - Acuarela granulada;
   - Óleo espeso.
 
-La suite instrumentada incluye ahora catorce pruebas. El primer bloque fue verificado
+La suite instrumentada incluye ahora diecisiete pruebas. El primer bloque fue verificado
 en una Galaxy Tab S8 con tres ciclos consecutivos y 600 trazos gruesos persistidos.
 
 El front buffer de AndroidX Ink se conserva durante dos frames presentados por el
 renderer tiled. Esta entrega evita huecos visuales al completar ráfagas de trazos y
 queda protegida por dos pruebas instrumentadas específicas.
 
+## Bloque 2: flujo creativo y administración
+
+- biblioteca de tres paneles inspirada en el mockup de producto;
+- favoritos y lista de pinceles recientes persistentes;
+- duplicado, renombrado y eliminación de presets;
+- importación/exportación JSON con validación de formato;
+- búsqueda de capas para documentos complejos;
+- expansión y contracción de selecciones;
+- reglas documentales y ajuste angular opcionales;
+- semántica accesible en herramientas y pestañas;
+- 17 pruebas instrumentadas aprobadas en una Galaxy Tab S8.
+
 ## Siguientes bloques
 
-- paneles y capas;
-- administración e intercambio de pinceles;
-- referencias y reglas;
-- operaciones avanzadas de selección;
-- accesibilidad y pruebas finales de carga.
+- feather e inversión de selecciones;
+- reglas arrastrables y snapping directo a perspectiva;
+- selección múltiple de capas y grupos anidados;
+- puntas/texturas bitmap importables;
+- accesibilidad completa con TalkBack y pruebas finales de carga.

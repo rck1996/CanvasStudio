@@ -1,5 +1,60 @@
 # Changelog
 
+## 2.1.0
+
+- corregido el parpadeo completo del dibujo al pasar de un dedo a navegación con dos dedos;
+- los trazos táctiles se mantienen en overlay hasta confirmar el gesto y AndroidX Ink queda reservado al stylus;
+- política de lienzos nuevos adaptada al heap de la tablet, con máximo de 40 Mpx y 8.192 px por lado;
+- estimación previa de megapíxeles, RGBA, tiles y nivel de carga en el diálogo de creación;
+- exportaciones PSD y OpenRaster alineadas con el máximo seguro de 40 Mpx;
+- regresiones automáticas de multitouch y exportación 8K;
+- suite ampliada a 28 pruebas y certificada 20 veces en Galaxy Tab S8;
+- workflow de GitHub Actions para lint, APK de prueba, APK release y AAB;
+- dependencias AndroidX compatibles actualizadas y versión estable `2.1.0`.
+
+## 2.1.0-beta02
+
+- preview de material ampliado y reactivo a todos los parámetros relevantes del pincel;
+- biblioteca alineada al mockup con panel de tres columnas y pestañas General/Dinámicas;
+- curva gráfica de presión visible y actualizada en tiempo real;
+- importación de puntas bitmap con normalización automática a máscara alfa;
+- puntas bitmap incluidas de forma portable en la importación/exportación JSON;
+- caché acotada de puntas para mantener estable el rendimiento;
+- 25 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
+## 2.1.0-beta01
+
+- selección múltiple de capas con agrupación, movimiento y eliminación conjunta;
+- grupos anidados persistentes y jerarquía colapsable;
+- guías arrastrables desde las reglas, persistentes por documento;
+- ocho pinceles nuevos y cinco modos de fusión modernos;
+- intercambio PSD básico del compuesto RGBA;
+- propiedades de capa colapsables y selección visual más clara;
+- atajos de guardar, rehacer, modo lienzo y restablecer vista;
+- prueba automática de ida y vuelta PSD aprobada en una Galaxy Tab S8.
+
+## 2.0.0-beta06
+
+- corregida la pérdida real de trazos antiguos al finalizar un lápiz HB modificado, grueso y largo;
+- la reconstrucción regional ahora se expande a los límites exactos de las teselas restauradas y reproduce todos sus comandos;
+- el replay queda recortado a las teselas reconstruidas para evitar sobrepintado fuera de la zona invalidada;
+- los pinceles lineales con taper o velocidad se rasterizan una sola vez al finalizar, reduciendo 57 % el tiempo de la suite de estrés medida;
+- nueva regresión automática con 64 trazos HB de 180 px que atraviesan el documento y conservan trazos centinela antiguos;
+- 23 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
+## 2.0.0-beta05
+
+- corregida la vista previa ampliada para que responda inmediatamente a tamaño, opacidad, flujo, dureza, grano y familia;
+- eliminado el falso efecto de desaparición al evitar el preview frontal sólido en pinceles translúcidos o texturizados;
+- matriz automática de 539 trazos gruesos distribuida entre las 11 familias de render;
+- selección invertida persistente en pincel, forma, degradado, relleno, borrado e historial;
+- feather raster por tile con transición alfa real y límites de memoria locales;
+- snapping directo de líneas y degradados a perspectiva de uno o dos puntos;
+- reglas en píxeles o centímetros calculadas desde el DPI y persistidas por proyecto;
+- semántica TalkBack ampliada para pinceles, parámetros y capas;
+- firma debug estable para automatización reproducible;
+- 22 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
 ## 2.0.0-beta04
 
 - biblioteca profesional de tres paneles con búsqueda, favoritos y recientes;

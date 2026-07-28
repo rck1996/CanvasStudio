@@ -39,10 +39,23 @@ queda protegida por dos pruebas instrumentadas específicas.
 - semántica accesible en herramientas y pestañas;
 - 17 pruebas instrumentadas aprobadas en una Galaxy Tab S8.
 
-## Siguientes bloques
+## Bloque 3: precisión profesional
 
-- feather e inversión de selecciones;
-- reglas arrastrables y snapping directo a perspectiva;
-- selección múltiple de capas y grupos anidados;
-- puntas/texturas bitmap importables;
-- accesibilidad completa con TalkBack y pruebas finales de carga.
+- inversión de selecciones conservada por los comandos de historial;
+- feather raster configurable entre 0, 8, 16 y 32 px desde la barra contextual;
+- reglas documentales en píxeles o centímetros según DPI;
+- snapping de líneas y degradados al punto de fuga más cercano;
+- persistencia de reglas, unidades y modos de ajuste dentro del proyecto.
+
+## Bloque 4: cierre beta
+
+- preview de pincel reactivo a todos los parámetros visibles;
+- preview frontal AndroidX Ink limitado a familias visualmente compatibles;
+- semántica TalkBack para presets, parámetros y capas;
+- validación de tablet redimensionable en una Galaxy Tab S8;
+- 23 pruebas instrumentadas aprobadas;
+- matriz de 539 trazos gruesos: 49 por cada una de las 11 familias;
+- 64 trazos HB modificados, gruesos y largos con verificación de retención en cada tesela afectada.
+
+La fase 6 queda cerrada. Grupos anidados, selección múltiple de capas, reglas arrastrables
+y recursos bitmap importables pasan a la fase 7.

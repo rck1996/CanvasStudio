@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.automirrored.outlined.RotateLeft
 import androidx.compose.material.icons.automirrored.outlined.RotateRight
@@ -57,7 +58,6 @@ import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Gradient
-import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Lock
@@ -120,11 +120,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -135,6 +137,7 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
+import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
 import com.orbyte.canvasstudio.drawing.GuideMode
@@ -229,6 +232,7 @@ fun EditorScreen(
                 scatter = selectedPreset.scatter,
                 grain = selectedPreset.grain,
                 velocitySize = selectedPreset.velocitySize,
+                tipAssetPath = selectedPreset.tipAssetPath,
                 kind = selectedPreset.kind,
                 color = AndroidColor.rgb(37, 42, 49),
             ),
@@ -244,11 +248,14 @@ fun EditorScreen(
     var rotationLabel by remember { mutableIntStateOf(0) }
     var gridVisible by remember { mutableStateOf(false) }
     var rulersVisible by remember { mutableStateOf(false) }
+    var rulersUseCentimeters by remember { mutableStateOf(false) }
     var angleSnappingEnabled by remember { mutableStateOf(false) }
+    var perspectiveSnappingEnabled by remember { mutableStateOf(false) }
     var symmetryMode by remember { mutableIntStateOf(0) }
     var guideMode by remember { mutableStateOf(GuideMode.NONE) }
     var perspectiveEditing by remember { mutableStateOf(false) }
     var selectionActive by remember { mutableStateOf(false) }
+    var selectionFeatherPx by remember { mutableFloatStateOf(0f) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
@@ -284,6 +291,7 @@ fun EditorScreen(
             scatter = preset.scatter,
             grain = preset.grain,
             velocitySize = preset.velocitySize,
+            tipAssetPath = preset.tipAssetPath,
             kind = preset.kind,
         )
         selectedTool = DrawingTool.BRUSH
@@ -405,6 +413,54 @@ fun EditorScreen(
         }
     }
 
+    val exportPsdLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/vnd.adobe.photoshop"),
+    ) { uri ->
+        val view = drawingView ?: return@rememberLauncherForActivityResult
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching {
+                    context.contentResolver.openOutputStream(uri)?.use(view::exportBasicPsd)
+                        ?: error("No se pudo abrir el archivo de destino.")
+                }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        if (result.isSuccess) "PSD compuesto exportado"
+                        else result.exceptionOrNull()?.message ?: "No se pudo exportar PSD.",
+                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val importPsdLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching {
+                    context.contentResolver.openInputStream(uri)?.use(BasicPsdCodec::read)
+                        ?: error("No se pudo abrir el PSD.")
+                }
+                withContext(Dispatchers.Main) {
+                    result.onSuccess { bitmap ->
+                        drawingView?.importBitmapAsLayer(bitmap, "PSD importado")
+                        bitmap.recycle()
+                    }
+                    if (result.isFailure) {
+                        Toast.makeText(
+                            context,
+                            result.exceptionOrNull()?.message ?: "No se pudo importar PSD.",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }
+            }
+        }
+    }
+
     val exportBrushesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
     ) { uri ->
@@ -412,7 +468,7 @@ fun EditorScreen(
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
                     context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { writer ->
-                        writer.write(BrushRepository.exportJson(customBrushes))
+                        writer.write(BrushRepository.exportJsonWithAssets(customBrushes))
                     } ?: error("No se pudo abrir el archivo de destino.")
                 }
                 withContext(Dispatchers.Main) {
@@ -435,7 +491,7 @@ fun EditorScreen(
                 val result = runCatching {
                     val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                         ?: error("No se pudo abrir el archivo.")
-                    BrushRepository.importJson(raw)
+                    BrushRepository.importJsonWithAssets(context, raw)
                 }
                 withContext(Dispatchers.Main) {
                     result.onSuccess { imported ->
@@ -448,6 +504,34 @@ fun EditorScreen(
                         context,
                         if (result.isSuccess) "${result.getOrNull()?.size ?: 0} pinceles importados"
                         else result.exceptionOrNull()?.message ?: "No se pudo importar.",
+                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val importBrushTipLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching { BrushRepository.importTipAsset(context, uri) }
+                withContext(Dispatchers.Main) {
+                    result.onSuccess { path ->
+                        val custom = selectedPreset.withSettings(brushSettings).copy(
+                            id = "custom-${System.currentTimeMillis()}",
+                            name = "${selectedPreset.name} · punta",
+                            category = "Personalizados",
+                            tipAssetPath = path,
+                        )
+                        updateCustomBrushes(customBrushes + custom)
+                        applyBrushPreset(custom)
+                    }
+                    Toast.makeText(
+                        context,
+                        if (result.isSuccess) "Punta bitmap importada"
+                        else result.exceptionOrNull()?.message ?: "No se pudo importar la punta.",
                         if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
                     ).show()
                 }
@@ -492,7 +576,13 @@ fun EditorScreen(
                 val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
                 openRasterLauncher.launch("$safeName.ora")
             },
+            onExportPsd = {
+                drawingView?.commitPendingTransform()
+                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
+                exportPsdLauncher.launch("$safeName.psd")
+            },
             onImportImage = { importImageLauncher.launch("image/*") },
+            onImportPsd = { importPsdLauncher.launch(arrayOf("image/vnd.adobe.photoshop", "application/octet-stream")) },
             onSaveNow = {
                 saveLabel = "Guardando…"
                 drawingView?.saveProject(document.id, document.title, document.dpi)
@@ -506,6 +596,11 @@ fun EditorScreen(
             onToggleRulers = {
                 rulersVisible = !rulersVisible
                 drawingView?.setRulersVisible(rulersVisible)
+            },
+            rulersUseCentimeters = rulersUseCentimeters,
+            onToggleRulerUnits = {
+                rulersUseCentimeters = !rulersUseCentimeters
+                drawingView?.setRulerUnitCentimeters(rulersUseCentimeters)
             },
             angleSnappingEnabled = angleSnappingEnabled,
             onToggleAngleSnapping = {
@@ -578,9 +673,17 @@ fun EditorScreen(
                                 // Compose defaults, then mirror the persisted values back to state.
                                 val restoredGuideMode = currentGuideMode()
                                 val restoredPerspectiveEditing = isPerspectiveEditing()
+                                val restoredRulersVisible = areRulersVisible()
+                                val restoredRulersUseCentimeters = areRulersUsingCentimeters()
+                                val restoredAngleSnapping = isAngleSnappingEnabled()
+                                val restoredPerspectiveSnapping = isPerspectiveSnappingEnabled()
                                 post {
                                     guideMode = restoredGuideMode
                                     perspectiveEditing = restoredPerspectiveEditing
+                                    rulersVisible = restoredRulersVisible
+                                    rulersUseCentimeters = restoredRulersUseCentimeters
+                                    angleSnappingEnabled = restoredAngleSnapping
+                                    perspectiveSnappingEnabled = restoredPerspectiveSnapping
                                 }
                             }
                             tool = selectedTool
@@ -596,6 +699,11 @@ fun EditorScreen(
                             onRotationChanged = { rotationLabel = it }
                             onToolShortcut = { selectedTool = it }
                             onBrushSettingsShortcut = { brushSettings = it }
+                            onSaveShortcut = {
+                                saveLabel = "Guardando…"
+                                saveProject(document.id, document.title, document.dpi)
+                            }
+                            onTogglePanelsShortcut = { zenMode = !zenMode }
                             onProjectSaved = { success ->
                                 saveLabel = if (success) "Guardado" else "Error al guardar"
                             }
@@ -603,10 +711,16 @@ fun EditorScreen(
                             onEngineMessage = { message ->
                                 Toast.makeText(viewContext, message, Toast.LENGTH_LONG).show()
                             }
-                            onSelectionChanged = { selectionActive = it }
+                            onSelectionChanged = {
+                                selectionActive = it
+                                if (!it) selectionFeatherPx = 0f
+                            }
                             setGridVisible(gridVisible)
                             setRulersVisible(rulersVisible)
+                            setDocumentDpi(document.dpi)
+                            setRulerUnitCentimeters(rulersUseCentimeters)
                             setAngleSnappingEnabled(angleSnappingEnabled)
+                            setPerspectiveSnappingEnabled(perspectiveSnappingEnabled)
                             when (symmetryMode) {
                                 1 -> setVerticalSymmetry(true)
                                 2 -> setRadialSymmetry(4)
@@ -628,7 +742,10 @@ fun EditorScreen(
                         view.brushSettings = brushSettings
                         view.setGridVisible(gridVisible)
                         view.setRulersVisible(rulersVisible)
+                        view.setDocumentDpi(document.dpi)
+                        view.setRulerUnitCentimeters(rulersUseCentimeters)
                         view.setAngleSnappingEnabled(angleSnappingEnabled)
+                        view.setPerspectiveSnappingEnabled(perspectiveSnappingEnabled)
                         when (symmetryMode) {
                             1 -> view.setVerticalSymmetry(true)
                             2 -> view.setRadialSymmetry(4)
@@ -673,6 +790,18 @@ fun EditorScreen(
                         onTransform = { selectedTool = DrawingTool.TRANSFORM },
                         onExpand = { drawingView?.adjustSelectionBounds(16f) },
                         onContract = { drawingView?.adjustSelectionBounds(-16f) },
+                        onInvert = { drawingView?.invertSelection() },
+                        featherPx = selectionFeatherPx,
+                        onCycleFeather = {
+                            selectionFeatherPx = when (selectionFeatherPx.toInt()) {
+                                0 -> 8f
+                                8 -> 16f
+                                16 -> 32f
+                                32 -> 64f
+                                else -> 0f
+                            }
+                            drawingView?.setSelectionFeather(selectionFeatherPx)
+                        },
                         onFlipHorizontal = { drawingView?.flipSelection(horizontal = true) },
                         onFlipVertical = { drawingView?.flipSelection(horizontal = false) },
                         onDelete = { drawingView?.deleteSelectionContents() },
@@ -684,9 +813,14 @@ fun EditorScreen(
                     PerspectiveToolbar(
                         modifier = Modifier.align(Alignment.TopEnd).padding(14.dp),
                         editing = perspectiveEditing,
+                        snapping = perspectiveSnappingEnabled,
                         onToggleEditing = {
                             perspectiveEditing = !perspectiveEditing
                             drawingView?.setPerspectiveEditing(perspectiveEditing)
+                        },
+                        onToggleSnapping = {
+                            perspectiveSnappingEnabled = !perspectiveSnappingEnabled
+                            drawingView?.setPerspectiveSnappingEnabled(perspectiveSnappingEnabled)
                         },
                         onReset = { drawingView?.resetPerspectiveGuides() },
                     )
@@ -737,6 +871,7 @@ fun EditorScreen(
                             scatter = brushSettings.scatter,
                             grain = brushSettings.grain,
                             velocitySize = brushSettings.velocitySize,
+                            tipAssetPath = brushSettings.tipAssetPath,
                         )
                         updateCustomBrushes(customBrushes + custom)
                         selectedPreset = custom
@@ -744,6 +879,7 @@ fun EditorScreen(
                     layers = layerModels,
                     groups = layerGroups,
                     onSelectLayer = { drawingView?.setActiveLayer(it) },
+                    onToggleLayerSelection = { drawingView?.toggleLayerSelection(it) },
                     onToggleVisibility = { drawingView?.toggleLayerVisibility(it) },
                     onLayerOpacity = { id, opacity -> drawingView?.setLayerOpacity(id, opacity) },
                     onLayerBlendMode = { id, mode -> drawingView?.setLayerBlendMode(id, mode) },
@@ -816,6 +952,7 @@ fun EditorScreen(
                 if (selectedPreset.id == preset.id) applyBrushPreset(premiumBrushes.first())
             },
             onImport = { importBrushesLauncher.launch("application/json") },
+            onImportTip = { importBrushTipLauncher.launch("image/*") },
             onExport = { exportBrushesLauncher.launch("canvas-studio-brushes.json") },
             onDismiss = { brushLibraryOpen = false },
         )
@@ -883,12 +1020,16 @@ private fun EditorTopBar(
     onResetView: () -> Unit,
     onExport: () -> Unit,
     onExportOpenRaster: () -> Unit,
+    onExportPsd: () -> Unit,
     onImportImage: () -> Unit,
+    onImportPsd: () -> Unit,
     onSaveNow: () -> Unit,
     gridVisible: Boolean,
     onToggleGrid: () -> Unit,
     rulersVisible: Boolean,
     onToggleRulers: () -> Unit,
+    rulersUseCentimeters: Boolean,
+    onToggleRulerUnits: () -> Unit,
     angleSnappingEnabled: Boolean,
     onToggleAngleSnapping: () -> Unit,
     symmetryLabel: String,
@@ -1000,13 +1141,23 @@ private fun EditorTopBar(
                         onClick = { menuExpanded = false; onExportOpenRaster() },
                     )
                     DropdownMenuItem(
+                        text = { Text("Importar PSD compuesto") },
+                        leadingIcon = { Icon(Icons.Outlined.FileUpload, null) },
+                        onClick = { menuExpanded = false; onImportPsd() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Exportar PSD compuesto") },
+                        leadingIcon = { Icon(Icons.Outlined.FileDownload, null) },
+                        onClick = { menuExpanded = false; onExportPsd() },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Guardar ahora") },
                         leadingIcon = { Icon(Icons.Outlined.Save, null) },
                         onClick = { menuExpanded = false; onSaveNow() },
                     )
                     DropdownMenuItem(
                         text = { Text("Ayuda rápida") },
-                        leadingIcon = { Icon(Icons.Outlined.HelpOutline, null) },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null) },
                         onClick = { menuExpanded = false; onShowHelp() },
                     )
                     DropdownMenuItem(
@@ -1018,6 +1169,11 @@ private fun EditorTopBar(
                         text = { Text(if (rulersVisible) "Ocultar reglas" else "Mostrar reglas") },
                         leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ShowChart, null) },
                         onClick = { menuExpanded = false; onToggleRulers() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(if (rulersUseCentimeters) "Reglas en pixeles" else "Reglas en centimetros") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ShowChart, null) },
+                        onClick = { menuExpanded = false; onToggleRulerUnits() },
                     )
                     DropdownMenuItem(
                         text = {
@@ -1172,7 +1328,9 @@ private fun QuickDial(
 private fun PerspectiveToolbar(
     modifier: Modifier = Modifier,
     editing: Boolean,
+    snapping: Boolean,
     onToggleEditing: () -> Unit,
+    onToggleSnapping: () -> Unit,
     onReset: () -> Unit,
 ) {
     Surface(
@@ -1189,6 +1347,9 @@ private fun PerspectiveToolbar(
             TextButton(onClick = onToggleEditing) {
                 Text(if (editing) "Terminar guías" else "Editar puntos")
             }
+            TextButton(onClick = onToggleSnapping) {
+                Text(if (snapping) "Ajuste activo" else "Ajustar a guias")
+            }
             TextButton(onClick = onReset) { Text("Restablecer") }
         }
     }
@@ -1200,6 +1361,9 @@ private fun SelectionToolbar(
     onTransform: () -> Unit,
     onExpand: () -> Unit,
     onContract: () -> Unit,
+    onInvert: () -> Unit,
+    featherPx: Float,
+    onCycleFeather: () -> Unit,
     onFlipHorizontal: () -> Unit,
     onFlipVertical: () -> Unit,
     onDelete: () -> Unit,
@@ -1221,6 +1385,10 @@ private fun SelectionToolbar(
             TextButton(onClick = onTransform) { Text("Transformar") }
             TextButton(onClick = onExpand) { Text("Expandir 16 px") }
             TextButton(onClick = onContract) { Text("Contraer 16 px") }
+            TextButton(onClick = onInvert) { Text("Invertir") }
+            TextButton(onClick = onCycleFeather) {
+                Text(if (featherPx == 0f) "Suavizar" else "Borde ${featherPx.toInt()} px")
+            }
             TextButton(onClick = onFlipHorizontal) { Text("Voltear H") }
             TextButton(onClick = onFlipVertical) { Text("Voltear V") }
             TextButton(onClick = onDelete) { Text("Borrar") }
@@ -1278,6 +1446,7 @@ private fun RightDock(
     layers: List<LayerUiModel>,
     groups: List<LayerGroupUiModel>,
     onSelectLayer: (String) -> Unit,
+    onToggleLayerSelection: (String) -> Unit,
     onToggleVisibility: (String) -> Unit,
     onLayerOpacity: (String, Float) -> Unit,
     onLayerBlendMode: (String, LayerBlendMode) -> Unit,
@@ -1346,6 +1515,7 @@ private fun RightDock(
                 layers = layers,
                 groups = groups,
                 onSelectLayer = onSelectLayer,
+                onToggleLayerSelection = onToggleLayerSelection,
                 onToggleVisibility = onToggleVisibility,
                 onOpacity = onLayerOpacity,
                 onBlendMode = onLayerBlendMode,
@@ -1415,6 +1585,7 @@ private fun ExpandedBrushLibraryDialog(
     onRename: (BrushPreset, String) -> Unit,
     onDelete: (BrushPreset) -> Unit,
     onImport: () -> Unit,
+    onImportTip: () -> Unit,
     onExport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1422,6 +1593,7 @@ private fun ExpandedBrushLibraryDialog(
     var query by remember { mutableStateOf("") }
     var renameTarget by remember { mutableStateOf<BrushPreset?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var settingsSection by remember { mutableStateOf("General") }
     val categories = listOf("Todos", "Favoritos", "Recientes") + brushes.map(BrushPreset::category).distinct()
     val recentOrder = recentBrushIds.withIndex().associate { it.value to it.index }
     val visible = brushes.filter { preset ->
@@ -1466,7 +1638,12 @@ private fun ExpandedBrushLibraryDialog(
                     TextButton(onClick = onImport) {
                         Icon(Icons.Outlined.FileUpload, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(5.dp))
-                        Text("Importar")
+                        Text("Biblioteca")
+                    }
+                    TextButton(onClick = onImportTip) {
+                        Icon(Icons.Outlined.Image, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Punta bitmap")
                     }
                     TextButton(onClick = onExport, enabled = customBrushIds.isNotEmpty()) {
                         Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
@@ -1564,25 +1741,85 @@ private fun ExpandedBrushLibraryDialog(
                             style = MaterialTheme.typography.labelLarge,
                         )
                         Spacer(Modifier.height(12.dp))
-                        BrushStrokePreview(selectedPreset, Modifier.fillMaxWidth().height(72.dp))
+                        BrushStrokePreview(
+                            preset = selectedPreset.withSettings(settings),
+                            modifier = Modifier.fillMaxWidth().height(104.dp),
+                        )
                         Spacer(Modifier.height(12.dp))
-                        SettingSlider("Tamaño", settings.sizePx, 2f..180f, "${settings.sizePx.toInt()} px") {
-                            onSettingsChanged(settings.copy(sizePx = it))
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(StudioPalette.Surface, RoundedCornerShape(10.dp))
+                                .padding(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            listOf("General", "Dinámicas").forEach { section ->
+                                Surface(
+                                    modifier = Modifier.weight(1f).clickable { settingsSection = section },
+                                    color = if (settingsSection == section) StudioPalette.AccentSoft else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp),
+                                ) {
+                                    Text(
+                                        section,
+                                        color = if (settingsSection == section) Color.White else StudioPalette.TextMuted,
+                                        textAlign = TextAlign.Center,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        modifier = Modifier.padding(vertical = 9.dp),
+                                    )
+                                }
+                            }
                         }
-                        SettingSlider("Tamaño mínimo", settings.minSize, .02f..1f, "${(settings.minSize * 100).toInt()}%") {
-                            onSettingsChanged(settings.copy(minSize = it))
-                        }
-                        SettingSlider("Opacidad", settings.opacity, .05f..1f, "${(settings.opacity * 100).toInt()}%") {
-                            onSettingsChanged(settings.copy(opacity = it))
-                        }
-                        SettingSlider("Espaciado", settings.spacing, .025f..0.4f, "${(settings.spacing * 100).toInt()}%") {
-                            onSettingsChanged(settings.copy(spacing = it))
-                        }
-                        SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-                            onSettingsChanged(settings.copy(grain = it))
-                        }
-                        SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
-                            onSettingsChanged(settings.copy(stabilization = it))
+                        Spacer(Modifier.height(10.dp))
+                        if (settingsSection == "General") {
+                            SettingSlider("Tamaño", settings.sizePx, 2f..180f, "${settings.sizePx.toInt()} px") {
+                                onSettingsChanged(settings.copy(sizePx = it))
+                            }
+                            SettingSlider("Opacidad", settings.opacity, .05f..1f, "${(settings.opacity * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(opacity = it))
+                            }
+                            SettingSlider("Flujo", settings.flow, .05f..1f, "${(settings.flow * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(flow = it))
+                            }
+                            SettingSlider("Dureza", settings.hardness, 0f..1f, "${(settings.hardness * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(hardness = it))
+                            }
+                            SettingSlider("Espaciado", settings.spacing, .025f..0.4f, "${(settings.spacing * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(spacing = it))
+                            }
+                            SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(grain = it))
+                            }
+                            SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(stabilization = it))
+                            }
+                        } else {
+                            SettingSlider("Tamaño mínimo", settings.minSize, .02f..1f, "${(settings.minSize * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(minSize = it))
+                            }
+                            SettingSlider("Curva de presión", settings.pressureCurve, .35f..2.5f, "%.2f".format(settings.pressureCurve)) {
+                                onSettingsChanged(settings.copy(pressureCurve = it))
+                            }
+                            PressureCurvePreview(settings.pressureCurve)
+                            SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(tiltResponse = it))
+                            }
+                            SettingSlider("Taper inicial", settings.taperStart, 0f..0.48f, "${(settings.taperStart * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(taperStart = it))
+                            }
+                            SettingSlider("Taper final", settings.taperEnd, 0f..0.48f, "${(settings.taperEnd * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(taperEnd = it))
+                            }
+                            SettingSlider("Dispersión", settings.scatter, 0f..0.5f, "${(settings.scatter * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(scatter = it))
+                            }
+                            SettingSlider("Respuesta a velocidad", settings.velocitySize, 0f..1f, "${(settings.velocitySize * 100).toInt()}%") {
+                                onSettingsChanged(settings.copy(velocitySize = it))
+                            }
+                            BrushToggle("Presión controla tamaño", settings.pressureSize) {
+                                onSettingsChanged(settings.copy(pressureSize = it))
+                            }
+                            BrushToggle("Presión controla opacidad", settings.pressureOpacity) {
+                                onSettingsChanged(settings.copy(pressureOpacity = it))
+                            }
                         }
                     }
                 }
@@ -1756,6 +1993,7 @@ private fun BrushDock(
         ) {
             onSettingsChanged(settings.copy(pressureCurve = it))
         }
+        PressureCurvePreview(settings.pressureCurve)
         SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
             onSettingsChanged(settings.copy(tiltResponse = it))
         }
@@ -1820,6 +2058,26 @@ private fun BrushDock(
 }
 
 @Composable
+private fun PressureCurvePreview(curve: Float) {
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(78.dp)
+            .padding(vertical = 8.dp),
+    ) {
+        drawLine(StudioPalette.Border, Offset(0f, size.height), Offset(size.width, 0f), strokeWidth = 1f)
+        val path = Path()
+        repeat(65) { index ->
+            val input = index / 64f
+            val output = Math.pow(input.toDouble(), curve.toDouble()).toFloat()
+            val point = Offset(input * size.width, size.height - output * size.height)
+            if (index == 0) path.moveTo(point.x, point.y) else path.lineTo(point.x, point.y)
+        }
+        drawPath(path, StudioPalette.Accent, style = Stroke(width = 3f, cap = StrokeCap.Round))
+    }
+}
+
+@Composable
 private fun BrushToggle(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
@@ -1847,7 +2105,14 @@ private fun BrushPresetRow(
     onClick: () -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription = "Pincel ${preset.name}, ${preset.category}"
+                this.selected = selected
+                stateDescription = if (selected) "Seleccionado" else "No seleccionado"
+            }
+            .clickable(role = Role.Button, onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
         shape = RoundedCornerShape(11.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) StudioPalette.Accent else StudioPalette.Border),
@@ -1900,79 +2165,82 @@ private fun BrushKind.displayName(): String = when (this) {
     BrushKind.OIL -> "Óleo"
 }
 
+private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = copy(
+    kind = settings.kind,
+    sizePx = settings.sizePx,
+    opacity = settings.opacity,
+    hardness = settings.hardness,
+    spacing = settings.spacing,
+    stabilization = settings.stabilization,
+    flow = settings.flow,
+    minSize = settings.minSize,
+    pressureSize = settings.pressureSize,
+    pressureOpacity = settings.pressureOpacity,
+    pressureCurve = settings.pressureCurve,
+    tiltResponse = settings.tiltResponse,
+    taperStart = settings.taperStart,
+    taperEnd = settings.taperEnd,
+    scatter = settings.scatter,
+    grain = settings.grain,
+    velocitySize = settings.velocitySize,
+    tipAssetPath = settings.tipAssetPath,
+)
+
 @Composable
 private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifier) {
     Canvas(modifier) {
-        val y = size.height / 2f
-        val path = Path().apply {
-            moveTo(4f, y + 3f)
-            cubicTo(size.width * .23f, y - 13f, size.width * .42f, y + 11f, size.width * .68f, y - 4f)
-            cubicTo(size.width * .8f, y - 9f, size.width * .9f, y + 2f, size.width - 4f, y - 7f)
+        drawRoundRect(
+            color = Color(0xFF1A1D22),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(9f, 9f),
+        )
+        val usableWidth = (size.width - 16f).coerceAtLeast(1f)
+        val centerY = size.height * .56f
+        val baseWidth = (1.2f + preset.sizePx / 8.5f).coerceAtMost(size.height * .7f)
+        val strength = (preset.opacity * preset.flow).coerceIn(.05f, 1f)
+        val texture = preset.grain.coerceIn(0f, 1f)
+        val softness = 1f - preset.hardness.coerceIn(0f, 1f)
+        val strands = when (preset.kind) {
+            BrushKind.BRISTLE -> 6
+            BrushKind.DRY_BRUSH, BrushKind.CHARCOAL, BrushKind.CHALK -> 4
+            BrushKind.OIL -> 3
+            else -> 1
         }
-        val previewWidth = (2f + preset.sizePx / 15f).coerceAtMost(10f)
-        when (preset.kind) {
-            BrushKind.AIRBRUSH -> {
-                drawPath(path, Color.White.copy(alpha = .12f), style = Stroke(previewWidth * 2.8f, cap = StrokeCap.Round))
-                drawPath(path, Color.White.copy(alpha = .2f), style = Stroke(previewWidth * 1.7f, cap = StrokeCap.Round))
-                drawPath(path, Color.White.copy(alpha = .34f), style = Stroke(previewWidth * .75f, cap = StrokeCap.Round))
+        repeat(72) { index ->
+            val t = index / 71f
+            val nextT = ((index + 1) / 71f).coerceAtMost(1f)
+            val pressure = Math.pow(kotlin.math.sin(Math.PI * t).coerceAtLeast(.02), preset.pressureCurve.toDouble()).toFloat()
+            val response = if (preset.pressureSize) preset.minSize + (1f - preset.minSize) * pressure else 1f
+            val startTaper = if (preset.taperStart > 0f) (t / preset.taperStart).coerceIn(.08f, 1f) else 1f
+            val endTaper = if (preset.taperEnd > 0f) ((1f - t) / preset.taperEnd).coerceIn(.08f, 1f) else 1f
+            val speed = 1f - preset.velocitySize * kotlin.math.abs(kotlin.math.cos(t * Math.PI * 2)).toFloat() * .38f
+            val width = (baseWidth * response * minOf(startTaper, endTaper) * speed).coerceAtLeast(.7f)
+            val wave = kotlin.math.sin(t * Math.PI * 2.2).toFloat() * size.height * .11f
+            val nextWave = kotlin.math.sin(nextT * Math.PI * 2.2).toFloat() * size.height * .11f
+            val scatter = preset.scatter * width * kotlin.math.sin(index * 12.9898f)
+            val alphaPressure = if (preset.pressureOpacity) (.2f + pressure * .8f) else 1f
+            val grainPulse = 1f - texture * .48f * kotlin.math.abs(kotlin.math.sin(index * 5.73f))
+            val familyAlpha = when (preset.kind) {
+                BrushKind.AIRBRUSH, BrushKind.WATERCOLOR -> .48f
+                BrushKind.MARKER -> .72f
+                else -> .92f
             }
-            BrushKind.CHARCOAL, BrushKind.CHALK -> {
-                repeat(4) { index ->
-                    val offset = (index - 1.5f) * 1.7f
-                    drawPath(
-                        path = path,
-                        color = Color.White.copy(alpha = .16f + index * .08f),
-                        style = Stroke((previewWidth * (.28f + index * .08f)).coerceAtLeast(1f), cap = StrokeCap.Round),
-                        alpha = 1f,
-                    )
-                    if (offset != 0f) {
-                        drawLine(
-                            color = Color.White.copy(alpha = .18f),
-                            start = Offset(size.width * .2f, y + offset),
-                            end = Offset(size.width * .82f, y - 3f + offset),
-                            strokeWidth = 1f + index * .3f,
-                        )
-                    }
-                }
+            repeat(strands) { strand ->
+                val offset = (strand - (strands - 1) / 2f) * width * .16f
+                drawLine(
+                    color = Color.White.copy(alpha = (strength * alphaPressure * grainPulse * familyAlpha / kotlin.math.sqrt(strands.toFloat())).coerceIn(.03f, 1f)),
+                    start = Offset(8f + t * usableWidth, centerY + wave + scatter + offset),
+                    end = Offset(8f + nextT * usableWidth, centerY + nextWave + scatter + offset),
+                    strokeWidth = if (strands == 1) width * (1f + softness * .35f) else (width / strands * 1.45f).coerceAtLeast(.8f),
+                    cap = if (preset.kind == BrushKind.MARKER || preset.kind == BrushKind.OIL) StrokeCap.Square else StrokeCap.Round,
+                )
             }
-            BrushKind.DRY_BRUSH, BrushKind.BRISTLE -> {
-                repeat(if (preset.kind == BrushKind.BRISTLE) 5 else 3) { index ->
-                    val offset = (index - 2f) * 2.1f
-                    drawPath(
-                        path,
-                        Color.White.copy(alpha = .24f + index * .09f),
-                        style = Stroke((previewWidth * .16f).coerceAtLeast(1f), cap = StrokeCap.Round),
-                    )
-                    drawLine(
-                        Color.White.copy(alpha = .16f),
-                        Offset(size.width * .16f, y + offset),
-                        Offset(size.width * .86f, y - 4f + offset),
-                        strokeWidth = 1f,
-                    )
-                }
+            if (preset.kind == BrushKind.AIRBRUSH) {
+                drawCircle(
+                    Color.White.copy(alpha = strength * (.035f + softness * .04f)),
+                    radius = width * (1.2f + softness),
+                    center = Offset(8f + t * usableWidth, centerY + wave),
+                )
             }
-            BrushKind.WATERCOLOR -> {
-                drawPath(path, Color.White.copy(alpha = .12f), style = Stroke(previewWidth * 2.4f, cap = StrokeCap.Round))
-                drawPath(path, Color.White.copy(alpha = .22f), style = Stroke(previewWidth * 1.55f, cap = StrokeCap.Round))
-            }
-            BrushKind.OIL -> {
-                drawPath(path, Color.White.copy(alpha = .76f), style = Stroke(previewWidth * 1.35f, cap = StrokeCap.Square))
-                drawPath(path, Color.White.copy(alpha = .2f), style = Stroke((previewWidth * .28f).coerceAtLeast(1f), cap = StrokeCap.Round))
-            }
-            BrushKind.PENCIL -> {
-                drawPath(path, Color.White.copy(alpha = preset.opacity.coerceAtLeast(.42f)), style = Stroke(previewWidth * .62f, cap = StrokeCap.Round))
-                drawPath(path, Color.White.copy(alpha = .2f), style = Stroke((previewWidth * .2f).coerceAtLeast(.8f), cap = StrokeCap.Round))
-            }
-            BrushKind.MARKER -> drawPath(
-                path,
-                Color.White.copy(alpha = preset.opacity.coerceAtLeast(.32f)),
-                style = Stroke(previewWidth, cap = StrokeCap.Square),
-            )
-            else -> drawPath(
-                path,
-                Color.White.copy(alpha = preset.opacity.coerceAtLeast(.4f)),
-                style = Stroke(previewWidth, cap = StrokeCap.Round),
-            )
         }
     }
 }
@@ -1980,7 +2248,15 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
 
 @Composable
 private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, display: String, onValueChange: (Float) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                contentDescription = label
+                stateDescription = display
+            }
+            .padding(vertical = 5.dp),
+    ) {
         Row {
             Text(label, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
             Spacer(Modifier.weight(1f))
@@ -2155,6 +2431,7 @@ private fun LayersDock(
     layers: List<LayerUiModel>,
     groups: List<LayerGroupUiModel>,
     onSelectLayer: (String) -> Unit,
+    onToggleLayerSelection: (String) -> Unit,
     onToggleVisibility: (String) -> Unit,
     onOpacity: (String, Float) -> Unit,
     onBlendMode: (String, LayerBlendMode) -> Unit,
@@ -2178,8 +2455,10 @@ private fun LayersDock(
     onRename: () -> Unit,
 ) {
     val active = layers.firstOrNull { it.isActive }
+    val selectedCount = layers.count { it.isSelected }
     val activeGroup = groups.firstOrNull { it.id == active?.groupId }
     var layerQuery by remember { mutableStateOf("") }
+    var propertiesExpanded by remember { mutableStateOf(true) }
     val visibleLayers = layers.filter { layer ->
         layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
     }
@@ -2189,7 +2468,7 @@ private fun LayersDock(
                 Column(Modifier.weight(1f)) {
                     Text("Capas", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "${layers.size} capas · composición raster",
+                        "${layers.size} capas · $selectedCount seleccionadas",
                         color = StudioPalette.TextMuted,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -2208,7 +2487,20 @@ private fun LayersDock(
                     placeholder = { Text("Buscar capas") },
                 )
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable { propertiesExpanded = !propertiesExpanded },
+                color = StudioPalette.SurfaceHover,
+                shape = RoundedCornerShape(9.dp),
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                    Text("Propiedades de capa", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text(if (propertiesExpanded) "Ocultar" else "Mostrar", color = StudioPalette.Accent, fontSize = 11.sp)
+                }
+            }
+            if (propertiesExpanded) {
+            Spacer(Modifier.height(8.dp))
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -2278,26 +2570,43 @@ private fun LayersDock(
                     ) { onGroupOpacity(activeGroup.id, it) }
                 }
             }
+            }
         }
         HorizontalDivider(color = StudioPalette.Border)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(10.dp)) {
             val emittedGroups = mutableSetOf<String>()
+            val groupsById = groups.associateBy { it.id }
+            fun ancestry(groupId: String?): List<LayerGroupUiModel> {
+                val result = mutableListOf<LayerGroupUiModel>()
+                val visited = mutableSetOf<String>()
+                var currentId = groupId
+                while (currentId != null && visited.add(currentId)) {
+                    val group = groupsById[currentId] ?: break
+                    result += group
+                    currentId = group.parentGroupId
+                }
+                return result.asReversed()
+            }
             visibleLayers.forEach { layer ->
                 val group = layer.groupId?.let { id -> groups.firstOrNull { it.id == id } }
-                if (group != null && emittedGroups.add(group.id)) {
-                    LayerGroupRow(
-                        group = group,
-                        onToggleVisibility = onToggleGroupVisibility,
-                        onToggleCollapsed = onToggleGroupCollapsed,
-                    )
-                    Spacer(Modifier.height(7.dp))
+                val ancestors = ancestry(layer.groupId)
+                ancestors.forEach { ancestor ->
+                    if (emittedGroups.add(ancestor.id)) {
+                        LayerGroupRow(
+                            group = ancestor,
+                            onToggleVisibility = onToggleGroupVisibility,
+                            onToggleCollapsed = onToggleGroupCollapsed,
+                        )
+                        Spacer(Modifier.height(7.dp))
+                    }
                 }
-                if (group?.collapsed != true) {
+                if (ancestors.none { it.collapsed }) {
                     LayerRow(
                         layer = layer,
                         onSelect = onSelectLayer,
+                        onToggleSelection = onToggleLayerSelection,
                         onToggleVisibility = onToggleVisibility,
-                        indented = group != null,
+                        indentDepth = ancestors.size,
                     )
                     Spacer(Modifier.height(7.dp))
                 }
@@ -2358,6 +2667,11 @@ private fun LayerBlendMode.displayName(): String = when (this) {
     LayerBlendMode.ADD -> "Añadir"
     LayerBlendMode.DARKEN -> "Oscurecer"
     LayerBlendMode.LIGHTEN -> "Aclarar"
+    LayerBlendMode.SOFT_LIGHT -> "Luz suave"
+    LayerBlendMode.HARD_LIGHT -> "Luz fuerte"
+    LayerBlendMode.DIFFERENCE -> "Diferencia"
+    LayerBlendMode.COLOR_DODGE -> "Sobreexponer color"
+    LayerBlendMode.COLOR_BURN -> "Subexponer color"
 }
 
 @Composable
@@ -2399,7 +2713,7 @@ private fun LayerGroupRow(
     onToggleCollapsed: (String) -> Unit,
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(start = (group.depth * 14).dp),
         color = StudioPalette.SurfaceHover,
         shape = RoundedCornerShape(11.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -2442,23 +2756,46 @@ private fun LayerGroupRow(
 private fun LayerRow(
     layer: LayerUiModel,
     onSelect: (String) -> Unit,
+    onToggleSelection: (String) -> Unit,
     onToggleVisibility: (String) -> Unit,
-    indented: Boolean = false,
+    indentDepth: Int = 0,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = if (indented) 18.dp else 0.dp)
-            .clickable { onSelect(layer.id) },
-        color = if (layer.isActive) StudioPalette.Accent else StudioPalette.SurfaceRaised,
+            .padding(start = (indentDepth * 18).dp)
+            .semantics {
+                contentDescription = "Capa ${layer.name}"
+                selected = layer.isSelected
+                stateDescription = buildString {
+                    append(if (layer.visible) "Visible" else "Oculta")
+                    append(", ${(layer.opacity * 100).toInt()} por ciento")
+                    if (layer.hasMask) append(", con mascara")
+                    if (layer.alphaLocked) append(", alfa bloqueado")
+                }
+            }
+            .clickable(role = Role.Button) { onSelect(layer.id) },
+        color = when {
+            layer.isActive -> StudioPalette.Accent
+            layer.isSelected -> StudioPalette.AccentSoft
+            else -> StudioPalette.SurfaceRaised
+        },
         shape = RoundedCornerShape(11.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, if (layer.isActive) Color(0xFF74A3FF) else StudioPalette.Border),
     ) {
         Row(Modifier.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { onToggleSelection(layer.id) }, modifier = Modifier.size(30.dp)) {
+                Icon(
+                    if (layer.isSelected) Icons.Outlined.SelectAll else Icons.Outlined.RadioButtonUnchecked,
+                    if (layer.isSelected) "Quitar ${layer.name} de la selección" else "Añadir ${layer.name} a la selección",
+                    tint = if (layer.isSelected) Color.White else StudioPalette.TextMuted,
+                    modifier = Modifier.size(17.dp),
+                )
+            }
             IconButton(onClick = { onToggleVisibility(layer.id) }, modifier = Modifier.size(34.dp)) {
                 Icon(
                     if (layer.visible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
-                    null,
+                    if (layer.visible) "Ocultar ${layer.name}" else "Mostrar ${layer.name}",
                     tint = if (layer.isActive) Color.White else StudioPalette.TextMuted,
                     modifier = Modifier.size(18.dp),
                 )

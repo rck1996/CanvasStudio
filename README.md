@@ -4,8 +4,8 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Beta para tablets / fase 6
-> **Versión incluida en este repositorio:** `2.0.0-beta04`
+> **Estado del proyecto:** Release candidate para tablets / fase 8
+> **Versión incluida en este repositorio:** `2.1.0`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -19,7 +19,9 @@ Las siguientes capturas fueron obtenidas de la variante de depuración ejecutada
 
 ![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
 
-![Biblioteca de pinceles beta04 en una Galaxy Tab S8](docs/images/brush-library-beta04-tab-s8.png)
+![Biblioteca de pinceles 2.1 con preview reactivo a 135 px en una Galaxy Tab S8](docs/canvasstudio-library-reactive.png)
+
+![Dinámicas y curva gráfica de presión en una Galaxy Tab S8](docs/canvasstudio-library-dynamics.png)
 
 ---
 
@@ -125,7 +127,7 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 | Importación | Imágenes compatibles con Android como una capa nueva |
 | Exportación | PNG aplanado y OpenRaster `.ora` con capas |
 | Persistencia | Autoguardado incremental, metadata transaccional y recuperación de respaldo |
-| Documentos grandes | Hasta 64 millones de píxeles y 16.384 px por lado |
+| Documentos grandes | Nuevos lienzos adaptados a la memoria del equipo, hasta 40 Mpx y 8.192 px por lado; lectura compatible hasta 64 Mpx |
 
 El detalle de lo implementado y lo pendiente se mantiene en [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md).
 
@@ -161,13 +163,19 @@ El diálogo de creación incluye presets profesionales:
 
 También admite ancho, alto, nombre y DPI personalizados.
 
-El tamaño se restringe defensivamente a:
+Para documentos nuevos, el tamaño se restringe defensivamente según la memoria asignada
+por Android a la tablet:
 
 - mínimo de `256 px` por lado;
-- máximo de `16.384 px` por lado;
-- máximo total de `64.000.000` de píxeles.
+- máximo de `8.192 px` por lado;
+- hasta `40.000.000` de píxeles con heap de 384 MiB o más;
+- hasta `26.000.000` de píxeles con heap de 256 MiB;
+- hasta `12.000.000` de píxeles en equipos más limitados.
 
-Cuando una combinación supera el máximo total, se reduce proporcionalmente.
+El diálogo informa megapíxeles, memoria RGBA sin comprimir, cantidad de tiles y nivel de
+carga antes de crear. Los documentos antiguos de hasta 64 Mpx siguen siendo legibles.
+Cuando una combinación nueva supera el límite seguro del dispositivo, se reduce
+proporcionalmente.
 
 ### 3. Editor
 
@@ -286,7 +294,7 @@ Canvas Studio incluye un motor configurable con 22 presets, agrupados por materi
 
 La configuración actual puede guardarse con un nombre personalizado. Los presets personalizados se almacenan mediante `SharedPreferences` y se conservan entre sesiones.
 
-La biblioteca permite marcar favoritos, consultar recientes, duplicar cualquier preset y renombrar o eliminar los personalizados. También importa y exporta colecciones en el formato JSON versionado de Canvas Studio. El límite actual es de 80 pinceles personalizados; las puntas y texturas bitmap externas siguen fuera del alcance de esta beta.
+La biblioteca permite marcar favoritos, consultar recientes, duplicar cualquier preset y renombrar o eliminar los personalizados. También importa y exporta colecciones en el formato JSON versionado de Canvas Studio. El límite actual es de 80 pinceles personalizados. Las puntas bitmap se normalizan a una máscara alfa de hasta 256 px, se conservan en una caché acotada y viajan embebidas dentro de la biblioteca JSON.
 
 ### Procesamiento de trazos
 
@@ -441,7 +449,7 @@ Los comandos simétricos se agrupan en el historial para que una operación de d
 
 Durante el modo de edición de perspectiva se bloquea temporalmente el dibujo para evitar trazos accidentales.
 
-No existe todavía snapping de trazos a las guías, reglas graduadas ni rejillas de perspectiva personalizadas.
+Las líneas y los degradados pueden ajustarse directamente al punto de fuga más cercano. Las reglas admiten píxeles o centímetros calculados desde el DPI del documento y estas preferencias se conservan al reabrir el proyecto. Las rejillas de perspectiva personalizadas y las reglas arrastrables quedan para una versión posterior.
 
 ---
 
@@ -918,7 +926,7 @@ CanvasStudio/
 
 ## Pruebas recomendadas
 
-La aplicación sigue en etapa beta, por lo que cada entrega debe verificarse en hardware real.
+Cada entrega debe verificarse en hardware real además de la integración continua.
 
 ### Prueba rápida de humo
 
@@ -973,6 +981,17 @@ Para cubrir pinceles de textura y tamaños gruesos (cada incremento añade 16% a
 
 Los reportes se guardan en `build/reports/tablet-stress/`, junto a una captura base, otra tras dibujar y una final después de reabrir el proyecto. El script detecta cierres, errores fatales, recuperación tras reinicio y verifica automáticamente cada celda de la matriz de trazos contra la captura base.
 
+La suite determinista recomendada no depende de coordenadas ni de reconocimiento visual:
+
+```powershell
+.\scripts\test-raster-engine.ps1 -Iterations 20
+```
+
+La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy Tab S8:
+560 ejecuciones y 16.140 verificaciones de retención de trazos. Incluye 11 familias de
+pincel, HB modificado con trazos largos, transición a navegación con dos dedos y
+exportación de un lienzo 8K.
+
 ### Prueba de documentos
 
 - Abrir un documento de una versión anterior.
@@ -1009,12 +1028,12 @@ El checklist detallado está en [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.m
 
 ## Limitaciones actuales
 
-Canvas Studio todavía no es una versión final de producción.
+Canvas Studio `2.1.0` es una release candidate para distribución controlada en tablets.
 
 ### Motor y rendimiento
 
 - No existe backend Vulkan dedicado.
-- No hay front buffer especializado para S Pen.
+- AndroidX Ink proporciona preview de baja latencia exclusivamente al stylus; el raster tiled conserva el resultado final.
 - Algunas composiciones con máscara o clipping requieren superficies temporales.
 - Deshacer muchos trazos complejos y superpuestos puede ser más lento que dibujar.
 - Los tiles no residentes pueden aparecer con un pequeño retraso al mover rápidamente el lienzo.
@@ -1029,32 +1048,29 @@ Canvas Studio todavía no es una versión final de producción.
 
 ### Capas y máscaras
 
-- Grupos de un solo nivel.
 - Sin composición aislada de grupo.
-- Sin selección múltiple de capas.
 - Sin máscaras vectoriales.
-- Sin feather, niveles o inversión de máscara.
+- Sin niveles de máscara ni máscaras vectoriales.
 - Sin clipping avanzado encadenado.
 
 ### Selección y transformación
 
-- Sin expandir, contraer, invertir o suavizar selección.
 - Sin perspectiva, deformación o warp de contenido.
 - Sin transformación numérica exacta.
 
 ### Formatos
 
-- Sin PSD.
 - Sin TIFF.
 - Sin PDF.
 - Sin importación OpenRaster.
-- La exportación OpenRaster tiene límites de tamaño defensivos.
+- PSD intercambia por ahora el compuesto RGBA, no capas editables.
+- PNG, PSD y OpenRaster aplican límites defensivos para evitar `OutOfMemoryError`.
 
 ### Experiencia de producto
 
 - Sin papelera recuperable.
 - Sin sincronización entre dispositivos.
-- Sin configuración de ficha ni publicación en Play Store.
+- La ficha y publicación en Play Store aún requieren datos legales y la cuenta del propietario.
 
 ---
 
@@ -1122,42 +1138,21 @@ Comprueba:
 
 ## Hoja de ruta
 
-### Fase 6.2 — experiencia creativa
+### Fases 6 y 7 — completadas
 
-- administración e intercambio de pinceles: completado;
-- favoritos, recientes y biblioteca de tres paneles: completado;
-- búsqueda de capas y acciones persistentes: completado;
-- selección expandible/contraíble: completado;
-- reglas y ajuste angular opcionales: completado;
-- accesibilidad inicial y objetivos táctiles: completado;
-- feather, invertir selección y reglas arrastrables: siguiente iteración.
+- precisión, selección avanzada, guías, reglas y perspectiva;
+- biblioteca profesional, 30 pinceles, preview reactivo y puntas bitmap;
+- selección múltiple, grupos anidados, 12 modos de fusión y PSD compuesto;
+- menús colapsables, atajos, accesibilidad y diseño alineado al mockup.
 
-### Trabajo técnico pendiente
+### Fase 8 — release candidate
 
-- mejorar grupos y máscaras;
-- selección con feather e invertir;
-- snapping directo a líneas de perspectiva;
-- reglas arrastrables y unidades físicas;
-- importación y exportación PSD básica;
-- mayor precisión en modos de fusión.
-
-### Fase 5 — Beta publicable
-
-- corrección sistemática de errores;
-- recuperación después de cierres inesperados;
-- diario de autoguardado y versiones locales;
-- optimización en Samsung, Lenovo, Xiaomi y otras tablets;
-- mejor integración con S Pen y stylus compatibles;
-- tutorial inicial;
-- ayuda contextual;
-- accesibilidad;
-- atajos configurables;
-- revisión definitiva de almacenamiento y backups;
-- pruebas automatizadas e instrumentadas;
-- identidad visual final;
-- iconos y pantallas de lanzamiento definitivas;
-- configuración de firma;
-- generación de APK y AAB de producción.
+- desaparición temporal al apoyar dos dedos: corregida;
+- política de lienzos según memoria de la tablet: completada;
+- límites de PNG, PSD y OpenRaster alineados hasta 40 Mpx: completados;
+- CI de Android y artefactos APK/AAB: completado;
+- certificación masiva en Galaxy Tab S8: completada;
+- firma, APK, AAB y documentación de distribución: completados.
 
 ### Futuro posterior a la beta
 
@@ -1182,6 +1177,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/PHASE_3B_SPARSE_RENDERER.md`](docs/PHASE_3B_SPARSE_RENDERER.md) | Renderer disperso y tiles |
 | [`docs/PHASE_4_TEST_BUILD.md`](docs/PHASE_4_TEST_BUILD.md) | Alcance de la primera build de fase 4 |
 | [`docs/PHASE_4_1.md`](docs/PHASE_4_1.md) | Grupos, máscaras y perspectiva editable |
+| [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |
 | [`docs/PERFORMANCE_HOTFIX_1.5.1.md`](docs/PERFORMANCE_HOTFIX_1.5.1.md) | Primer hotfix de rendimiento |
 | [`docs/PERFORMANCE_HOTFIX_1.5.2.md`](docs/PERFORMANCE_HOTFIX_1.5.2.md) | Procesamiento de pinceles texturizados |
 | [`docs/CRASH_HOTFIX_1.5.3.md`](docs/CRASH_HOTFIX_1.5.3.md) | Corrección del cierre por desbordamiento |

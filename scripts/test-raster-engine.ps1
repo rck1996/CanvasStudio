@@ -2,6 +2,7 @@
 param(
     [string]$Serial,
     [ValidateRange(1, 100)] [int]$Iterations = 10,
+    [ValidateRange(1, 1000)] [int]$MinimumExpectedTests = 25,
     [switch]$SkipBuild,
     [switch]$SkipInstall
 )
@@ -12,6 +13,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $appApk = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
 $testApk = Join-Path $projectRoot 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
 $runner = 'com.orbyte.canvasstudio.debug.test/androidx.test.runner.AndroidJUnitRunner'
+$retentionStrokesPerIteration = 807
+$reportDirectory = Join-Path $projectRoot 'build\reports\phase8-certification'
 
 function Find-Adb {
     $fromPath = Get-Command adb -ErrorAction SilentlyContinue
@@ -36,7 +39,7 @@ if (-not $SkipBuild) {
     $env:KOTLIN_COMPILER_EXECUTION_STRATEGY = 'in-process'
     Push-Location $projectRoot
     try {
-        & .\gradlew.bat assembleDebug assembleDebugAndroidTest --no-daemon
+        & .\gradlew.bat assembleDebug assembleDebugAndroidTest --no-daemon '-Pkotlin.compiler.execution.strategy=in-process'
         if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación de las pruebas.' }
     } finally { Pop-Location }
 }
@@ -49,15 +52,37 @@ if (-not $SkipInstall) {
 }
 
 $started = Get-Date
+$iterationTimes = [System.Collections.Generic.List[double]]::new()
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
+    $iterationStarted = Get-Date
     $result = & $adb -s $Serial shell am instrument -w -r $runner
-    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(14 tests\)') {
+    $resultText = $result -join "`n"
+    $match = [regex]::Match($resultText, 'OK \((\d+) tests\)')
+    $executedTests = if ($match.Success) { [int]$match.Groups[1].Value } else { 0 }
+    if ($LASTEXITCODE -ne 0 -or -not $match.Success -or $executedTests -lt $MinimumExpectedTests) {
         $result | Out-Host
-        throw "La iteración $iteration falló."
+        throw "La iteración $iteration falló o ejecutó menos de $MinimumExpectedTests pruebas."
     }
-    Write-Host "Iteración $iteration/${Iterations}: OK"
+    $iterationSeconds = ((Get-Date) - $iterationStarted).TotalSeconds
+    $iterationTimes.Add($iterationSeconds)
+    Write-Host "Iteración $iteration/${Iterations}: OK ($executedTests pruebas, $([math]::Round($iterationSeconds, 2)) s)"
 }
 
 $elapsed = (Get-Date) - $started
-$strokeChecks = $Iterations * 200
+$strokeChecks = $Iterations * $retentionStrokesPerIteration
+New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
+$report = [ordered]@{
+    timestampUtc = (Get-Date).ToUniversalTime().ToString('o')
+    deviceSerial = $Serial
+    iterations = $Iterations
+    testsPerIteration = $executedTests
+    totalTestExecutions = $Iterations * $executedTests
+    retentionStrokeChecks = $strokeChecks
+    elapsedSeconds = [math]::Round($elapsed.TotalSeconds, 2)
+    averageIterationSeconds = [math]::Round(($iterationTimes | Measure-Object -Average).Average, 2)
+    result = 'PASS'
+}
+$reportPath = Join-Path $reportDirectory 'latest.json'
+$report | ConvertTo-Json | Set-Content -Encoding UTF8 $reportPath
 Write-Host "Suite completada: $Iterations iteraciones, $strokeChecks trazos persistidos, $([math]::Round($elapsed.TotalSeconds, 2)) s."
+Write-Host "Reporte: $reportPath"

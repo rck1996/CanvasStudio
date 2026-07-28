@@ -1,8 +1,10 @@
 package com.orbyte.canvasstudio.drawing
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BlendMode
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
@@ -12,7 +14,9 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.Shader
@@ -27,6 +31,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.Properties
+import java.util.LinkedHashMap
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -73,6 +78,7 @@ class DrawingView(context: Context) : View(context) {
         var visible: Boolean = true,
         var opacity: Float = 1f,
         var collapsed: Boolean = false,
+        var parentGroupId: String? = null,
     )
 
     private enum class HistoryTarget { CONTENT, MASK }
@@ -107,6 +113,13 @@ class DrawingView(context: Context) : View(context) {
         strokeJoin = Paint.Join.ROUND
     }
     private val clearXfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    private val tipBitmapCache = object : LinkedHashMap<String, Bitmap>(8, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val remove = size > 8
+            if (remove) eldest?.value?.recycle()
+            return remove
+        }
+    }
     private var cachedMaskFilterKey: Int = Int.MIN_VALUE
     private var cachedMaskFilter: BlurMaskFilter? = null
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -126,6 +139,7 @@ class DrawingView(context: Context) : View(context) {
         override fun setAlpha(alpha: Int) = Unit
         override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
         @Deprecated("Deprecated in Android")
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
     }
     private val cursorOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -183,6 +197,7 @@ class DrawingView(context: Context) : View(context) {
     private val layers = mutableListOf<LayerData>()
     private val layerGroups = mutableListOf<LayerGroupData>()
     private var activeLayerId: String = ""
+    private val selectedLayerIds = linkedSetOf<String>()
     private val undoStack = mutableListOf<HistoryEntry>()
     private val redoStack = mutableListOf<HistoryEntry>()
 
@@ -202,7 +217,14 @@ class DrawingView(context: Context) : View(context) {
     private var hoverVisible = false
     private var gridVisible = false
     private var rulersVisible = false
+    private var rulersUseCentimeters = false
+    private val verticalRulerGuides = mutableListOf<Float>()
+    private val horizontalRulerGuides = mutableListOf<Float>()
+    private var draggedRulerGuideAxis = 0
+    private var draggedRulerGuideIndex = -1
+    private var documentDpi = 300
     private var angleSnappingEnabled = false
+    private var perspectiveSnappingEnabled = false
     private var verticalSymmetry = false
     private var radialSymmetryCount = 1
     private var guideMode = GuideMode.NONE
@@ -232,11 +254,14 @@ class DrawingView(context: Context) : View(context) {
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
+    private var activeStrokeDefersRaster: Boolean = false
     private var activeRenderedPointCount: Int = 0
     private var strokeFramePosted: Boolean = false
     private var shapeStart: StrokePoint? = null
     private var shapeEnd: StrokePoint? = null
     private var selectionPath: Path? = null
+    private var selectionInverted = false
+    private var selectionFeatherPx = 0f
     private var selectionPoints: MutableList<StrokePoint>? = null
     private var selectionStart: StrokePoint? = null
     private var selectionEnd: StrokePoint? = null
@@ -261,6 +286,8 @@ class DrawingView(context: Context) : View(context) {
     var onRotationChanged: ((Int) -> Unit)? = null
     var onToolShortcut: ((DrawingTool) -> Unit)? = null
     var onBrushSettingsShortcut: ((BrushSettings) -> Unit)? = null
+    var onSaveShortcut: (() -> Unit)? = null
+    var onTogglePanelsShortcut: (() -> Unit)? = null
     var onProjectSaved: ((Boolean) -> Unit)? = null
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
@@ -269,7 +296,12 @@ class DrawingView(context: Context) : View(context) {
     var usePlatformLowLatencyPreview: Boolean = false
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
-        tool == DrawingTool.BRUSH && shouldDeferActiveRaster(brushSettings)
+        tool == DrawingTool.BRUSH &&
+            shouldDeferActiveRaster(brushSettings) &&
+            platformInkPreviewCompatible(brushSettings.kind)
+
+    private fun hasCompatiblePlatformPreview(settings: BrushSettings): Boolean =
+        usePlatformLowLatencyPreview && platformInkPreviewCompatible(settings.kind)
 
     fun platformPreviewSizePx(): Float = brushSettings.sizePx * currentScale
 
@@ -295,7 +327,7 @@ class DrawingView(context: Context) : View(context) {
         base.name = "Arte base"
         val paintLayer = createLayer("Pinceladas")
         layers += paintLayer
-        activeLayerId = paintLayer.id
+        selectOnly(paintLayer.id)
         updateCacheBudgets()
         notifyLayers()
 
@@ -456,6 +488,8 @@ class DrawingView(context: Context) : View(context) {
         clearActiveStrokeState()
         cancelSelectionTransform(rebuild = false)
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -469,6 +503,9 @@ class DrawingView(context: Context) : View(context) {
         sessionTileRoot().deleteRecursively()
         layers.clear()
         layerGroups.clear()
+        selectedLayerIds.clear()
+        verticalRulerGuides.clear()
+        horizontalRulerGuides.clear()
         undoStack.clear()
         clearRedoHistory()
         documentWidth = width
@@ -482,7 +519,7 @@ class DrawingView(context: Context) : View(context) {
         draggedPerspectivePoint = 0
         val layer = createLayer("Capa 1")
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         fittedOnce = false
         updateCacheBudgets()
         notifyLayers()
@@ -612,7 +649,7 @@ class DrawingView(context: Context) : View(context) {
             )
         }
         is GradientCommand -> {
-            if (command.clipPoints.isNotEmpty()) {
+            if (command.clipPoints.isNotEmpty() && !command.clipInverted) {
                 RectF(
                     command.clipPoints.minOf { it.x },
                     command.clipPoints.minOf { it.y },
@@ -676,7 +713,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
-        isStampBrush(settings.kind) && settings.sizePx >= 48f
+        (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
+            requiresFinalStrokeRebuild(settings)
 
     private fun minimumInputDistance(settings: BrushSettings): Float {
         return inputSamplingDistance(settings, isStampBrush(settings.kind))
@@ -750,6 +788,14 @@ class DrawingView(context: Context) : View(context) {
             if (event.isShiftPressed) redo() else undo()
             return true
         }
+        if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_Y) {
+            redo()
+            return true
+        }
+        if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_S) {
+            onSaveShortcut?.invoke()
+            return true
+        }
         if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_A) {
             selectAll()
             return true
@@ -776,6 +822,14 @@ class DrawingView(context: Context) : View(context) {
         }
         if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
             deselect()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_TAB) {
+            onTogglePanelsShortcut?.invoke()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_0) {
+            resetView()
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
@@ -842,11 +896,23 @@ class DrawingView(context: Context) : View(context) {
     private fun groupFor(layer: LayerData): LayerGroupData? =
         layer.groupId?.let { groupId -> layerGroups.firstOrNull { it.id == groupId } }
 
+    private fun groupAncestors(groupId: String?): Sequence<LayerGroupData> = sequence {
+        val visited = mutableSetOf<String>()
+        var currentId = groupId
+        while (currentId != null && visited.add(currentId)) {
+            val group = layerGroups.firstOrNull { it.id == currentId } ?: break
+            yield(group)
+            currentId = group.parentGroupId
+        }
+    }
+
     private fun isLayerEffectivelyVisible(layer: LayerData): Boolean =
-        layer.visible && (groupFor(layer)?.visible != false)
+        layer.visible && groupAncestors(layer.groupId).all { it.visible }
 
     private fun effectiveLayerOpacity(layer: LayerData): Float =
-        (layer.opacity * (groupFor(layer)?.opacity ?: 1f)).coerceIn(0f, 1f)
+        groupAncestors(layer.groupId)
+            .fold(layer.opacity) { opacity, group -> opacity * group.opacity }
+            .coerceIn(0f, 1f)
 
     private fun applyRasterMaskVisible(canvas: Canvas, layer: LayerData, bounds: RectF) {
         if (!layer.maskEnabled) return
@@ -1126,10 +1192,11 @@ class DrawingView(context: Context) : View(context) {
     private fun drawRulers(canvas: Canvas) {
         if (!rulersVisible) return
         val scale = currentScale.coerceAtLeast(.1f)
-        val spacing = when {
-            scale >= 1.2f -> 100f
-            scale >= .55f -> 250f
-            else -> 500f
+        val baseSpacing = if (rulersUseCentimeters) documentDpi / 2.54f else 100f
+        val spacing = baseSpacing * when {
+            scale >= 1.2f -> 1f
+            scale >= .55f -> if (rulersUseCentimeters) 2f else 2.5f
+            else -> 5f
         }
         val tick = 12f / scale
         rulerPaint.strokeWidth = 1.5f / scale
@@ -1137,15 +1204,112 @@ class DrawingView(context: Context) : View(context) {
         var x = 0f
         while (x <= documentWidth) {
             canvas.drawLine(x, 0f, x, tick, rulerPaint)
-            if (x > 0f) canvas.drawText(x.toInt().toString(), x + 4f / scale, tick, rulerTextPaint)
+            if (x > 0f) {
+                val label = if (rulersUseCentimeters) {
+                    "${(x * 2.54f / documentDpi).toInt()} cm"
+                } else x.toInt().toString()
+                canvas.drawText(label, x + 4f / scale, tick, rulerTextPaint)
+            }
             x += spacing
         }
         var y = 0f
         while (y <= documentHeight) {
             canvas.drawLine(0f, y, tick, y, rulerPaint)
-            if (y > 0f) canvas.drawText(y.toInt().toString(), tick + 3f / scale, y - 3f / scale, rulerTextPaint)
+            if (y > 0f) {
+                val label = if (rulersUseCentimeters) {
+                    "${(y * 2.54f / documentDpi).toInt()} cm"
+                } else y.toInt().toString()
+                canvas.drawText(label, tick + 3f / scale, y - 3f / scale, rulerTextPaint)
+            }
             y += spacing
         }
+        rulerPaint.strokeWidth = 1.25f / scale
+        verticalRulerGuides.forEach { guideX ->
+            canvas.drawLine(guideX, 0f, guideX, documentHeight.toFloat(), rulerPaint)
+        }
+        horizontalRulerGuides.forEach { guideY ->
+            canvas.drawLine(0f, guideY, documentWidth.toFloat(), guideY, rulerPaint)
+        }
+    }
+
+    private fun handleRulerGuide(event: MotionEvent): Boolean {
+        if (!rulersVisible) return false
+        val point = mapToDocument(event.x, event.y)
+        val x = point[0]
+        val y = point[1]
+        val scale = currentScale.coerceAtLeast(.1f)
+        val rulerBand = 28f / scale
+        val hitRadius = 18f / scale
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val verticalIndex = verticalRulerGuides.indices.minByOrNull {
+                    abs(verticalRulerGuides[it] - x)
+                }?.takeIf { abs(verticalRulerGuides[it] - x) <= hitRadius }
+                val horizontalIndex = horizontalRulerGuides.indices.minByOrNull {
+                    abs(horizontalRulerGuides[it] - y)
+                }?.takeIf { abs(horizontalRulerGuides[it] - y) <= hitRadius }
+                when {
+                    verticalIndex != null -> {
+                        draggedRulerGuideAxis = 1
+                        draggedRulerGuideIndex = verticalIndex
+                    }
+                    horizontalIndex != null -> {
+                        draggedRulerGuideAxis = 2
+                        draggedRulerGuideIndex = horizontalIndex
+                    }
+                    y in 0f..rulerBand && x >= rulerBand -> {
+                        verticalRulerGuides += x.coerceIn(0f, documentWidth.toFloat())
+                        draggedRulerGuideAxis = 1
+                        draggedRulerGuideIndex = verticalRulerGuides.lastIndex
+                    }
+                    x in 0f..rulerBand && y >= rulerBand -> {
+                        horizontalRulerGuides += y.coerceIn(0f, documentHeight.toFloat())
+                        draggedRulerGuideAxis = 2
+                        draggedRulerGuideIndex = horizontalRulerGuides.lastIndex
+                    }
+                    else -> return false
+                }
+                parent?.requestDisallowInterceptTouchEvent(true)
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                when (draggedRulerGuideAxis) {
+                    1 -> if (draggedRulerGuideIndex in verticalRulerGuides.indices) {
+                        verticalRulerGuides[draggedRulerGuideIndex] = x
+                    }
+                    2 -> if (draggedRulerGuideIndex in horizontalRulerGuides.indices) {
+                        horizontalRulerGuides[draggedRulerGuideIndex] = y
+                    }
+                    else -> return false
+                }
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (draggedRulerGuideAxis == 0) return false
+                if (draggedRulerGuideAxis == 1 &&
+                    verticalRulerGuides.getOrNull(draggedRulerGuideIndex)?.let {
+                        it !in 0f..documentWidth.toFloat()
+                    } == true
+                ) {
+                    verticalRulerGuides.removeAt(draggedRulerGuideIndex)
+                } else if (draggedRulerGuideAxis == 2 &&
+                    horizontalRulerGuides.getOrNull(draggedRulerGuideIndex)?.let {
+                        it !in 0f..documentHeight.toFloat()
+                    } == true
+                ) {
+                    horizontalRulerGuides.removeAt(draggedRulerGuideIndex)
+                }
+                draggedRulerGuideAxis = 0
+                draggedRulerGuideIndex = -1
+                parent?.requestDisallowInterceptTouchEvent(false)
+                onDocumentChanged?.invoke()
+                invalidate()
+                return true
+            }
+        }
+        return draggedRulerGuideAxis != 0
     }
 
     private fun drawShapePreview(canvas: Canvas) {
@@ -1164,9 +1328,8 @@ class DrawingView(context: Context) : View(context) {
         }
         configurePaint(previewPaint, tool, brushSettings, 1f, 0f, isPreview = true)
         val selection = selectionPath
-        if (selection != null) {
-            canvas.save()
-            canvas.clipPath(selection)
+        val selectionSave = selection?.let {
+            beginSelectionMask(canvas, it, selectionInverted, selectionFeatherPx)
         }
         symmetryMatrices().forEach { matrix ->
             drawShapeWithPaint(
@@ -1177,7 +1340,9 @@ class DrawingView(context: Context) : View(context) {
                 previewPaint,
             )
         }
-        if (selection != null) canvas.restore()
+        if (selection != null && selectionSave != null) {
+            endSelectionMask(canvas, selectionSave, selection, selectionInverted, selectionFeatherPx)
+        }
     }
 
     private fun drawShapeWithPaint(
@@ -1246,6 +1411,7 @@ class DrawingView(context: Context) : View(context) {
     private fun symmetryCommands(command: DrawCommand): List<DrawCommand> =
         symmetryMatrices().mapIndexed { index, matrix -> transformCommand(command, matrix, keepId = index == 0) }
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val canceledPalmPointer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
@@ -1260,6 +1426,7 @@ class DrawingView(context: Context) : View(context) {
             return true
         }
         if (handlePerspectiveEdit(event)) return true
+        if (handleRulerGuide(event)) return true
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -1285,10 +1452,17 @@ class DrawingView(context: Context) : View(context) {
             if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
                 (activeStrokePoints != null || shapeStart != null)
             ) {
+                val strokeHadRasterPreview = activeStrokePoints != null &&
+                    !activeStrokeDefersRaster &&
+                    activeStrokeSettings?.let(::shouldDeferActiveRaster) != true
                 clearActiveStrokeState()
                 shapeStart = null
                 shapeEnd = null
-                rebuildAllLayers()
+                // A finger-down is kept as an overlay until it is known to be drawing.
+                // Therefore the common two-finger navigation transition has not touched
+                // the tile surfaces and must not rebuild the whole document. Rebuilding
+                // here made every layer briefly disappear on real tablets.
+                if (strokeHadRasterPreview) rebuildAllLayers()
                 parent?.requestDisallowInterceptTouchEvent(false)
             }
             hoverVisible = false
@@ -1322,7 +1496,15 @@ class DrawingView(context: Context) : View(context) {
                 if (!isInsideDocument) return true
                 when (eventTool) {
                     DrawingTool.EYEDROPPER -> sampleColor(current[0], current[1])
-                    DrawingTool.BRUSH, DrawingTool.ERASER -> beginStroke(eventTool, current[0], current[1], pressure, tilt, event.eventTime)
+                    DrawingTool.BRUSH, DrawingTool.ERASER -> beginStroke(
+                        drawingTool = eventTool,
+                        x = current[0],
+                        y = current[1],
+                        pressure = pressure,
+                        tilt = tilt,
+                        time = event.eventTime,
+                        deferUntilCommit = !stylusPresent,
+                    )
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE, DrawingTool.GRADIENT -> {
                         shapeStart = StrokePoint(current[0], current[1], pressure, tilt, event.eventTime)
                         shapeEnd = shapeStart
@@ -1431,8 +1613,33 @@ class DrawingView(context: Context) : View(context) {
         tilt: Float,
         time: Long,
     ): StrokePoint {
-        val start = shapeStart
-        if (!angleSnappingEnabled || start == null) return StrokePoint(x, y, pressure, tilt, time)
+        val start = shapeStart ?: return StrokePoint(x, y, pressure, tilt, time)
+        if (
+            perspectiveSnappingEnabled &&
+            guideMode != GuideMode.NONE &&
+            tool in setOf(DrawingTool.LINE, DrawingTool.GRADIENT)
+        ) {
+            val vanishingPoints = if (guideMode == GuideMode.PERSPECTIVE_TWO_POINT) {
+                listOf(perspectivePoint1X to perspectivePoint1Y, perspectivePoint2X to perspectivePoint2Y)
+            } else {
+                listOf(perspectivePoint1X to perspectivePoint1Y)
+            }
+            val candidate = vanishingPoints.mapNotNull { (vx, vy) ->
+                val rayX = vx - start.x
+                val rayY = vy - start.y
+                val lengthSquared = rayX * rayX + rayY * rayY
+                if (lengthSquared < 1f) null else {
+                    val projection = ((x - start.x) * rayX + (y - start.y) * rayY) / lengthSquared
+                    val snappedX = start.x + rayX * projection
+                    val snappedY = start.y + rayY * projection
+                    Triple(snappedX, snappedY, hypot(x - snappedX, y - snappedY))
+                }
+            }.minByOrNull { it.third }
+            if (candidate != null) {
+                return StrokePoint(candidate.first, candidate.second, pressure, tilt, time)
+            }
+        }
+        if (!angleSnappingEnabled) return StrokePoint(x, y, pressure, tilt, time)
         val dx = x - start.x
         val dy = y - start.y
         return when (tool) {
@@ -1466,6 +1673,7 @@ class DrawingView(context: Context) : View(context) {
         activeStrokePoints = null
         activeInputTool = null
         activeStrokeSettings = null
+        activeStrokeDefersRaster = false
         activeRenderedPointCount = 0
         strokeFramePosted = false
         deferredStrokeOverlay.invalidateSelf()
@@ -1478,12 +1686,14 @@ class DrawingView(context: Context) : View(context) {
         pressure: Float,
         tilt: Float,
         time: Long,
+        deferUntilCommit: Boolean = false,
     ) {
         val settings = brushSettings
         val points = mutableListOf(StrokePoint(x, y, pressure, tilt, time))
         activeStrokePoints = points
         activeInputTool = drawingTool
         activeStrokeSettings = settings
+        activeStrokeDefersRaster = deferUntilCommit
         activeRenderedPointCount = 1
         val layer = activeLayer() ?: run {
             clearActiveStrokeState()
@@ -1494,8 +1704,10 @@ class DrawingView(context: Context) : View(context) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para usar el borrador en esta capa.")
             return
         }
-        if (shouldDeferActiveRaster(settings)) {
-            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
+        if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
+            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+                deferredStrokeOverlay.invalidateSelf()
+            }
             return
         }
         val point = points.first()
@@ -1535,8 +1747,10 @@ class DrawingView(context: Context) : View(context) {
         val distance = hypot(x - previous.x, y - previous.y)
         if (distance < minimumInputDistance(settings)) return
         points += StrokePoint(x, y, pressure, tilt, time)
-        if (shouldDeferActiveRaster(settings)) {
-            if (!usePlatformLowLatencyPreview) deferredStrokeOverlay.invalidateSelf()
+        if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
+            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+                deferredStrokeOverlay.invalidateSelf()
+            }
         } else {
             scheduleActiveStrokeRender()
         }
@@ -1549,7 +1763,7 @@ class DrawingView(context: Context) : View(context) {
     private fun drawDeferredStrokePreview(canvas: Canvas) {
         val points = activeStrokePoints ?: return
         val settings = activeStrokeSettings ?: return
-        if (!shouldDeferActiveRaster(settings) || points.isEmpty()) return
+        if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return
         val drawingTool = activeInputTool ?: tool
         val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -1649,29 +1863,8 @@ class DrawingView(context: Context) : View(context) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
         val settings = activeStrokeSettings ?: brushSettings
-        if (shouldDeferActiveRaster(settings)) {
-            val layer = activeLayer()
-            val first = points.firstOrNull()
-            if (layer != null && first != null) {
-                symmetryMatrices().forEachIndexed { index, matrix ->
-                    val transformed = transformPoint(first, matrix)
-                    drawOnLayer(layer, strokeSegmentBounds(transformed, transformed, settings)) { canvas ->
-                        drawBrushStamp(
-                            canvas = canvas,
-                            x = transformed.x,
-                            y = transformed.y,
-                            pressure = transformed.pressure * taperFactor(settings, 0f),
-                            tilt = transformed.tilt,
-                            drawingTool = completedTool,
-                            settings = settings,
-                            stampIndex = 0,
-                            angleRadians = (2.0 * PI * index / max(1, symmetryMatrices().size)).toFloat(),
-                        )
-                    }
-                }
-            }
-        }
-        renderActiveStrokePending(Int.MAX_VALUE)
+        val deferredRaster = activeStrokeDefersRaster || shouldDeferActiveRaster(settings)
+        if (!deferredRaster) renderActiveStrokePending(Int.MAX_VALUE)
         val completedPoints = points.toList()
         clearActiveStrokeState()
         if (completedPoints.isEmpty()) return
@@ -1680,11 +1873,16 @@ class DrawingView(context: Context) : View(context) {
             tool = completedTool,
             settings = settings,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
             recordCommands(layer, commands)
-            if (requiresFinalStrokeRebuild(command.settings)) {
+            if (deferredRaster) {
+                val surface = surfaceFor(layer, activeHistoryTarget(layer))
+                commands.forEach { drawCommand(surface, it) }
+            } else if (requiresFinalStrokeRebuild(command.settings)) {
                 rebuildLayerRegion(layer, combinedBounds(commands))
             }
         }
@@ -1706,6 +1904,8 @@ class DrawingView(context: Context) : View(context) {
             endY = end.y,
             settings = brushSettings,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
@@ -1732,6 +1932,8 @@ class DrawingView(context: Context) : View(context) {
             startColor = color,
             endColor = transparent,
             clipPoints = persistentSelectionPoints(),
+            clipInverted = selectionInverted,
+            clipFeatherPx = selectionFeatherPx,
         )
         activeLayer()?.let { layer ->
             drawCommand(layer.surface, command)
@@ -1760,6 +1962,8 @@ class DrawingView(context: Context) : View(context) {
         )
         selectionPoints = points
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1778,6 +1982,8 @@ class DrawingView(context: Context) : View(context) {
         val points = ellipseSelectionPoints(bounds)
         selectionPoints = points.toMutableList()
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1807,6 +2013,8 @@ class DrawingView(context: Context) : View(context) {
         }
         selectionPath = pathFromPoints(points, close = true)
         selectionPoints = points.toMutableList()
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -1837,6 +2045,10 @@ class DrawingView(context: Context) : View(context) {
 
     private fun beginSelectionTransform(): Boolean {
         if (transformBitmap != null) return true
+        if (selectionInverted) {
+            onEngineMessage?.invoke("Invierte nuevamente la selecciÃ³n antes de transformarla.")
+            return false
+        }
         val layer = activeLayer() ?: return false
         if (layer.alphaLocked) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para transformar la selección.")
@@ -1994,6 +2206,8 @@ class DrawingView(context: Context) : View(context) {
     fun deselect() {
         cancelSelectionTransform(rebuild = true)
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -2011,6 +2225,8 @@ class DrawingView(context: Context) : View(context) {
         )
         selectionPoints = points
         selectionPath = pathFromPoints(points, close = true)
+        selectionInverted = false
+        selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
         invalidate()
     }
@@ -2046,7 +2262,34 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun invertSelection() {
+        cancelSelectionTransform(rebuild = true)
+        if (selectionPath == null) {
+            selectAll()
+            return
+        }
+        selectionInverted = !selectionInverted
+        onSelectionChanged?.invoke(true)
+        invalidate()
+    }
+
+    fun setSelectionFeather(radiusPx: Float) {
+        if (selectionPath == null) return
+        val normalized = radiusPx.coerceIn(0f, 64f)
+        if (selectionFeatherPx == normalized) return
+        selectionFeatherPx = normalized
+        onEngineMessage?.invoke(
+            if (normalized == 0f) "Suavizado de selecciÃ³n desactivado."
+            else "Borde de selecciÃ³n suavizado ${normalized.toInt()} px.",
+        )
+        invalidate()
+    }
+
     fun flipSelection(horizontal: Boolean) {
+        if (selectionInverted) {
+            onEngineMessage?.invoke("Invierte nuevamente la selecciÃ³n antes de transformarla.")
+            return
+        }
         if (!beginSelectionTransform()) return
         val path = currentSelectionDisplayPath() ?: return
         val bounds = RectF().also { path.computeBounds(it, true) }
@@ -2066,10 +2309,10 @@ class DrawingView(context: Context) : View(context) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para borrar la selección.")
             return
         }
-        val bounds = RectF().also { path.computeBounds(it, true) }
+        val bounds = if (selectionInverted) RectF(documentBounds) else RectF().also { path.computeBounds(it, true) }
         val empty = Bitmap.createBitmap(
-            max(1, ceil(bounds.width()).toInt()),
-            max(1, ceil(bounds.height()).toInt()),
+            if (selectionInverted) 1 else max(1, ceil(bounds.width()).toInt()),
+            if (selectionInverted) 1 else max(1, ceil(bounds.height()).toInt()),
             Bitmap.Config.ARGB_8888,
         )
         val matrix = Matrix().apply { postTranslate(bounds.left, bounds.top) }
@@ -2082,6 +2325,7 @@ class DrawingView(context: Context) : View(context) {
             sourceBoundsBottom = bounds.bottom,
             bitmap = empty,
             matrixValues = values,
+            sourceInverted = selectionInverted,
         )
         drawCommand(layer.surface, command)
         recordCommands(layer, listOf(command))
@@ -2092,6 +2336,8 @@ class DrawingView(context: Context) : View(context) {
 
     private fun deselectWithoutRebuild() {
         selectionPath = null
+        selectionInverted = false
+        selectionFeatherPx = 0f
         selectionPoints = null
         selectionStart = null
         selectionEnd = null
@@ -2111,6 +2357,7 @@ class DrawingView(context: Context) : View(context) {
         val layerId = layer.id
         val fillColor = brushSettings.color
         val fillSelection = selectionPath?.let(::Path)
+        val fillSelectionInverted = selectionInverted
         onEngineMessage?.invoke("Calculando relleno…")
         prefetchExecutor.execute {
             val bitmap = runCatching { layer.surface.renderBitmap(MAX_FLOOD_FILL_PIXELS) }.getOrNull()
@@ -2122,7 +2369,15 @@ class DrawingView(context: Context) : View(context) {
                 bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
                 val seed = y * width + x
                 val selectionRegion = fillSelection?.let { path ->
-                    Region().apply { setPath(path, Region(0, 0, width, height)) }
+                    val documentRegion = Region(0, 0, width, height)
+                    Region().apply {
+                        setPath(path, documentRegion)
+                        if (fillSelectionInverted) {
+                            val inside = Region(this)
+                            set(documentRegion)
+                            op(inside, Region.Op.DIFFERENCE)
+                        }
+                    }
                 }
                 if (selectionRegion != null && !selectionRegion.contains(x, y)) return@execute
                 val targetColor = pixels[seed]
@@ -2196,14 +2451,31 @@ class DrawingView(context: Context) : View(context) {
             abs(Color.green(first) - Color.green(second)) <= tolerance &&
             abs(Color.blue(first) - Color.blue(second)) <= tolerance
 
-    private fun drawCommand(surface: SparseTileSurface, command: DrawCommand) {
+    private fun drawCommand(
+        surface: SparseTileSurface,
+        command: DrawCommand,
+        replayClipBounds: RectF? = null,
+    ) {
         val layer = layers.firstOrNull { it.surface === surface || it.maskSurface === surface }
         val target = if (layer?.maskSurface === surface) HistoryTarget.MASK else HistoryTarget.CONTENT
-        val bounds = commandBounds(command)
-        if (target == HistoryTarget.CONTENT && layer?.alphaLocked == true && command !is TransformSelectionCommand) {
-            surface.drawPreservingAlpha(bounds) { canvas -> drawCommand(canvas, command) }
+        val commandBounds = commandBounds(command)
+        val bounds = if (replayClipBounds == null) {
+            commandBounds
         } else {
-            surface.draw(bounds) { canvas -> drawCommand(canvas, command) }
+            RectF(commandBounds).apply { intersect(replayClipBounds) }
+        }
+        if (bounds.isEmpty) return
+        val operation: (Canvas) -> Unit = { canvas ->
+            val checkpoint = replayClipBounds?.let {
+                canvas.save().also { canvas.clipRect(replayClipBounds) }
+            }
+            drawCommand(canvas, command)
+            if (checkpoint != null) canvas.restoreToCount(checkpoint)
+        }
+        if (target == HistoryTarget.CONTENT && layer?.alphaLocked == true && command !is TransformSelectionCommand) {
+            surface.drawPreservingAlpha(bounds, operation)
+        } else {
+            surface.draw(bounds, operation)
         }
     }
 
@@ -2213,10 +2485,20 @@ class DrawingView(context: Context) : View(context) {
         val selection = selectionPath?.let(::Path)
         val clippedBlock: (Canvas) -> Unit = { canvas ->
             if (selection != null) {
-                canvas.save()
-                canvas.clipPath(selection)
+                val saveCount = beginSelectionMask(
+                    canvas,
+                    selection,
+                    selectionInverted,
+                    selectionFeatherPx,
+                )
                 block(canvas)
-                canvas.restore()
+                endSelectionMask(
+                    canvas,
+                    saveCount,
+                    selection,
+                    selectionInverted,
+                    selectionFeatherPx,
+                )
             } else {
                 block(canvas)
             }
@@ -2231,9 +2513,15 @@ class DrawingView(context: Context) : View(context) {
     private fun drawCommand(canvas: Canvas, command: DrawCommand) {
         when (command) {
             is StrokeCommand -> {
-                if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
+                    ?.let { pathFromPoints(it, close = true) }
+                val clipSave = clipPath?.let {
+                    beginSelectionMask(
+                        canvas,
+                        it,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 }
                 command.points.firstOrNull()?.let { first ->
                     drawBrushStamp(
@@ -2260,18 +2548,40 @@ class DrawingView(context: Context) : View(context) {
                         progress,
                     )
                 }
-                if (command.clipPoints.isNotEmpty()) canvas.restore()
+                if (clipPath != null && clipSave != null) {
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
+                }
             }
             is ShapeCommand -> {
-                if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
+                    ?.let { pathFromPoints(it, close = true) }
+                val clipSave = clipPath?.let {
+                    beginSelectionMask(
+                        canvas,
+                        it,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 }
                 configurePaint(strokePaint, command.tool, command.settings, 1f, 0f)
                 val start = StrokePoint(command.startX, command.startY, 1f, 0f, 0L)
                 val end = StrokePoint(command.endX, command.endY, 1f, 0f, 0L)
                 drawShapeWithPaint(canvas, command.tool, start, end, strokePaint)
-                if (command.clipPoints.isNotEmpty()) canvas.restore()
+                if (clipPath != null && clipSave != null) {
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
+                }
             }
             is GradientCommand -> {
                 val gradientPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -2287,10 +2597,21 @@ class DrawingView(context: Context) : View(context) {
                     )
                 }
                 if (command.clipPoints.isNotEmpty()) {
-                    canvas.save()
-                    canvas.clipPath(pathFromPoints(command.clipPoints, close = true))
+                    val clipPath = pathFromPoints(command.clipPoints, close = true)
+                    val clipSave = beginSelectionMask(
+                        canvas,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                     canvas.drawRect(documentBounds, gradientPaint)
-                    canvas.restore()
+                    endSelectionMask(
+                        canvas,
+                        clipSave,
+                        clipPath,
+                        command.clipInverted,
+                        command.clipFeatherPx,
+                    )
                 } else {
                     canvas.drawRect(documentBounds, gradientPaint)
                 }
@@ -2305,7 +2626,14 @@ class DrawingView(context: Context) : View(context) {
                     style = Paint.Style.FILL
                     xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
                 }
-                canvas.drawPath(sourcePath, clearPaint)
+                if (command.sourceInverted) {
+                    canvas.save()
+                    applySelectionClip(canvas, sourcePath, inverted = true)
+                    canvas.drawRect(documentBounds, clearPaint)
+                    canvas.restore()
+                } else {
+                    canvas.drawPath(sourcePath, clearPaint)
+                }
                 clearPaint.xfermode = null
                 val matrix = Matrix().apply { setValues(command.matrixValues) }
                 canvas.drawBitmap(
@@ -2315,6 +2643,57 @@ class DrawingView(context: Context) : View(context) {
                 )
             }
         }
+    }
+
+    private fun applySelectionClip(canvas: Canvas, path: Path, inverted: Boolean) {
+        if (inverted) canvas.clipOutPath(path) else canvas.clipPath(path)
+    }
+
+    private fun beginSelectionMask(
+        canvas: Canvas,
+        path: Path,
+        inverted: Boolean,
+        featherPx: Float,
+    ): Int {
+        val feather = featherPx.coerceAtLeast(0f)
+        return if (feather <= 0.01f) {
+            canvas.save().also { applySelectionClip(canvas, path, inverted) }
+        } else {
+            val clipBounds = Rect()
+            canvas.getClipBounds(clipBounds)
+            canvas.saveLayer(RectF(clipBounds), null)
+        }
+    }
+
+    private fun endSelectionMask(
+        canvas: Canvas,
+        saveCount: Int,
+        path: Path,
+        inverted: Boolean,
+        featherPx: Float,
+    ) {
+        val feather = featherPx.coerceAtLeast(0f)
+        if (feather > 0.01f) {
+            val maskPath = if (inverted) {
+                path
+            } else {
+                Path().apply {
+                    fillType = Path.FillType.EVEN_ODD
+                    addRect(documentBounds, Path.Direction.CW)
+                    addPath(path)
+                }
+            }
+            val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.FILL
+                maskFilter = BlurMaskFilter(feather, BlurMaskFilter.Blur.NORMAL)
+                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+            }
+            canvas.drawPath(maskPath, maskPaint)
+            maskPaint.xfermode = null
+            maskPaint.maskFilter = null
+        }
+        canvas.restoreToCount(saveCount)
     }
 
     private fun drawStrokeSegment(
@@ -2395,6 +2774,34 @@ class DrawingView(context: Context) : View(context) {
         val scatterRadius = radius * settings.scatter.coerceIn(0f, 1f)
         val stampX = x + noiseX * scatterRadius
         val stampY = y + noiseY * scatterRadius
+        val customTip = settings.tipAssetPath?.let(::loadTipBitmap)
+        if (customTip != null) {
+            canvas.save()
+            canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+            val aspect = customTip.width.toFloat() / customTip.height.coerceAtLeast(1)
+            val halfWidth = if (aspect >= 1f) radius else radius * aspect
+            val halfHeight = if (aspect >= 1f) radius / aspect else radius
+            strokePaint.colorFilter = if (drawingTool == DrawingTool.ERASER) {
+                null
+            } else {
+                PorterDuffColorFilter(settings.color, PorterDuff.Mode.SRC_IN)
+            }
+            canvas.drawBitmap(
+                customTip,
+                null,
+                RectF(
+                    stampX - halfWidth,
+                    stampY - halfHeight,
+                    stampX + halfWidth,
+                    stampY + halfHeight,
+                ),
+                strokePaint,
+            )
+            strokePaint.colorFilter = null
+            canvas.restore()
+            strokePaint.style = Paint.Style.STROKE
+            return
+        }
 
         when (settings.kind) {
             BrushKind.CHARCOAL, BrushKind.CHALK -> {
@@ -2539,6 +2946,15 @@ class DrawingView(context: Context) : View(context) {
             else -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
         }
         strokePaint.style = Paint.Style.STROKE
+    }
+
+    private fun loadTipBitmap(path: String): Bitmap? {
+        tipBitmapCache[path]?.takeUnless(Bitmap::isRecycled)?.let { return it }
+        val file = File(path)
+        if (!file.isFile || file.length() > 2L * 1024L * 1024L) return null
+        val bitmap = BitmapFactory.decodeFile(path) ?: return null
+        tipBitmapCache[path] = bitmap
+        return bitmap
     }
 
     private fun taperFactor(settings: BrushSettings, progress: Float): Float {
@@ -2798,7 +3214,7 @@ class DrawingView(context: Context) : View(context) {
         val nextNumber = layers.size + 1
         val layer = createLayer("Capa $nextNumber").copy(groupId = activeLayer()?.groupId)
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         updateCacheBudgets()
         notifyLayers()
         updateEngineStatus()
@@ -2838,28 +3254,30 @@ class DrawingView(context: Context) : View(context) {
         markLayerFullyDirty(copy)
         val index = layers.indexOf(source)
         layers.add(index + 1, copy)
-        activeLayerId = copy.id
+        selectOnly(copy.id)
         updateCacheBudgets()
         notifyLayers()
         commitDocumentChange()
     }
 
     fun deleteActiveLayer() {
-        if (layers.size <= 1) return
-        val index = layers.indexOfFirst { it.id == activeLayerId }
-        if (index < 0) return
-        val removed = layers.removeAt(index)
-        (removed.commands + removed.maskCommands).distinctBy { it.id }.forEach(::recycleCommand)
-        removed.surface.recycle()
-        removed.maskSurface?.recycle()
-        removed.baseTileDirectory.parentFile?.deleteRecursively()
-        removed.maskBaseTileDirectory?.parentFile?.deleteRecursively()
-        removed.groupId?.let { groupId ->
-            if (layers.none { it.groupId == groupId }) layerGroups.removeAll { it.id == groupId }
+        val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
+        val removable = layers.filter { it.id in selected }.take((layers.size - 1).coerceAtLeast(0))
+        if (removable.isEmpty()) return
+        val firstIndex = removable.minOf { layers.indexOf(it) }
+        val removedIds = removable.mapTo(mutableSetOf()) { it.id }
+        layers.removeAll { layer -> layer.id in removedIds }
+        removable.forEach { removed ->
+            (removed.commands + removed.maskCommands).distinctBy { it.id }.forEach(::recycleCommand)
+            removed.surface.recycle()
+            removed.maskSurface?.recycle()
+            removed.baseTileDirectory.parentFile?.deleteRecursively()
+            removed.maskBaseTileDirectory?.parentFile?.deleteRecursively()
         }
-        undoStack.removeAll { it.layerId == removed.id }
-        redoStack.removeAll { it.layerId == removed.id }
-        activeLayerId = layers[min(index, layers.lastIndex)].id
+        undoStack.removeAll { it.layerId in removedIds }
+        redoStack.removeAll { it.layerId in removedIds }
+        pruneEmptyGroups()
+        selectOnly(layers[min(firstIndex, layers.lastIndex)].id)
         updateCacheBudgets()
         notifyLayers()
         commitDocumentChange()
@@ -2868,9 +3286,22 @@ class DrawingView(context: Context) : View(context) {
     fun setActiveLayer(id: String) {
         if (layers.any { it.id == id }) {
             layers.filter { it.id != id }.forEach { it.editingMask = false }
-            activeLayerId = id
+            selectOnly(id)
             notifyLayers()
         }
+    }
+
+    fun toggleLayerSelection(id: String) {
+        if (layers.none { it.id == id }) return
+        if (id in selectedLayerIds && selectedLayerIds.size > 1) {
+            selectedLayerIds -= id
+            if (activeLayerId == id) activeLayerId = selectedLayerIds.last()
+        } else {
+            selectedLayerIds += id
+            activeLayerId = id
+            layers.filter { it.id != id }.forEach { it.editingMask = false }
+        }
+        notifyLayers()
     }
 
     fun toggleLayerVisibility(id: String) {
@@ -2915,14 +3346,17 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun createGroupFromActiveLayer() {
-        val layer = activeLayer() ?: return
-        if (layer.groupId != null) {
-            onEngineMessage?.invoke("La capa ya pertenece a un grupo.")
-            return
+        val selected = layers.filter { it.id in selectedLayerIds }.ifEmpty {
+            listOfNotNull(activeLayer())
         }
-        val group = LayerGroupData(name = "Grupo ${layerGroups.size + 1}")
+        if (selected.isEmpty()) return
+        val parentId = selected.map { it.groupId }.distinct().singleOrNull()
+        val group = LayerGroupData(
+            name = "Grupo ${layerGroups.size + 1}",
+            parentGroupId = parentId,
+        )
         layerGroups += group
-        layer.groupId = group.id
+        selected.forEach { it.groupId = group.id }
         notifyLayers()
         onDocumentChanged?.invoke()
     }
@@ -2930,8 +3364,11 @@ class DrawingView(context: Context) : View(context) {
     fun ungroupActiveLayer() {
         val layer = activeLayer() ?: return
         val groupId = layer.groupId ?: return
-        layer.groupId = null
-        if (layers.none { it.groupId == groupId }) layerGroups.removeAll { it.id == groupId }
+        val parentId = layerGroups.firstOrNull { it.id == groupId }?.parentGroupId
+        layers.filter { it.id in selectedLayerIds }.forEach { selected ->
+            if (selected.groupId == groupId) selected.groupId = parentId
+        }
+        pruneEmptyGroups()
         notifyLayers()
         onDocumentChanged?.invoke()
     }
@@ -3010,13 +3447,22 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun moveActiveLayer(up: Boolean) {
-        val index = layers.indexOfFirst { it.id == activeLayerId }
-        if (index < 0) return
-        val target = if (up) index + 1 else index - 1
-        if (target !in layers.indices) return
-        val layer = layers.removeAt(index)
-        layers.add(target, layer)
-        notifyLayers()
+        val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
+        if (up) {
+            for (index in layers.lastIndex - 1 downTo 0) {
+                if (layers[index].id in selected && layers[index + 1].id !in selected) {
+                    val layer = layers.removeAt(index)
+                    layers.add(index + 1, layer)
+                }
+            }
+        } else {
+            for (index in 1..layers.lastIndex) {
+                if (layers[index].id in selected && layers[index - 1].id !in selected) {
+                    val layer = layers.removeAt(index)
+                    layers.add(index - 1, layer)
+                }
+            }
+        }
         commitDocumentChange()
     }
 
@@ -3056,9 +3502,32 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    fun setRulerUnitCentimeters(enabled: Boolean) {
+        if (rulersUseCentimeters == enabled) return
+        rulersUseCentimeters = enabled
+        invalidate()
+    }
+
+    fun setDocumentDpi(dpi: Int) {
+        documentDpi = dpi.coerceIn(36, 1200)
+        if (rulersVisible && rulersUseCentimeters) invalidate()
+    }
+
     fun setAngleSnappingEnabled(enabled: Boolean) {
         angleSnappingEnabled = enabled
     }
+
+    fun setPerspectiveSnappingEnabled(enabled: Boolean) {
+        perspectiveSnappingEnabled = enabled
+    }
+
+    fun areRulersVisible(): Boolean = rulersVisible
+
+    fun areRulersUsingCentimeters(): Boolean = rulersUseCentimeters
+
+    fun isAngleSnappingEnabled(): Boolean = angleSnappingEnabled
+
+    fun isPerspectiveSnappingEnabled(): Boolean = perspectiveSnappingEnabled
 
     fun setVerticalSymmetry(enabled: Boolean) {
         if (verticalSymmetry == enabled) return
@@ -3165,6 +3634,15 @@ class DrawingView(context: Context) : View(context) {
         return output
     }
 
+    fun exportBasicPsd(output: OutputStream) {
+        val bitmap = exportCompositeBitmap(includePaper = false)
+        try {
+            BasicPsdCodec.write(bitmap, output)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private fun renderCompositePreview(maxSize: Int = 720): Bitmap {
         val scale = min(1f, maxSize / max(documentWidth, documentHeight).toFloat())
         val previewWidth = max(1, (documentWidth * scale).toInt())
@@ -3228,7 +3706,7 @@ class DrawingView(context: Context) : View(context) {
         val command = PixelPatchCommand(bitmap = patch, left = left, top = top)
         drawCommand(layer.surface, command)
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         recordCommands(layer, listOf(command))
         markLayerDirty(layer, commandBounds(command))
         updateCacheBudgets()
@@ -3398,6 +3876,12 @@ class DrawingView(context: Context) : View(context) {
         }
         val groupReferences = layerGroups.map { group -> group.copy() }
         val savedGuideMode = guideMode
+        val savedRulersVisible = rulersVisible
+        val savedRulersUseCentimeters = rulersUseCentimeters
+        val savedVerticalRulerGuides = verticalRulerGuides.toList()
+        val savedHorizontalRulerGuides = horizontalRulerGuides.toList()
+        val savedAngleSnappingEnabled = angleSnappingEnabled
+        val savedPerspectiveSnappingEnabled = perspectiveSnappingEnabled
         val savedPerspectiveEditing = perspectiveEditing
         val savedPerspectivePoint1X = perspectivePoint1X
         val savedPerspectivePoint1Y = perspectivePoint1Y
@@ -3516,8 +4000,15 @@ class DrawingView(context: Context) : View(context) {
                             setProperty("group.$index.visible", group.visible.toString())
                             setProperty("group.$index.opacity", group.opacity.toString())
                             setProperty("group.$index.collapsed", group.collapsed.toString())
+                            setProperty("group.$index.parentGroupId", group.parentGroupId.orEmpty())
                         }
                         setProperty("guideMode", savedGuideMode.name)
+                        setProperty("rulersVisible", savedRulersVisible.toString())
+                        setProperty("rulersUseCentimeters", savedRulersUseCentimeters.toString())
+                        setProperty("rulerGuides.vertical", savedVerticalRulerGuides.joinToString(","))
+                        setProperty("rulerGuides.horizontal", savedHorizontalRulerGuides.joinToString(","))
+                        setProperty("angleSnappingEnabled", savedAngleSnappingEnabled.toString())
+                        setProperty("perspectiveSnappingEnabled", savedPerspectiveSnappingEnabled.toString())
                         setProperty("perspectiveEditing", savedPerspectiveEditing.toString())
                         setProperty("perspective.point1.x", savedPerspectivePoint1X.toString())
                         setProperty("perspective.point1.y", savedPerspectivePoint1Y.toString())
@@ -3615,6 +4106,7 @@ class DrawingView(context: Context) : View(context) {
             }
             layers.clear()
             layerGroups.clear()
+            selectedLayerIds.clear()
 
             val groupCount = properties.getProperty("groupCount", "0").toIntOrNull() ?: 0
             repeat(groupCount) { index ->
@@ -3625,11 +4117,25 @@ class DrawingView(context: Context) : View(context) {
                     opacity = properties.getProperty("group.$index.opacity", "1.0")
                         .toFloatOrNull()?.coerceIn(0f, 1f) ?: 1f,
                     collapsed = properties.getProperty("group.$index.collapsed", "false").toBoolean(),
+                    parentGroupId = properties.getProperty("group.$index.parentGroupId", "").ifBlank { null },
                 )
             }
             guideMode = runCatching {
                 GuideMode.valueOf(properties.getProperty("guideMode", GuideMode.NONE.name))
             }.getOrDefault(GuideMode.NONE)
+            rulersVisible = properties.getProperty("rulersVisible", "false").toBoolean()
+            rulersUseCentimeters = properties.getProperty("rulersUseCentimeters", "false").toBoolean()
+            verticalRulerGuides.clear()
+            verticalRulerGuides += properties.getProperty("rulerGuides.vertical", "")
+                .split(',')
+                .mapNotNull { it.toFloatOrNull()?.coerceIn(0f, documentWidth.toFloat()) }
+            horizontalRulerGuides.clear()
+            horizontalRulerGuides += properties.getProperty("rulerGuides.horizontal", "")
+                .split(',')
+                .mapNotNull { it.toFloatOrNull()?.coerceIn(0f, documentHeight.toFloat()) }
+            angleSnappingEnabled = properties.getProperty("angleSnappingEnabled", "false").toBoolean()
+            perspectiveSnappingEnabled =
+                properties.getProperty("perspectiveSnappingEnabled", "false").toBoolean()
             perspectiveEditing = properties.getProperty("perspectiveEditing", "false").toBoolean() &&
                 guideMode != GuideMode.NONE
             perspectivePoint1X = properties.getProperty("perspective.point1.x", (documentWidth * 0.5f).toString())
@@ -3735,10 +4241,8 @@ class DrawingView(context: Context) : View(context) {
                 layers += layer
             }
 
-            val validGroupIds = layerGroups.mapTo(mutableSetOf()) { it.id }
-            layers.forEach { layer -> if (layer.groupId !in validGroupIds) layer.groupId = null }
-            layerGroups.removeAll { group -> layers.none { it.groupId == group.id } }
-            activeLayerId = layers.last().id
+            pruneEmptyGroups()
+            selectOnly(layers.last().id)
             undoStack.clear()
             clearRedoHistory()
             updateCacheBudgets()
@@ -3760,14 +4264,38 @@ class DrawingView(context: Context) : View(context) {
 
     private fun configureLayerPaint(layer: LayerData, effectiveOpacity: Float = layer.opacity) {
         layerPaint.alpha = (effectiveOpacity * 255f).toInt().coerceIn(0, 255)
-        layerPaint.xfermode = when (layer.blendMode) {
-            LayerBlendMode.NORMAL -> null
-            LayerBlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
-            LayerBlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
-            LayerBlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
-            LayerBlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
-            LayerBlendMode.DARKEN -> PorterDuffXfermode(PorterDuff.Mode.DARKEN)
-            LayerBlendMode.LIGHTEN -> PorterDuffXfermode(PorterDuff.Mode.LIGHTEN)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            layerPaint.xfermode = null
+            layerPaint.blendMode = when (layer.blendMode) {
+                LayerBlendMode.NORMAL -> null
+                LayerBlendMode.MULTIPLY -> BlendMode.MULTIPLY
+                LayerBlendMode.SCREEN -> BlendMode.SCREEN
+                LayerBlendMode.OVERLAY -> BlendMode.OVERLAY
+                LayerBlendMode.ADD -> BlendMode.PLUS
+                LayerBlendMode.DARKEN -> BlendMode.DARKEN
+                LayerBlendMode.LIGHTEN -> BlendMode.LIGHTEN
+                LayerBlendMode.SOFT_LIGHT -> BlendMode.SOFT_LIGHT
+                LayerBlendMode.HARD_LIGHT -> BlendMode.HARD_LIGHT
+                LayerBlendMode.DIFFERENCE -> BlendMode.DIFFERENCE
+                LayerBlendMode.COLOR_DODGE -> BlendMode.COLOR_DODGE
+                LayerBlendMode.COLOR_BURN -> BlendMode.COLOR_BURN
+            }
+        } else {
+            layerPaint.xfermode = when (layer.blendMode) {
+                LayerBlendMode.NORMAL -> null
+                LayerBlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+                LayerBlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+                LayerBlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
+                LayerBlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
+                LayerBlendMode.DARKEN -> PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+                LayerBlendMode.LIGHTEN -> PorterDuffXfermode(PorterDuff.Mode.LIGHTEN)
+                LayerBlendMode.SOFT_LIGHT,
+                LayerBlendMode.HARD_LIGHT,
+                LayerBlendMode.DIFFERENCE,
+                LayerBlendMode.COLOR_DODGE,
+                LayerBlendMode.COLOR_BURN,
+                -> null
+            }
         }
     }
 
@@ -3787,11 +4315,13 @@ class DrawingView(context: Context) : View(context) {
         if (bounds.isEmpty) return
         val safeBounds = RectF(bounds).apply { intersect(documentBounds) }
         if (safeBounds.isEmpty) return
+        val tileBounds = TileStorage.tileAlignedBounds(safeBounds, documentWidth, documentHeight)
+        if (tileBounds.isEmpty) return
         val surface = surfaceFor(layer, target)
-        surface.resetRegionFrom(baseDirectoryFor(layer, target), safeBounds)
+        surface.resetRegionFrom(baseDirectoryFor(layer, target), tileBounds)
         commandsFor(layer, target).forEach { command ->
-            if (RectF.intersects(commandBounds(command), safeBounds)) {
-                drawCommand(surface, command)
+            if (RectF.intersects(commandBounds(command), tileBounds)) {
+                drawCommand(surface, command, replayClipBounds = tileBounds)
             }
         }
         scheduleEngineStatusUpdate()
@@ -3808,6 +4338,28 @@ class DrawingView(context: Context) : View(context) {
 
     private fun activeLayer(): LayerData? = layers.firstOrNull { it.id == activeLayerId }
 
+    private fun selectOnly(id: String) {
+        activeLayerId = id
+        selectedLayerIds.clear()
+        selectedLayerIds += id
+    }
+
+    private fun pruneEmptyGroups() {
+        var changed: Boolean
+        do {
+            val occupied = layers.mapNotNullTo(mutableSetOf()) { it.groupId }
+            occupied += layerGroups.mapNotNull { it.parentGroupId }
+            changed = layerGroups.removeAll { it.id !in occupied }
+        } while (changed)
+        val valid = layerGroups.mapTo(mutableSetOf()) { it.id }
+        layerGroups.forEach { group ->
+            if (group.parentGroupId !in valid) group.parentGroupId = null
+        }
+        layers.forEach { layer ->
+            if (layer.groupId !in valid) layer.groupId = null
+        }
+    }
+
     private fun notifyLayers() {
         onLayersChanged?.invoke(
             layers.asReversed().map { layer ->
@@ -3820,6 +4372,7 @@ class DrawingView(context: Context) : View(context) {
                     alphaLocked = layer.alphaLocked,
                     clipping = layer.clipping,
                     isActive = layer.id == activeLayerId,
+                    isSelected = layer.id in selectedLayerIds,
                     groupId = layer.groupId,
                     hasMask = layer.maskSurface != null,
                     maskEnabled = layer.maskEnabled,
@@ -3829,6 +4382,7 @@ class DrawingView(context: Context) : View(context) {
         )
         onLayerGroupsChanged?.invoke(
             layerGroups.map { group ->
+                val depth = groupAncestors(group.parentGroupId).count().coerceAtMost(8)
                 LayerGroupUiModel(
                     id = group.id,
                     name = group.name,
@@ -3836,6 +4390,8 @@ class DrawingView(context: Context) : View(context) {
                     opacity = group.opacity,
                     collapsed = group.collapsed,
                     layerCount = layers.count { it.groupId == group.id },
+                    parentGroupId = group.parentGroupId,
+                    depth = depth,
                 )
             },
         )
@@ -3864,7 +4420,7 @@ class DrawingView(context: Context) : View(context) {
 
     private companion object {
         const val MAX_FLOOD_FILL_PIXELS = 12_000_000L
-        const val MAX_ORA_LAYER_PIXELS = 24_000_000L
+        const val MAX_ORA_LAYER_PIXELS = 40_000_000L
         const val ENGINE_STATUS_INTERVAL_MS = 650L
         const val MAX_STAMPS_PER_SEGMENT = 48
         const val MAX_STROKE_SEGMENTS_PER_FRAME = 24

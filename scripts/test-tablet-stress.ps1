@@ -16,6 +16,12 @@ $ErrorActionPreference = 'Stop'
 # by ErrorActionPreference unless this compatibility switch is disabled; Invoke-Adb checks the
 # actual process exit code below instead.
 if ($PSVersionTable.PSVersion.Major -ge 7) { $PSNativeCommandUseErrorActionPreference = $false }
+# Some Windows hosts expose both `PATH` and `Path`. Start-Process builds a
+# case-insensitive environment dictionary and fails before launching ADB when both
+# entries are present. Preserve the value while normalizing it to one canonical key.
+$processPath = $env:Path
+[Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+[Environment]::SetEnvironmentVariable('Path', $processPath, 'Process')
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $packageName = 'com.orbyte.canvasstudio.debug'
 $apkPath = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
@@ -42,9 +48,9 @@ function Invoke-Adb {
         }) -join ' '
         $process = Start-Process -FilePath $adb -ArgumentList $quotedArguments -Wait -PassThru -NoNewWindow `
             -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
-        $result = if (Test-Path $stdoutFile) { Get-Content -Raw $stdoutFile } else { '' }
+        $result = if (Test-Path $stdoutFile) { Get-Content -Raw -Encoding utf8 $stdoutFile } else { '' }
         $exitCode = $process.ExitCode
-        $stderr = if (Test-Path $stderrFile) { Get-Content -Raw $stderrFile } else { '' }
+        $stderr = if (Test-Path $stderrFile) { Get-Content -Raw -Encoding utf8 $stderrFile } else { '' }
         if ($exitCode -ne 0) {
             throw "ADB falló: $($Arguments -join ' ')`n$result`n$stderr"
         }
@@ -210,9 +216,13 @@ function Select-BrushPreset {
         Invoke-Adb @('shell', 'input', 'tap', $searchX, $searchY) | Out-Null
         Invoke-Adb @('shell', 'input', 'keycombination', '113', '29') | Out-Null # Ctrl+A
         Invoke-Adb @('shell', 'input', 'keyevent', '67') | Out-Null
-        # A single distinctive token avoids shell/IME differences around encoded spaces.
-        # The exact row name is still required below before the preset is tapped.
-        $inputName = ($Name -split '\s+')[0]
+        # Samsung's `adb shell input text` can crash on accented UTF-8 input. Use
+        # the first ASCII-only token (HB for "Lápiz HB", espeso for "Óleo espeso").
+        # The exact localized row name is still required below before it is tapped.
+        $inputName = @($Name -split '\s+' | Where-Object { $_ -match '^[A-Za-z0-9]+$' })[0]
+        if (-not $inputName) {
+            throw "El preset '$Name' no tiene un token ASCII utilizable por ADB."
+        }
         Invoke-Adb @('shell', 'input', 'text', $inputName) | Out-Null
         Start-Sleep -Milliseconds 450
     }

@@ -1,67 +1,60 @@
-# Checklist de pruebas — Fase 4.1 · 1.6.0
+# Checklist de publicación · Canvas Studio 2.1.0
 
-## 0. Regresión crítica del S Pen
+## 1. Entrada y navegación
 
-- Realizar un trazo corto y uno largo con Gouache, Pintura suave, Carboncillo y Tiza.
-- Confirmar que levantar el S Pen no cierra la aplicación.
-- Hacer 100 trazos consecutivos y 20 operaciones de deshacer/rehacer.
-- Seguir dibujando mientras aparece el autoguardado.
+- Dibujar trazos cortos y largos con S Pen.
+- Cambiar entre Lápiz HB, Carboncillo, Óleo espeso y Spray granulado.
+- Aumentar el tamaño por encima de 150 px y confirmar que el preview reacciona.
+- Apoyar un dedo y luego un segundo: el dibujo existente no debe desaparecer.
+- Hacer zoom, paneo y rotación con dos dedos; al volver a uno no debe pintarse por error.
+- Apoyar la palma mientras se dibuja con S Pen.
 
-## 1. Compatibilidad
+## 2. Retención y persistencia
 
-- Instalar encima de 1.5.3 sin desinstalar.
-- Abrir proyectos antiguos y confirmar capas y arte previo.
-- Guardar, volver a la galería y reabrir.
-- Confirmar que deshacer solo afecta los cambios de la sesión actual.
+- Ejecutar `scripts/test-raster-engine.ps1 -Iterations 20`.
+- Crear al menos 200 trazos largos y gruesos sobre varias teselas.
+- Confirmar trazos antiguos antes y después del autoguardado.
+- Cerrar, reabrir y comprobar exactamente el mismo contenido.
+- Probar deshacer/rehacer después de presión de caché.
 
-## 2. Grupos de capas
+## 3. Tamaños
 
-- Seleccionar una capa y pulsar **Agrupar capa**.
-- Crear y duplicar una capa; confirmar que aparecen dentro del mismo grupo.
-- Ocultar y mostrar el grupo.
-- Cambiar su opacidad y colapsarlo.
-- Sacar una capa del grupo.
-- Guardar y reabrir; comprobar que estructura y ajustes permanecen.
+- Crear lienzos 2048², ilustración 4096 × 2732, 4K y 8K.
+- Verificar MP, MiB RGBA, tiles y nivel de carga en el diálogo.
+- Confirmar que dimensiones fuera del límite se ajustan antes de crear.
+- En tablets de heap reducido, confirmar que presets demasiado grandes no se ofrecen.
+- Abrir proyectos históricos grandes sin migración destructiva.
 
-## 3. Máscaras raster
+## 4. Capas y edición
 
-- Añadir una máscara a una capa con contenido.
-- En modo máscara, usar Pincel para ocultar y Borrador para revelar.
-- Deshacer y rehacer cambios de máscara sin afectar el contenido de la capa.
-- Desactivar y volver a activar la máscara.
-- Eliminarla y confirmar que el contenido original sigue intacto.
-- Probar máscara junto con opacidad, modo de fusión y clipping.
-- Guardar y reabrir el documento.
+- Crear, duplicar, seleccionar y reordenar capas.
+- Agrupar selección y probar grupos anidados y colapsables.
+- Probar visibilidad, opacidad, 12 modos de fusión, bloqueo alfa y clipping.
+- Crear, editar, desactivar y eliminar una máscara.
+- Probar selección rectangular, elíptica y lazo con feather.
+- Guardar y reabrir estructura, guías, reglas y preferencias.
 
-## 4. Perspectiva editable
+## 5. Exportación
 
-- Activar perspectiva de uno y dos puntos.
-- Pulsar **Editar puntos** y arrastrar cada punto de fuga.
-- Confirmar que un toque fuera de los puntos no crea un trazo accidental.
-- Restablecer las guías.
-- Guardar y reabrir para comprobar posiciones y modo.
+- Exportar PNG y verificar dimensiones y transparencia.
+- Exportar OpenRaster y abrirlo en una app compatible.
+- Exportar/importar PSD compuesto.
+- Exportar el preset 8K en una tablet compatible.
+- Confirmar que una exportación fuera del presupuesto falla con mensaje y no cierra la app.
 
-## 5. Selección y transformación
+## 6. UI, accesibilidad y compatibilidad
 
-- Crear selección rectangular, elíptica y lazo.
-- Dibujar, borrar, rellenar y aplicar degradado dentro de la selección.
-- Mover, escalar, rotar y voltear contenido.
-- Guardar y reabrir el resultado.
+- Probar orientación horizontal y vertical en una tablet `sw600dp`.
+- Navegar por controles principales con TalkBack.
+- Verificar que botones de proyecto y menús tengan nombres accesibles.
+- Probar modo lienzo, paneles colapsables y atajos de teclado.
+- Confirmar logo, icono adaptativo, icono temático y splash.
+- Verificar que la app no se ofrezca como interfaz para teléfonos.
 
-## 6. Rendimiento en Galaxy Tab S8
+## 7. Release
 
-- Lienzo 4096 × 4096 con seis capas normales: comprobar fluidez.
-- Añadir máscaras a dos capas y repetir 100 trazos texturizados.
-- Ocultar/mostrar un grupo durante zoom, desplazamiento y rotación.
-- Probar un lienzo 8K y observar que los tiles cargan sin bloquear el S Pen.
-- Confirmar que las capas sin máscara no sufren una caída visible de FPS.
-
-## 7. Exportación
-
-- Exportar PNG y abrirlo en la galería.
-- Exportar `.ora` y abrirlo en Krita.
-- Verificar máscara aplicada, orden, visibilidad y opacidad efectiva.
-
-## Reporte útil
-
-Adjuntar captura o log, acción exacta, tamaño del lienzo, cantidad de capas/máscaras, pincel utilizado y si el proyecto provenía de una versión anterior.
+- `lintDebug`, `assembleDebugAndroidTest`, `assembleRelease` y `bundleRelease`.
+- Verificar firma del APK y del AAB.
+- Instalar el APK release sobre una versión anterior compatible.
+- Revisar Logcat: sin `FATAL EXCEPTION`, `OutOfMemoryError` ni señales nativas.
+- Registrar versión, commit, dispositivo, Android y reporte de certificación.

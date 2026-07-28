@@ -88,6 +88,25 @@ internal object TileStorage {
         )
     }
 
+    /**
+     * Expands a document-space region to the exact tile boundaries that will be replaced.
+     *
+     * Region rebuilds restore complete tile files, not only the pixels inside the requested
+     * rectangle. Their command replay must therefore use this same expanded region or unrelated
+     * strokes sharing those tiles can disappear.
+     */
+    fun tileAlignedBounds(bounds: RectF, documentWidth: Int, documentHeight: Int): RectF {
+        val keys = keysForBounds(bounds, documentWidth, documentHeight)
+        if (keys.isEmpty()) return RectF()
+        val result = RectF()
+        keys.forEachIndexed { index, key ->
+            val rect = tileRect(key, documentWidth, documentHeight)
+            val tileBounds = RectF(rect)
+            if (index == 0) result.set(tileBounds) else result.union(tileBounds)
+        }
+        return result
+    }
+
     fun saveTileAtomically(source: Bitmap, key: Key, destinationDirectory: File): WriteResult {
         destinationDirectory.mkdirs()
         val rect = tileRect(key, source.width, source.height)

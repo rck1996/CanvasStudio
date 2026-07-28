@@ -12,6 +12,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $appApk = Join-Path $projectRoot 'app\build\outputs\apk\debug\app-debug.apk'
 $testApk = Join-Path $projectRoot 'app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk'
 $runner = 'com.orbyte.canvasstudio.debug.test/androidx.test.runner.AndroidJUnitRunner'
+$expectedTests = 23
+$retentionStrokesPerIteration = 807
 
 function Find-Adb {
     $fromPath = Get-Command adb -ErrorAction SilentlyContinue
@@ -36,7 +38,7 @@ if (-not $SkipBuild) {
     $env:KOTLIN_COMPILER_EXECUTION_STRATEGY = 'in-process'
     Push-Location $projectRoot
     try {
-        & .\gradlew.bat assembleDebug assembleDebugAndroidTest --no-daemon
+        & .\gradlew.bat assembleDebug assembleDebugAndroidTest --no-daemon '-Pkotlin.compiler.execution.strategy=in-process'
         if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación de las pruebas.' }
     } finally { Pop-Location }
 }
@@ -51,7 +53,7 @@ if (-not $SkipInstall) {
 $started = Get-Date
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     $result = & $adb -s $Serial shell am instrument -w -r $runner
-    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch 'OK \(14 tests\)') {
+    if ($LASTEXITCODE -ne 0 -or ($result -join "`n") -notmatch "OK \($expectedTests tests\)") {
         $result | Out-Host
         throw "La iteración $iteration falló."
     }
@@ -59,5 +61,5 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
 }
 
 $elapsed = (Get-Date) - $started
-$strokeChecks = $Iterations * 200
+$strokeChecks = $Iterations * $retentionStrokesPerIteration
 Write-Host "Suite completada: $Iterations iteraciones, $strokeChecks trazos persistidos, $([math]::Round($elapsed.TotalSeconds, 2)) s."

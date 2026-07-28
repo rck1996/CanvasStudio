@@ -691,7 +691,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
-        isStampBrush(settings.kind) && settings.sizePx >= 48f
+        (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
+            requiresFinalStrokeRebuild(settings)
 
     private fun minimumInputDistance(settings: BrushSettings): Float {
         return inputSamplingDistance(settings, isStampBrush(settings.kind))
@@ -1702,29 +1703,8 @@ class DrawingView(context: Context) : View(context) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
         val settings = activeStrokeSettings ?: brushSettings
-        if (shouldDeferActiveRaster(settings)) {
-            val layer = activeLayer()
-            val first = points.firstOrNull()
-            if (layer != null && first != null) {
-                symmetryMatrices().forEachIndexed { index, matrix ->
-                    val transformed = transformPoint(first, matrix)
-                    drawOnLayer(layer, strokeSegmentBounds(transformed, transformed, settings)) { canvas ->
-                        drawBrushStamp(
-                            canvas = canvas,
-                            x = transformed.x,
-                            y = transformed.y,
-                            pressure = transformed.pressure * taperFactor(settings, 0f),
-                            tilt = transformed.tilt,
-                            drawingTool = completedTool,
-                            settings = settings,
-                            stampIndex = 0,
-                            angleRadians = (2.0 * PI * index / max(1, symmetryMatrices().size)).toFloat(),
-                        )
-                    }
-                }
-            }
-        }
-        renderActiveStrokePending(Int.MAX_VALUE)
+        val deferredRaster = shouldDeferActiveRaster(settings)
+        if (!deferredRaster) renderActiveStrokePending(Int.MAX_VALUE)
         val completedPoints = points.toList()
         clearActiveStrokeState()
         if (completedPoints.isEmpty()) return
@@ -1739,7 +1719,10 @@ class DrawingView(context: Context) : View(context) {
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
             recordCommands(layer, commands)
-            if (requiresFinalStrokeRebuild(command.settings)) {
+            if (deferredRaster) {
+                val surface = surfaceFor(layer, activeHistoryTarget(layer))
+                commands.forEach { drawCommand(surface, it) }
+            } else if (requiresFinalStrokeRebuild(command.settings)) {
                 rebuildLayerRegion(layer, combinedBounds(commands))
             }
         }
@@ -2308,14 +2291,31 @@ class DrawingView(context: Context) : View(context) {
             abs(Color.green(first) - Color.green(second)) <= tolerance &&
             abs(Color.blue(first) - Color.blue(second)) <= tolerance
 
-    private fun drawCommand(surface: SparseTileSurface, command: DrawCommand) {
+    private fun drawCommand(
+        surface: SparseTileSurface,
+        command: DrawCommand,
+        replayClipBounds: RectF? = null,
+    ) {
         val layer = layers.firstOrNull { it.surface === surface || it.maskSurface === surface }
         val target = if (layer?.maskSurface === surface) HistoryTarget.MASK else HistoryTarget.CONTENT
-        val bounds = commandBounds(command)
-        if (target == HistoryTarget.CONTENT && layer?.alphaLocked == true && command !is TransformSelectionCommand) {
-            surface.drawPreservingAlpha(bounds) { canvas -> drawCommand(canvas, command) }
+        val commandBounds = commandBounds(command)
+        val bounds = if (replayClipBounds == null) {
+            commandBounds
         } else {
-            surface.draw(bounds) { canvas -> drawCommand(canvas, command) }
+            RectF(commandBounds).apply { intersect(replayClipBounds) }
+        }
+        if (bounds.isEmpty) return
+        val operation: (Canvas) -> Unit = { canvas ->
+            val checkpoint = replayClipBounds?.let {
+                canvas.save().also { canvas.clipRect(replayClipBounds) }
+            }
+            drawCommand(canvas, command)
+            if (checkpoint != null) canvas.restoreToCount(checkpoint)
+        }
+        if (target == HistoryTarget.CONTENT && layer?.alphaLocked == true && command !is TransformSelectionCommand) {
+            surface.drawPreservingAlpha(bounds, operation)
+        } else {
+            surface.draw(bounds, operation)
         }
     }
 
@@ -4042,11 +4042,13 @@ class DrawingView(context: Context) : View(context) {
         if (bounds.isEmpty) return
         val safeBounds = RectF(bounds).apply { intersect(documentBounds) }
         if (safeBounds.isEmpty) return
+        val tileBounds = TileStorage.tileAlignedBounds(safeBounds, documentWidth, documentHeight)
+        if (tileBounds.isEmpty) return
         val surface = surfaceFor(layer, target)
-        surface.resetRegionFrom(baseDirectoryFor(layer, target), safeBounds)
+        surface.resetRegionFrom(baseDirectoryFor(layer, target), tileBounds)
         commandsFor(layer, target).forEach { command ->
-            if (RectF.intersects(commandBounds(command), safeBounds)) {
-                drawCommand(surface, command)
+            if (RectF.intersects(commandBounds(command), tileBounds)) {
+                drawCommand(surface, command, replayClipBounds = tileBounds)
             }
         }
         scheduleEngineStatusUpdate()

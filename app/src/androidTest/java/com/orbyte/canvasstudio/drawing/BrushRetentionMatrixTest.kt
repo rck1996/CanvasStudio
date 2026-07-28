@@ -70,6 +70,58 @@ class BrushRetentionMatrixTest {
         }
     }
 
+    @Test
+    fun modifiedHbLongStrokeRetainsOlderStrokesInEveryTouchedTile() {
+        val view = DrawingView(context)
+        val hb = premiumBrushes.first { it.id == "pencil-hb" }
+        val sentinels = listOf(
+            TestPoint(180f, 56f),
+            TestPoint(700f, 56f),
+            TestPoint(1_220f, 56f),
+            TestPoint(1_740f, 56f),
+        )
+
+        try {
+            instrumentation.runOnMainSync {
+                view.configureDocument(DOCUMENT_SIZE, DOCUMENT_SIZE)
+                view.tool = DrawingTool.BRUSH
+                view.brushSettings = hb.toModifiedSettings(sizePx = 24f)
+                sentinels.forEachIndexed { index, point -> drawStroke(view, point, index) }
+            }
+            val before = instrumentation.runOnMainSyncWithResult {
+                view.exportCompositeBitmap(includePaper = false)
+            }
+            assertTrue(
+                "La preparación no conservó todos los trazos HB iniciales",
+                sentinels.all { before.hasInkNear(it) },
+            )
+            before.recycle()
+
+            instrumentation.runOnMainSync {
+                view.brushSettings = hb.toModifiedSettings(sizePx = 180f)
+                repeat(LONG_HB_STROKES) { stroke ->
+                    drawLongStroke(
+                        view = view,
+                        y = 300f + (stroke % 4) * 32f,
+                        index = sentinels.size + stroke,
+                    )
+                }
+            }
+            val after = instrumentation.runOnMainSyncWithResult {
+                view.exportCompositeBitmap(includePaper = false)
+            }
+            val retained = sentinels.count { after.hasInkNear(it) }
+            after.recycle()
+
+            assertTrue(
+                "El HB grande y largo borró trazos antiguos en tiles reconstruidos: $retained/${sentinels.size}",
+                retained == sentinels.size,
+            )
+        } finally {
+            instrumentation.runOnMainSync { view.configureDocument(256, 256) }
+        }
+    }
+
     private fun BrushPreset.toStressSettings(): BrushSettings = BrushSettings(
         sizePx = 120f,
         opacity = opacity.coerceAtLeast(.55f),
@@ -91,6 +143,27 @@ class BrushRetentionMatrixTest {
         kind = kind,
     )
 
+    private fun BrushPreset.toModifiedSettings(sizePx: Float): BrushSettings = BrushSettings(
+        sizePx = sizePx,
+        opacity = opacity,
+        color = Color.rgb(24, 28, 34),
+        hardness = hardness,
+        spacing = spacing,
+        stabilization = 0f,
+        flow = flow,
+        minSize = minSize,
+        pressureSize = false,
+        pressureOpacity = false,
+        pressureCurve = pressureCurve,
+        tiltResponse = tiltResponse,
+        taperStart = taperStart,
+        taperEnd = taperEnd,
+        scatter = scatter,
+        grain = grain,
+        velocitySize = velocitySize,
+        kind = kind,
+    )
+
     private fun drawStroke(view: DrawingView, point: TestPoint, index: Int) {
         val downTime = 10_000L + index * 100L
         val startX = point.x - 58f
@@ -108,6 +181,25 @@ class BrushRetentionMatrixTest {
             )
         }
         dispatch(view, downTime, downTime + 80L, MotionEvent.ACTION_UP, endX, point.y)
+    }
+
+    private fun drawLongStroke(view: DrawingView, y: Float, index: Int) {
+        val downTime = 10_000L + index * 100L
+        val startX = 80f
+        val endX = DOCUMENT_SIZE - 80f
+        dispatch(view, downTime, downTime, MotionEvent.ACTION_DOWN, startX, y)
+        repeat(48) { step ->
+            val progress = (step + 1f) / 48f
+            dispatch(
+                view = view,
+                downTime = downTime,
+                eventTime = downTime + (step + 1) * 8L,
+                action = MotionEvent.ACTION_MOVE,
+                x = startX + (endX - startX) * progress,
+                y = y + if (step % 2 == 0) 12f else -12f,
+            )
+        }
+        dispatch(view, downTime, downTime + 400L, MotionEvent.ACTION_UP, endX, y)
     }
 
     private fun dispatch(
@@ -150,5 +242,6 @@ class BrushRetentionMatrixTest {
     private companion object {
         const val DOCUMENT_SIZE = 2048
         const val FIRST_BATCH = 24
+        const val LONG_HB_STROKES = 64
     }
 }

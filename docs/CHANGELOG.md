@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0-beta06
+
+- corregida la pérdida real de trazos antiguos al finalizar un lápiz HB modificado, grueso y largo;
+- la reconstrucción regional ahora se expande a los límites exactos de las teselas restauradas y reproduce todos sus comandos;
+- el replay queda recortado a las teselas reconstruidas para evitar sobrepintado fuera de la zona invalidada;
+- los pinceles lineales con taper o velocidad se rasterizan una sola vez al finalizar, reduciendo 57 % el tiempo de la suite de estrés medida;
+- nueva regresión automática con 64 trazos HB de 180 px que atraviesan el documento y conservan trazos centinela antiguos;
+- 23 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
 ## 2.0.0-beta05
 
 - corregida la vista previa ampliada para que responda inmediatamente a tamaño, opacidad, flujo, dureza, grano y familia;

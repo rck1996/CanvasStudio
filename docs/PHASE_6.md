@@ -53,8 +53,9 @@ queda protegida por dos pruebas instrumentadas específicas.
 - preview frontal AndroidX Ink limitado a familias visualmente compatibles;
 - semántica TalkBack para presets, parámetros y capas;
 - validación de tablet redimensionable en una Galaxy Tab S8;
-- 22 pruebas instrumentadas aprobadas;
-- matriz de 539 trazos gruesos: 49 por cada una de las 11 familias.
+- 23 pruebas instrumentadas aprobadas;
+- matriz de 539 trazos gruesos: 49 por cada una de las 11 familias;
+- 64 trazos HB modificados, gruesos y largos con verificación de retención en cada tesela afectada.
 
 La fase 6 queda cerrada. Grupos anidados, selección múltiple de capas, reglas arrastrables
 y recursos bitmap importables pasan a la fase 7.

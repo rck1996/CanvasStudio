@@ -5,7 +5,7 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
 > **Estado del proyecto:** Beta para tablets / fase 6
-> **Versión incluida en este repositorio:** `2.0.0-beta05`
+> **Versión incluida en este repositorio:** `2.0.0-beta06`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -1136,8 +1136,9 @@ Comprueba:
 - handoff visual especializado por familia de pincel: completado;
 - semántica TalkBack ampliada para pinceles, sliders y capas: completado;
 - requisito de tablet y actividad redimensionable verificados: completado;
-- firma debug reproducible y suite instrumentada de 22 pruebas: completado;
-- matriz automática de 539 trazos gruesos en 11 familias: completado.
+- firma debug reproducible y suite instrumentada de 23 pruebas: completado;
+- matriz automática de 539 trazos gruesos en 11 familias: completado;
+- regresión de 64 trazos HB modificados, gruesos y largos con retención por tesela: completado.
 
 ### Siguiente etapa: fase 7.0 estable
 

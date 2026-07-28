@@ -16,8 +16,8 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 27
-        versionName = "2.1.0-beta02"
+        versionCode = 28
+        versionName = "2.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
@@ -83,13 +83,14 @@ dependencies {
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
-    implementation("androidx.activity:activity-compose:1.11.0")
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    // 2.11.0 requires compileSdk 37 and AGP 9.1; 2.10 keeps the API 36 release line stable.
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.ink:ink-authoring:$inkVersion")
     implementation("androidx.ink:ink-brush:$inkVersion")
     implementation("androidx.ink:ink-geometry:$inkVersion")
@@ -99,6 +100,6 @@ dependencies {
     implementation("androidx.ink:ink-storage:$inkVersion")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

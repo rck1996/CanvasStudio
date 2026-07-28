@@ -96,11 +96,19 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
             MotionEvent.ACTION_DOWN -> {
                 view.requestUnbufferedDispatch(event)
                 activePointerId = event.getPointerId(event.actionIndex)
-                activeInkStroke = inkView.startStroke(
-                    event,
-                    activePointerId,
-                    previewBrush(),
-                )
+                val toolType = event.getToolType(event.actionIndex)
+                val supportsInkPreview =
+                    toolType == MotionEvent.TOOL_TYPE_STYLUS ||
+                        toolType == MotionEvent.TOOL_TYPE_ERASER
+                activeInkStroke = if (supportsInkPreview) {
+                    inkView.startStroke(
+                        event,
+                        activePointerId,
+                        previewBrush(),
+                    )
+                } else {
+                    null
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 activeInkStroke?.let { stroke ->

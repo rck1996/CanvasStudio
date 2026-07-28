@@ -1,54 +1,62 @@
 # Automatización de pruebas en tablet
 
-La prueba principal es `scripts/test-raster-engine.ps1`. Ejecuta instrumentación Android sobre el motor tiled, sin capturas ni coordenadas de pantalla. Está orientada a una Samsung Galaxy Tab S8 (`SM-X700`) conectada por USB o depuración inalámbrica.
+## Suite determinista
 
-Cada iteración ejecuta catorce pruebas. La prueba de carga comprueba 200 marcas gruesas únicas distribuidas por un documento de `4096 × 2732`, fuerza guardado y presión de caché, reconstruye la superficie desde los PNG y verifica cada marca por píxel. La suite también cubre recuperación asíncrona de tiles visibles, metadata dañada o interrumpida, versiones locales, atajos, comportamiento de presets y la entrega segura entre AndroidX Ink y el raster.
-
-```powershell
-.\scripts\test-raster-engine.ps1
-```
-
-Para una prueba prolongada sin recompilar ni reinstalar:
+`scripts/test-raster-engine.ps1` es el oráculo principal. Compila, instala y ejecuta la
+instrumentación directamente sobre el motor raster; no depende de capturas, texto
+reconocido ni coordenadas de pantalla.
 
 ```powershell
-.\scripts\test-raster-engine.ps1 -SkipBuild -SkipInstall -Iterations 50
+.\scripts\test-raster-engine.ps1 -Iterations 20
 ```
 
-## Prueba complementaria de interfaz
-
-`scripts/test-tablet-stress.ps1` conserva el recorrido ADB de extremo a extremo para comprobaciones manuales de interfaz y métricas. No debe usarse como oráculo principal de persistencia de trazos, porque las coordenadas y la canalización de entrada varían según la rotación y configuración del dispositivo.
-
-## Qué valida
-
-- compilación e instalación de `com.orbyte.canvasstudio.debug`;
-- apertura de un proyecto de prueba existente;
-- inyección de una matriz de trazos únicos;
-- espera de autoguardado;
-- reinicio y reapertura de la aplicación;
-- comparación de capturas antes y después para detectar trazos que no se ven;
-- recolección de `gfxinfo`, memoria y Logcat.
-
-Los artefactos se generan localmente en `build/reports/tablet-stress/`; el directorio no se versiona.
-
-La suite determinista `scripts/test-raster-engine.ps1` ejecuta 23 pruebas instrumentadas:
-persistencia de 200 trazos gruesos, una matriz adicional de 539 trazos entre las 11
-familias de pincel, 64 trazos HB modificados y largos, presión de caché, precarga visible, recuperación de
-metadata, versiones locales, perfiles de atajos, presets y handoff de tinta. Con `-Iterations 20` verifica 4.000
-trazos tiled básicos y más de 16.000 operaciones de retención sin depender de reconocimiento visual.
-
-## Ejemplos
+Para reutilizar APK ya instalados:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\test-tablet-stress.ps1
+.\scripts\test-raster-engine.ps1 -SkipBuild -SkipInstall -Iterations 20
 ```
+
+Cada ciclo ejecuta 28 pruebas. La suite cubre:
+
+- 200 marcas gruesas únicas en `4096 × 2732`;
+- 539 trazos distribuidos entre once familias de pincel;
+- 64 trazos HB modificados, gruesos y largos;
+- presión de caché, reconstrucción por región y carga de tiles visibles;
+- handoff seguro entre preview y raster;
+- transición de un dedo a navegación con dos dedos sin vaciar el compuesto;
+- guardado, reinicio, recuperación de metadata y versiones locales;
+- presets, recursos bitmap, shortcuts y PSD;
+- política de memoria y exportación 8K con seis capas dispersas.
+
+El script detecta dinámicamente el total de tests, exige un mínimo configurable y genera
+`build/reports/phase8-certification/latest.json`.
+
+## Runner visual ADB
+
+`scripts/test-tablet-stress.ps1` es complementario. Interactúa con la UI, selecciona
+pinceles, inyecta una matriz de hasta 200 trazos, reinicia la app y recopila capturas,
+`gfxinfo`, memoria y Logcat.
 
 ```powershell
-.\scripts\test-tablet-stress.ps1 -SkipBuild -SkipInstall -StrokeCount 200
+.\scripts\test-tablet-stress.ps1 -SkipBuild -SkipInstall -StrokeCount 200 `
+  -BrushPresets "Lápiz HB","Carboncillo","Óleo espeso","Spray granulado" `
+  -BrushSizeIncrements 14
 ```
 
-## Límites conocidos
+Los resultados se guardan en `build/reports/tablet-stress/`.
 
-La inyección ADB no reproduce presión, inclinación ni la tasa de eventos de un S Pen. Por eso las pruebas automáticas detectan regresiones de persistencia, renderizado y estabilidad, pero no sustituyen la validación manual con pinceles gruesos y texturizados.
+La comparación visual sólo es concluyente sobre un proyecto de prueba inicialmente
+limpio. Si el lienzo base ya contiene marcas, el script conserva métricas y capturas pero
+advierte que no puede contar con precisión cada celda. ADB tampoco reproduce presión,
+inclinación ni la frecuencia real de un S Pen.
 
-Antes de publicar una versión se debe ejecutar la lista manual de `TEST_CHECKLIST.md`, con énfasis en trazos prolongados, autoguardado y reabrir el proyecto.
+## Integración continua
+
+`.github/workflows/android-ci.yml` ejecuta en cada push y pull request:
+
+- `lintDebug`;
+- `assembleDebug`;
+- `assembleDebugAndroidTest`;
+- `assembleRelease`;
+- `bundleRelease`;
+- publicación de reportes y artefactos de compilación.

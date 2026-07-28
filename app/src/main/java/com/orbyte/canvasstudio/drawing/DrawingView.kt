@@ -139,7 +139,7 @@ class DrawingView(context: Context) : View(context) {
         override fun setAlpha(alpha: Int) = Unit
         override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
         @Deprecated("Deprecated in Android")
-        @Suppress("DEPRECATION")
+        @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
         override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
     }
     private val cursorOuterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -254,6 +254,7 @@ class DrawingView(context: Context) : View(context) {
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
+    private var activeStrokeDefersRaster: Boolean = false
     private var activeRenderedPointCount: Int = 0
     private var strokeFramePosted: Boolean = false
     private var shapeStart: StrokePoint? = null
@@ -1451,10 +1452,17 @@ class DrawingView(context: Context) : View(context) {
             if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
                 (activeStrokePoints != null || shapeStart != null)
             ) {
+                val strokeHadRasterPreview = activeStrokePoints != null &&
+                    !activeStrokeDefersRaster &&
+                    activeStrokeSettings?.let(::shouldDeferActiveRaster) != true
                 clearActiveStrokeState()
                 shapeStart = null
                 shapeEnd = null
-                rebuildAllLayers()
+                // A finger-down is kept as an overlay until it is known to be drawing.
+                // Therefore the common two-finger navigation transition has not touched
+                // the tile surfaces and must not rebuild the whole document. Rebuilding
+                // here made every layer briefly disappear on real tablets.
+                if (strokeHadRasterPreview) rebuildAllLayers()
                 parent?.requestDisallowInterceptTouchEvent(false)
             }
             hoverVisible = false
@@ -1488,7 +1496,15 @@ class DrawingView(context: Context) : View(context) {
                 if (!isInsideDocument) return true
                 when (eventTool) {
                     DrawingTool.EYEDROPPER -> sampleColor(current[0], current[1])
-                    DrawingTool.BRUSH, DrawingTool.ERASER -> beginStroke(eventTool, current[0], current[1], pressure, tilt, event.eventTime)
+                    DrawingTool.BRUSH, DrawingTool.ERASER -> beginStroke(
+                        drawingTool = eventTool,
+                        x = current[0],
+                        y = current[1],
+                        pressure = pressure,
+                        tilt = tilt,
+                        time = event.eventTime,
+                        deferUntilCommit = !stylusPresent,
+                    )
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE, DrawingTool.GRADIENT -> {
                         shapeStart = StrokePoint(current[0], current[1], pressure, tilt, event.eventTime)
                         shapeEnd = shapeStart
@@ -1657,6 +1673,7 @@ class DrawingView(context: Context) : View(context) {
         activeStrokePoints = null
         activeInputTool = null
         activeStrokeSettings = null
+        activeStrokeDefersRaster = false
         activeRenderedPointCount = 0
         strokeFramePosted = false
         deferredStrokeOverlay.invalidateSelf()
@@ -1669,12 +1686,14 @@ class DrawingView(context: Context) : View(context) {
         pressure: Float,
         tilt: Float,
         time: Long,
+        deferUntilCommit: Boolean = false,
     ) {
         val settings = brushSettings
         val points = mutableListOf(StrokePoint(x, y, pressure, tilt, time))
         activeStrokePoints = points
         activeInputTool = drawingTool
         activeStrokeSettings = settings
+        activeStrokeDefersRaster = deferUntilCommit
         activeRenderedPointCount = 1
         val layer = activeLayer() ?: run {
             clearActiveStrokeState()
@@ -1685,8 +1704,10 @@ class DrawingView(context: Context) : View(context) {
             onEngineMessage?.invoke("Desactiva Bloquear alfa para usar el borrador en esta capa.")
             return
         }
-        if (shouldDeferActiveRaster(settings)) {
-            if (!hasCompatiblePlatformPreview(settings)) deferredStrokeOverlay.invalidateSelf()
+        if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
+            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+                deferredStrokeOverlay.invalidateSelf()
+            }
             return
         }
         val point = points.first()
@@ -1726,8 +1747,10 @@ class DrawingView(context: Context) : View(context) {
         val distance = hypot(x - previous.x, y - previous.y)
         if (distance < minimumInputDistance(settings)) return
         points += StrokePoint(x, y, pressure, tilt, time)
-        if (shouldDeferActiveRaster(settings)) {
-            if (!hasCompatiblePlatformPreview(settings)) deferredStrokeOverlay.invalidateSelf()
+        if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
+            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+                deferredStrokeOverlay.invalidateSelf()
+            }
         } else {
             scheduleActiveStrokeRender()
         }
@@ -1740,7 +1763,7 @@ class DrawingView(context: Context) : View(context) {
     private fun drawDeferredStrokePreview(canvas: Canvas) {
         val points = activeStrokePoints ?: return
         val settings = activeStrokeSettings ?: return
-        if (!shouldDeferActiveRaster(settings) || points.isEmpty()) return
+        if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return
         val drawingTool = activeInputTool ?: tool
         val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
@@ -1840,7 +1863,7 @@ class DrawingView(context: Context) : View(context) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
         val settings = activeStrokeSettings ?: brushSettings
-        val deferredRaster = shouldDeferActiveRaster(settings)
+        val deferredRaster = activeStrokeDefersRaster || shouldDeferActiveRaster(settings)
         if (!deferredRaster) renderActiveStrokePending(Int.MAX_VALUE)
         val completedPoints = points.toList()
         clearActiveStrokeState()
@@ -4397,7 +4420,7 @@ class DrawingView(context: Context) : View(context) {
 
     private companion object {
         const val MAX_FLOOD_FILL_PIXELS = 12_000_000L
-        const val MAX_ORA_LAYER_PIXELS = 24_000_000L
+        const val MAX_ORA_LAYER_PIXELS = 40_000_000L
         const val ENGINE_STATUS_INTERVAL_MS = 650L
         const val MAX_STAMPS_PER_SEGMENT = 48
         const val MAX_STROKE_SEGMENTS_PER_FRAME = 24

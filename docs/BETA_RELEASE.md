@@ -1,49 +1,60 @@
-# Canvas Studio 2.0.0 beta 01
+# Canvas Studio 2.1.0
 
-Esta entrega cierra la base técnica de la beta para tablets Android.
+Release candidate estable para tablets Android de `600dp` o más.
 
-## Estabilidad y recuperación
+## Estabilidad
 
-- Guardado incremental de tiles con metadata transaccional.
-- Recuperación automática desde archivos temporales o respaldo.
-- Guardado al detener o cerrar el editor.
-- Hasta tres versiones locales completas por proyecto, separadas por al menos 15 minutos.
-- Restauración atómica disponible en `ProjectVersionStore`.
+- Renderer raster disperso en tiles de `512 × 512 px`.
+- Autoguardado incremental, metadata transaccional y recuperación desde respaldo.
+- Tres versiones locales por proyecto.
+- Preview AndroidX Ink reservado al stylus; el toque usa un overlay diferido para que
+  un segundo dedo pueda iniciar navegación sin reconstruir ni vaciar el lienzo.
+- Retención verificada con trazos largos, gruesos, texturizados y once familias de pincel.
 
-Las versiones locales viven en el almacenamiento privado de la aplicación. Al eliminar
-un proyecto también se eliminan sus versiones.
+## Tamaños y memoria
 
-## Experiencia de tablet
+Los lienzos nuevos se ajustan al heap comunicado por Android:
 
-- Requisito de actividad `smallestWidthDp=600`.
-- Onboarding inicial con gestos, stylus y guardado.
-- Ayuda rápida contextual desde el menú del editor.
-- Perfiles de atajos por letras o fila numérica.
-- Identidad, launcher, splash y logo interno definitivos.
-- Contraste del logo verificado en Samsung Galaxy Tab S8.
+| Heap de la app | Máximo recomendado |
+|---|---:|
+| 384 MiB o más | 40 Mpx |
+| 256–383 MiB | 26 Mpx |
+| Menos de 256 MiB | 12 Mpx |
 
-## Backup
+El máximo por lado para documentos nuevos es `8.192 px`. Los proyectos históricos de
+hasta 64 Mpx continúan siendo legibles. El diálogo de creación informa MP, memoria RGBA,
+tiles y nivel de carga. PNG, PSD compuesto y OpenRaster rechazan de forma controlada una
+exportación que no quepa en memoria.
 
-Los proyectos raster y sus versiones se excluyen del backup en nube de Android porque
-pueden superar la cuota y producir copias parciales. La transferencia directa entre
-dispositivos puede incluirlos. Para una copia portable, exporta PNG u OpenRaster.
+## Certificación
 
-## Pruebas verificadas
+- Android Lint: sin errores.
+- 28 pruebas instrumentadas.
+- 20 ciclos consecutivos en Samsung Galaxy Tab S8 (`SM-X700`).
+- 560 ejecuciones de prueba.
+- 16.140 verificaciones de retención de trazos.
+- Regresión de transición de uno a dos dedos.
+- Exportación compuesta de un documento 8K con seis capas dispersas.
+- APK debug instalado y probado en hardware real.
 
-- Lint Android sin errores.
-- Ocho pruebas instrumentadas.
-- 20 ciclos consecutivos en Galaxy Tab S8.
-- 4.000 trazos gruesos persistidos entre los ciclos.
-- Recuperación de metadata, versiones locales y perfiles de teclado.
+El reporte de la ejecución local se escribe en
+`build/reports/phase8-certification/latest.json`.
 
-## Firma de lanzamiento
+## Firma y artefactos
 
-La configuración lee `keystore.properties` cuando está presente. Copia
-`keystore.properties.example`, completa la ruta y credenciales y conserva tanto el
-archivo como el keystore fuera de Git.
+La firma se configura fuera del repositorio mediante `keystore.properties`. El archivo y
+el keystore nunca deben versionarse.
 
 ```powershell
-gradlew.bat assembleRelease bundleRelease
+.\gradlew.bat assembleRelease bundleRelease
 ```
 
-Sin `keystore.properties`, Gradle genera artefactos release sin firma para inspección.
+Artefactos:
+
+- `app/build/outputs/apk/release/app-release.apk`
+- `app/build/outputs/bundle/release/app-release.aab`
+
+## Antes de publicar
+
+La publicación en Play Store todavía requiere decisiones del propietario: licencia,
+política de privacidad, ficha, clasificación de contenido y distribución geográfica.

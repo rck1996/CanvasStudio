@@ -2,19 +2,54 @@ package com.orbyte.canvasstudio.model
 
 import androidx.compose.ui.graphics.Color
 import kotlin.math.sqrt
+import kotlin.math.ceil
 
 
 const val MAX_CANVAS_PIXELS: Long = 64_000_000L
+const val MAX_NEW_CANVAS_PIXELS: Long = 40_000_000L
+const val MAX_NEW_CANVAS_DIMENSION: Int = 8192
 
-fun constrainCanvasSize(width: Int, height: Int): Pair<Int, Int> {
-    val safeWidth = width.coerceIn(256, 16384)
-    val safeHeight = height.coerceIn(256, 16384)
+fun recommendedNewCanvasPixels(memoryClassMb: Int): Long = when {
+    memoryClassMb >= 384 -> MAX_NEW_CANVAS_PIXELS
+    memoryClassMb >= 256 -> 26_000_000L
+    else -> 12_000_000L
+}
+
+fun constrainCanvasSize(
+    width: Int,
+    height: Int,
+    maxPixels: Long = MAX_CANVAS_PIXELS,
+    maxDimension: Int = 16384,
+): Pair<Int, Int> {
+    val safeWidth = width.coerceIn(256, maxDimension)
+    val safeHeight = height.coerceIn(256, maxDimension)
     val pixels = safeWidth.toLong() * safeHeight.toLong()
-    if (pixels <= MAX_CANVAS_PIXELS) return safeWidth to safeHeight
+    if (pixels <= maxPixels) return safeWidth to safeHeight
 
-    val scale = sqrt(MAX_CANVAS_PIXELS.toDouble() / pixels.toDouble())
+    val scale = sqrt(maxPixels.toDouble() / pixels.toDouble())
     return (safeWidth * scale).toInt().coerceAtLeast(256) to
         (safeHeight * scale).toInt().coerceAtLeast(256)
+}
+
+data class CanvasFootprint(
+    val megapixels: Double,
+    val flattenedRgbaMiB: Int,
+    val tileCount: Int,
+    val level: String,
+)
+
+fun estimateCanvasFootprint(width: Int, height: Int): CanvasFootprint {
+    val pixels = width.coerceAtLeast(1).toLong() * height.coerceAtLeast(1).toLong()
+    val megapixels = pixels / 1_000_000.0
+    val rgbaMiB = ceil(pixels * 4.0 / (1024.0 * 1024.0)).toInt()
+    val columns = ceil(width.coerceAtLeast(1) / 512.0).toInt()
+    val rows = ceil(height.coerceAtLeast(1) / 512.0).toInt()
+    val level = when {
+        pixels <= 16_000_000L -> "Cómodo"
+        pixels <= 32_000_000L -> "Grande"
+        else -> "Exigente"
+    }
+    return CanvasFootprint(megapixels, rgbaMiB, columns * rows, level)
 }
 
 data class ProjectCard(

@@ -1,5 +1,6 @@
 package com.orbyte.canvasstudio.ui.screens
 
+import android.app.ActivityManager
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -75,6 +76,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -88,12 +93,15 @@ import com.orbyte.canvasstudio.drawing.ShortcutPreferences
 import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
 import com.orbyte.canvasstudio.model.EditorDocument
+import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.canvasPresets
 import com.orbyte.canvasstudio.model.constrainCanvasSize
+import com.orbyte.canvasstudio.model.estimateCanvasFootprint
+import com.orbyte.canvasstudio.model.recommendedNewCanvasPixels
 import kotlinx.coroutines.delay
 import java.io.File
 import kotlin.math.min
@@ -401,7 +409,14 @@ private fun GalleryProjectCard(
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
     Surface(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription =
+                    "Abrir proyecto ${project.title}, ${project.width} por ${project.height} píxeles"
+                role = Role.Button
+            }
+            .clickable(onClick = onClick),
         color = StudioPalette.Surface,
         shape = RoundedCornerShape(16.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -426,7 +441,11 @@ private fun GalleryProjectCard(
                 }
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Outlined.MoreVert, "Opciones del proyecto", tint = StudioPalette.TextMuted)
+                        Icon(
+                            Icons.Outlined.MoreVert,
+                            "Opciones de ${project.title}",
+                            tint = StudioPalette.TextMuted,
+                        )
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -607,11 +626,32 @@ fun NewCanvasDialog(
     onDismiss: () -> Unit,
     onCreate: (EditorDocument) -> Unit,
 ) {
-    var selectedPreset by remember { mutableStateOf(canvasPresets[1]) }
+    val context = LocalContext.current
+    val memoryClassMb = remember {
+        context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 256
+    }
+    val maxCanvasPixels = remember(memoryClassMb) { recommendedNewCanvasPixels(memoryClassMb) }
+    val availablePresets = remember(maxCanvasPixels) {
+        canvasPresets.filter { it.width.toLong() * it.height <= maxCanvasPixels }
+    }
+    var selectedPreset by remember(maxCanvasPixels) {
+        mutableStateOf(
+            availablePresets.firstOrNull { it.title == "Ilustración" }
+                ?: availablePresets.first(),
+        )
+    }
     var width by remember { mutableIntStateOf(selectedPreset.width) }
     var height by remember { mutableIntStateOf(selectedPreset.height) }
     var dpi by remember { mutableIntStateOf(selectedPreset.dpi) }
     var title by remember { mutableStateOf("Ilustración sin título") }
+    val constrainedSize = constrainCanvasSize(
+        width = width,
+        height = height,
+        maxPixels = maxCanvasPixels,
+        maxDimension = MAX_NEW_CANVAS_DIMENSION,
+    )
+    val footprint = estimateCanvasFootprint(constrainedSize.first, constrainedSize.second)
+    val dimensionsAdjusted = constrainedSize != (width to height)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -657,7 +697,7 @@ fun NewCanvasDialog(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            canvasPresets.forEach { preset ->
+                            availablePresets.forEach { preset ->
                                 PresetCard(preset, selected = preset == selectedPreset) {
                                     selectedPreset = preset
                                     width = preset.width
@@ -683,7 +723,22 @@ fun NewCanvasDialog(
                         }
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Protección de memoria activa: los lienzos extremos se ajustan a un máximo de 18 MP.",
+                            buildString {
+                                append("%.1f MP · %d MiB RGBA · %d tiles · %s".format(
+                                    footprint.megapixels,
+                                    footprint.flattenedRgbaMiB,
+                                    footprint.tileCount,
+                                    footprint.level,
+                                ))
+                                if (dimensionsAdjusted) {
+                                    append(" · se creará en ${constrainedSize.first} × ${constrainedSize.second}")
+                                }
+                            },
+                            color = if (dimensionsAdjusted) StudioPalette.Warning else StudioPalette.TextMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "La memoria de edición permanece acotada por tiles; el peso en disco depende de cuánto se dibuje y de la compresión.",
                             color = StudioPalette.TextMuted,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -706,7 +761,7 @@ fun NewCanvasDialog(
                         Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = {
-                                val (safeWidth, safeHeight) = constrainCanvasSize(width, height)
+                                val (safeWidth, safeHeight) = constrainedSize
                                 onCreate(
                                     EditorDocument(
                                         title = title.ifBlank { "Sin título" },

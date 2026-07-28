@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0
+
+- corregido el parpadeo completo del dibujo al pasar de un dedo a navegación con dos dedos;
+- los trazos táctiles se mantienen en overlay hasta confirmar el gesto y AndroidX Ink queda reservado al stylus;
+- política de lienzos nuevos adaptada al heap de la tablet, con máximo de 40 Mpx y 8.192 px por lado;
+- estimación previa de megapíxeles, RGBA, tiles y nivel de carga en el diálogo de creación;
+- exportaciones PSD y OpenRaster alineadas con el máximo seguro de 40 Mpx;
+- regresiones automáticas de multitouch y exportación 8K;
+- suite ampliada a 28 pruebas y certificada 20 veces en Galaxy Tab S8;
+- workflow de GitHub Actions para lint, APK de prueba, APK release y AAB;
+- dependencias AndroidX compatibles actualizadas y versión estable `2.1.0`.
+
 ## 2.1.0-beta02
 
 - preview de material ampliado y reactivo a todos los parámetros relevantes del pincel;

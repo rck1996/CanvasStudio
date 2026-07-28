@@ -17,7 +17,7 @@ import java.io.OutputStream
 object BasicPsdCodec {
     private const val SIGNATURE = 0x38425053 // 8BPS
     private const val COLOR_MODE_RGB = 3
-    private const val MAX_PIXELS = 32_000_000L
+    private const val MAX_PIXELS = 40_000_000L
 
     fun write(bitmap: Bitmap, output: OutputStream) {
         require(bitmap.width.toLong() * bitmap.height <= MAX_PIXELS) {

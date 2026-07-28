@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.1.0-beta02
+
+- preview de material ampliado y reactivo a todos los parámetros relevantes del pincel;
+- biblioteca alineada al mockup con panel de tres columnas y pestañas General/Dinámicas;
+- curva gráfica de presión visible y actualizada en tiempo real;
+- importación de puntas bitmap con normalización automática a máscara alfa;
+- puntas bitmap incluidas de forma portable en la importación/exportación JSON;
+- caché acotada de puntas para mantener estable el rendimiento;
+- 25 pruebas instrumentadas aprobadas en una Samsung Galaxy Tab S8.
+
+## 2.1.0-beta01
+
+- selección múltiple de capas con agrupación, movimiento y eliminación conjunta;
+- grupos anidados persistentes y jerarquía colapsable;
+- guías arrastrables desde las reglas, persistentes por documento;
+- ocho pinceles nuevos y cinco modos de fusión modernos;
+- intercambio PSD básico del compuesto RGBA;
+- propiedades de capa colapsables y selección visual más clara;
+- atajos de guardar, rehacer, modo lienzo y restablecer vista;
+- prueba automática de ida y vuelta PSD aprobada en una Galaxy Tab S8.
+
 ## 2.0.0-beta06
 
 - corregida la pérdida real de trazos antiguos al finalizar un lápiz HB modificado, grueso y largo;

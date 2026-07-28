@@ -4,8 +4,8 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Beta para tablets / fase 6
-> **Versión incluida en este repositorio:** `2.0.0-beta06`
+> **Estado del proyecto:** Feature complete para tablets / fase 7
+> **Versión incluida en este repositorio:** `2.1.0-beta02`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -19,7 +19,9 @@ Las siguientes capturas fueron obtenidas de la variante de depuración ejecutada
 
 ![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
 
-![Biblioteca de pinceles beta05 con preview reactivo a 168 px en una Galaxy Tab S8](docs/images/brush-library-beta05-tab-s8.png)
+![Biblioteca de pinceles 2.1 con preview reactivo a 135 px en una Galaxy Tab S8](docs/canvasstudio-library-reactive.png)
+
+![Dinámicas y curva gráfica de presión en una Galaxy Tab S8](docs/canvasstudio-library-dynamics.png)
 
 ---
 
@@ -286,7 +288,7 @@ Canvas Studio incluye un motor configurable con 22 presets, agrupados por materi
 
 La configuración actual puede guardarse con un nombre personalizado. Los presets personalizados se almacenan mediante `SharedPreferences` y se conservan entre sesiones.
 
-La biblioteca permite marcar favoritos, consultar recientes, duplicar cualquier preset y renombrar o eliminar los personalizados. También importa y exporta colecciones en el formato JSON versionado de Canvas Studio. El límite actual es de 80 pinceles personalizados; las puntas y texturas bitmap externas siguen fuera del alcance de esta beta.
+La biblioteca permite marcar favoritos, consultar recientes, duplicar cualquier preset y renombrar o eliminar los personalizados. También importa y exporta colecciones en el formato JSON versionado de Canvas Studio. El límite actual es de 80 pinceles personalizados. Las puntas bitmap se normalizan a una máscara alfa de hasta 256 px, se conservan en una caché acotada y viajan embebidas dentro de la biblioteca JSON.
 
 ### Procesamiento de trazos
 
@@ -1140,13 +1142,16 @@ Comprueba:
 - matriz automática de 539 trazos gruesos en 11 familias: completado;
 - regresión de 64 trazos HB modificados, gruesos y largos con retención por tesela: completado.
 
-### Siguiente etapa: fase 7.0 estable
+### Fase 7 — feature complete
 
-- pulido final de distribución y publicación;
-- grupos anidados y selección múltiple de capas;
-- reglas arrastrables;
-- importación/exportación PSD básica;
-- mayor precisión de modos de fusión y gestión de color.
+- selección múltiple y grupos anidados: completado en 7.1;
+- reglas y guías arrastrables: completado en 7.1;
+- importación/exportación PSD compuesto: completado en 7.1;
+- 30 pinceles y 12 modos de fusión: completado en 7.1;
+- menús de propiedades y grupos colapsables: completado en 7.1;
+- puntas bitmap portables y curvas gráficas reactivas: completado en 7.2;
+- preview de material y editor General/Dinámicas alineados al mockup: completado en 7.2;
+- pulido final de distribución, certificación y publicación: fase 8.
 
 ### Fase 5 — Beta publicable
 

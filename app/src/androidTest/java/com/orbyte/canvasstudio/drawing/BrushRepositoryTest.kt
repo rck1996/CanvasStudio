@@ -1,5 +1,9 @@
 package com.orbyte.canvasstudio.drawing
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -46,6 +50,39 @@ class BrushRepositoryTest {
         assertTrue(imported.all { it.id.startsWith("custom-") })
         assertTrue(imported.all { it.category == "Personalizados" })
         assertFalse(imported.map { it.id }.distinct().size != imported.size)
+    }
+
+    @Test
+    fun importedBitmapTipBecomesACompactAlphaMask() {
+        val source = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(Color.WHITE)
+            for (y in 80 until 120) {
+                for (x in 180 until 220) setPixel(x, y, Color.BLACK)
+            }
+        }
+        val input = java.io.File(context.cacheDir, "brush-tip-test.png")
+        input.outputStream().use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        source.recycle()
+
+        val importedPath = BrushRepository.importTipAsset(context, Uri.fromFile(input))
+        val imported = BitmapFactory.decodeFile(importedPath)
+        var roundTripPath: String? = null
+        try {
+            assertTrue(imported.width <= 256)
+            assertTrue(imported.height <= 256)
+            assertEquals(0, Color.alpha(imported.getPixel(0, 0)))
+            assertEquals(255, Color.alpha(imported.getPixel(imported.width / 2, imported.height / 2)))
+            val exported = BrushRepository.exportJsonWithAssets(
+                listOf(premiumBrushes.first().copy(tipAssetPath = importedPath)),
+            )
+            roundTripPath = BrushRepository.importJsonWithAssets(context, exported).single().tipAssetPath
+            assertTrue(roundTripPath?.let { java.io.File(it) }?.isFile == true)
+        } finally {
+            imported.recycle()
+            input.delete()
+            java.io.File(importedPath).delete()
+            roundTripPath?.let { java.io.File(it) }?.delete()
+        }
     }
 
     @Test(expected = IllegalArgumentException::class)

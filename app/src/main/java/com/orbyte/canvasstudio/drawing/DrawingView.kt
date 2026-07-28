@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BlendMode
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
@@ -13,6 +14,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
@@ -29,6 +31,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
 import java.util.Properties
+import java.util.LinkedHashMap
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -75,6 +78,7 @@ class DrawingView(context: Context) : View(context) {
         var visible: Boolean = true,
         var opacity: Float = 1f,
         var collapsed: Boolean = false,
+        var parentGroupId: String? = null,
     )
 
     private enum class HistoryTarget { CONTENT, MASK }
@@ -109,6 +113,13 @@ class DrawingView(context: Context) : View(context) {
         strokeJoin = Paint.Join.ROUND
     }
     private val clearXfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    private val tipBitmapCache = object : LinkedHashMap<String, Bitmap>(8, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
+            val remove = size > 8
+            if (remove) eldest?.value?.recycle()
+            return remove
+        }
+    }
     private var cachedMaskFilterKey: Int = Int.MIN_VALUE
     private var cachedMaskFilter: BlurMaskFilter? = null
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -186,6 +197,7 @@ class DrawingView(context: Context) : View(context) {
     private val layers = mutableListOf<LayerData>()
     private val layerGroups = mutableListOf<LayerGroupData>()
     private var activeLayerId: String = ""
+    private val selectedLayerIds = linkedSetOf<String>()
     private val undoStack = mutableListOf<HistoryEntry>()
     private val redoStack = mutableListOf<HistoryEntry>()
 
@@ -206,6 +218,10 @@ class DrawingView(context: Context) : View(context) {
     private var gridVisible = false
     private var rulersVisible = false
     private var rulersUseCentimeters = false
+    private val verticalRulerGuides = mutableListOf<Float>()
+    private val horizontalRulerGuides = mutableListOf<Float>()
+    private var draggedRulerGuideAxis = 0
+    private var draggedRulerGuideIndex = -1
     private var documentDpi = 300
     private var angleSnappingEnabled = false
     private var perspectiveSnappingEnabled = false
@@ -269,6 +285,8 @@ class DrawingView(context: Context) : View(context) {
     var onRotationChanged: ((Int) -> Unit)? = null
     var onToolShortcut: ((DrawingTool) -> Unit)? = null
     var onBrushSettingsShortcut: ((BrushSettings) -> Unit)? = null
+    var onSaveShortcut: (() -> Unit)? = null
+    var onTogglePanelsShortcut: (() -> Unit)? = null
     var onProjectSaved: ((Boolean) -> Unit)? = null
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
@@ -308,7 +326,7 @@ class DrawingView(context: Context) : View(context) {
         base.name = "Arte base"
         val paintLayer = createLayer("Pinceladas")
         layers += paintLayer
-        activeLayerId = paintLayer.id
+        selectOnly(paintLayer.id)
         updateCacheBudgets()
         notifyLayers()
 
@@ -484,6 +502,9 @@ class DrawingView(context: Context) : View(context) {
         sessionTileRoot().deleteRecursively()
         layers.clear()
         layerGroups.clear()
+        selectedLayerIds.clear()
+        verticalRulerGuides.clear()
+        horizontalRulerGuides.clear()
         undoStack.clear()
         clearRedoHistory()
         documentWidth = width
@@ -497,7 +518,7 @@ class DrawingView(context: Context) : View(context) {
         draggedPerspectivePoint = 0
         val layer = createLayer("Capa 1")
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         fittedOnce = false
         updateCacheBudgets()
         notifyLayers()
@@ -766,6 +787,14 @@ class DrawingView(context: Context) : View(context) {
             if (event.isShiftPressed) redo() else undo()
             return true
         }
+        if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_Y) {
+            redo()
+            return true
+        }
+        if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_S) {
+            onSaveShortcut?.invoke()
+            return true
+        }
         if (event.isCtrlPressed && keyCode == KeyEvent.KEYCODE_A) {
             selectAll()
             return true
@@ -792,6 +821,14 @@ class DrawingView(context: Context) : View(context) {
         }
         if (keyCode == KeyEvent.KEYCODE_ESCAPE) {
             deselect()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_TAB) {
+            onTogglePanelsShortcut?.invoke()
+            return true
+        }
+        if (keyCode == KeyEvent.KEYCODE_0) {
+            resetView()
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
@@ -858,11 +895,23 @@ class DrawingView(context: Context) : View(context) {
     private fun groupFor(layer: LayerData): LayerGroupData? =
         layer.groupId?.let { groupId -> layerGroups.firstOrNull { it.id == groupId } }
 
+    private fun groupAncestors(groupId: String?): Sequence<LayerGroupData> = sequence {
+        val visited = mutableSetOf<String>()
+        var currentId = groupId
+        while (currentId != null && visited.add(currentId)) {
+            val group = layerGroups.firstOrNull { it.id == currentId } ?: break
+            yield(group)
+            currentId = group.parentGroupId
+        }
+    }
+
     private fun isLayerEffectivelyVisible(layer: LayerData): Boolean =
-        layer.visible && (groupFor(layer)?.visible != false)
+        layer.visible && groupAncestors(layer.groupId).all { it.visible }
 
     private fun effectiveLayerOpacity(layer: LayerData): Float =
-        (layer.opacity * (groupFor(layer)?.opacity ?: 1f)).coerceIn(0f, 1f)
+        groupAncestors(layer.groupId)
+            .fold(layer.opacity) { opacity, group -> opacity * group.opacity }
+            .coerceIn(0f, 1f)
 
     private fun applyRasterMaskVisible(canvas: Canvas, layer: LayerData, bounds: RectF) {
         if (!layer.maskEnabled) return
@@ -1173,6 +1222,93 @@ class DrawingView(context: Context) : View(context) {
             }
             y += spacing
         }
+        rulerPaint.strokeWidth = 1.25f / scale
+        verticalRulerGuides.forEach { guideX ->
+            canvas.drawLine(guideX, 0f, guideX, documentHeight.toFloat(), rulerPaint)
+        }
+        horizontalRulerGuides.forEach { guideY ->
+            canvas.drawLine(0f, guideY, documentWidth.toFloat(), guideY, rulerPaint)
+        }
+    }
+
+    private fun handleRulerGuide(event: MotionEvent): Boolean {
+        if (!rulersVisible) return false
+        val point = mapToDocument(event.x, event.y)
+        val x = point[0]
+        val y = point[1]
+        val scale = currentScale.coerceAtLeast(.1f)
+        val rulerBand = 28f / scale
+        val hitRadius = 18f / scale
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val verticalIndex = verticalRulerGuides.indices.minByOrNull {
+                    abs(verticalRulerGuides[it] - x)
+                }?.takeIf { abs(verticalRulerGuides[it] - x) <= hitRadius }
+                val horizontalIndex = horizontalRulerGuides.indices.minByOrNull {
+                    abs(horizontalRulerGuides[it] - y)
+                }?.takeIf { abs(horizontalRulerGuides[it] - y) <= hitRadius }
+                when {
+                    verticalIndex != null -> {
+                        draggedRulerGuideAxis = 1
+                        draggedRulerGuideIndex = verticalIndex
+                    }
+                    horizontalIndex != null -> {
+                        draggedRulerGuideAxis = 2
+                        draggedRulerGuideIndex = horizontalIndex
+                    }
+                    y in 0f..rulerBand && x >= rulerBand -> {
+                        verticalRulerGuides += x.coerceIn(0f, documentWidth.toFloat())
+                        draggedRulerGuideAxis = 1
+                        draggedRulerGuideIndex = verticalRulerGuides.lastIndex
+                    }
+                    x in 0f..rulerBand && y >= rulerBand -> {
+                        horizontalRulerGuides += y.coerceIn(0f, documentHeight.toFloat())
+                        draggedRulerGuideAxis = 2
+                        draggedRulerGuideIndex = horizontalRulerGuides.lastIndex
+                    }
+                    else -> return false
+                }
+                parent?.requestDisallowInterceptTouchEvent(true)
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                when (draggedRulerGuideAxis) {
+                    1 -> if (draggedRulerGuideIndex in verticalRulerGuides.indices) {
+                        verticalRulerGuides[draggedRulerGuideIndex] = x
+                    }
+                    2 -> if (draggedRulerGuideIndex in horizontalRulerGuides.indices) {
+                        horizontalRulerGuides[draggedRulerGuideIndex] = y
+                    }
+                    else -> return false
+                }
+                invalidate()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (draggedRulerGuideAxis == 0) return false
+                if (draggedRulerGuideAxis == 1 &&
+                    verticalRulerGuides.getOrNull(draggedRulerGuideIndex)?.let {
+                        it !in 0f..documentWidth.toFloat()
+                    } == true
+                ) {
+                    verticalRulerGuides.removeAt(draggedRulerGuideIndex)
+                } else if (draggedRulerGuideAxis == 2 &&
+                    horizontalRulerGuides.getOrNull(draggedRulerGuideIndex)?.let {
+                        it !in 0f..documentHeight.toFloat()
+                    } == true
+                ) {
+                    horizontalRulerGuides.removeAt(draggedRulerGuideIndex)
+                }
+                draggedRulerGuideAxis = 0
+                draggedRulerGuideIndex = -1
+                parent?.requestDisallowInterceptTouchEvent(false)
+                onDocumentChanged?.invoke()
+                invalidate()
+                return true
+            }
+        }
+        return draggedRulerGuideAxis != 0
     }
 
     private fun drawShapePreview(canvas: Canvas) {
@@ -1289,6 +1425,7 @@ class DrawingView(context: Context) : View(context) {
             return true
         }
         if (handlePerspectiveEdit(event)) return true
+        if (handleRulerGuide(event)) return true
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
@@ -2614,6 +2751,34 @@ class DrawingView(context: Context) : View(context) {
         val scatterRadius = radius * settings.scatter.coerceIn(0f, 1f)
         val stampX = x + noiseX * scatterRadius
         val stampY = y + noiseY * scatterRadius
+        val customTip = settings.tipAssetPath?.let(::loadTipBitmap)
+        if (customTip != null) {
+            canvas.save()
+            canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+            val aspect = customTip.width.toFloat() / customTip.height.coerceAtLeast(1)
+            val halfWidth = if (aspect >= 1f) radius else radius * aspect
+            val halfHeight = if (aspect >= 1f) radius / aspect else radius
+            strokePaint.colorFilter = if (drawingTool == DrawingTool.ERASER) {
+                null
+            } else {
+                PorterDuffColorFilter(settings.color, PorterDuff.Mode.SRC_IN)
+            }
+            canvas.drawBitmap(
+                customTip,
+                null,
+                RectF(
+                    stampX - halfWidth,
+                    stampY - halfHeight,
+                    stampX + halfWidth,
+                    stampY + halfHeight,
+                ),
+                strokePaint,
+            )
+            strokePaint.colorFilter = null
+            canvas.restore()
+            strokePaint.style = Paint.Style.STROKE
+            return
+        }
 
         when (settings.kind) {
             BrushKind.CHARCOAL, BrushKind.CHALK -> {
@@ -2758,6 +2923,15 @@ class DrawingView(context: Context) : View(context) {
             else -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
         }
         strokePaint.style = Paint.Style.STROKE
+    }
+
+    private fun loadTipBitmap(path: String): Bitmap? {
+        tipBitmapCache[path]?.takeUnless(Bitmap::isRecycled)?.let { return it }
+        val file = File(path)
+        if (!file.isFile || file.length() > 2L * 1024L * 1024L) return null
+        val bitmap = BitmapFactory.decodeFile(path) ?: return null
+        tipBitmapCache[path] = bitmap
+        return bitmap
     }
 
     private fun taperFactor(settings: BrushSettings, progress: Float): Float {
@@ -3017,7 +3191,7 @@ class DrawingView(context: Context) : View(context) {
         val nextNumber = layers.size + 1
         val layer = createLayer("Capa $nextNumber").copy(groupId = activeLayer()?.groupId)
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         updateCacheBudgets()
         notifyLayers()
         updateEngineStatus()
@@ -3057,28 +3231,30 @@ class DrawingView(context: Context) : View(context) {
         markLayerFullyDirty(copy)
         val index = layers.indexOf(source)
         layers.add(index + 1, copy)
-        activeLayerId = copy.id
+        selectOnly(copy.id)
         updateCacheBudgets()
         notifyLayers()
         commitDocumentChange()
     }
 
     fun deleteActiveLayer() {
-        if (layers.size <= 1) return
-        val index = layers.indexOfFirst { it.id == activeLayerId }
-        if (index < 0) return
-        val removed = layers.removeAt(index)
-        (removed.commands + removed.maskCommands).distinctBy { it.id }.forEach(::recycleCommand)
-        removed.surface.recycle()
-        removed.maskSurface?.recycle()
-        removed.baseTileDirectory.parentFile?.deleteRecursively()
-        removed.maskBaseTileDirectory?.parentFile?.deleteRecursively()
-        removed.groupId?.let { groupId ->
-            if (layers.none { it.groupId == groupId }) layerGroups.removeAll { it.id == groupId }
+        val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
+        val removable = layers.filter { it.id in selected }.take((layers.size - 1).coerceAtLeast(0))
+        if (removable.isEmpty()) return
+        val firstIndex = removable.minOf { layers.indexOf(it) }
+        val removedIds = removable.mapTo(mutableSetOf()) { it.id }
+        layers.removeAll { layer -> layer.id in removedIds }
+        removable.forEach { removed ->
+            (removed.commands + removed.maskCommands).distinctBy { it.id }.forEach(::recycleCommand)
+            removed.surface.recycle()
+            removed.maskSurface?.recycle()
+            removed.baseTileDirectory.parentFile?.deleteRecursively()
+            removed.maskBaseTileDirectory?.parentFile?.deleteRecursively()
         }
-        undoStack.removeAll { it.layerId == removed.id }
-        redoStack.removeAll { it.layerId == removed.id }
-        activeLayerId = layers[min(index, layers.lastIndex)].id
+        undoStack.removeAll { it.layerId in removedIds }
+        redoStack.removeAll { it.layerId in removedIds }
+        pruneEmptyGroups()
+        selectOnly(layers[min(firstIndex, layers.lastIndex)].id)
         updateCacheBudgets()
         notifyLayers()
         commitDocumentChange()
@@ -3087,9 +3263,22 @@ class DrawingView(context: Context) : View(context) {
     fun setActiveLayer(id: String) {
         if (layers.any { it.id == id }) {
             layers.filter { it.id != id }.forEach { it.editingMask = false }
-            activeLayerId = id
+            selectOnly(id)
             notifyLayers()
         }
+    }
+
+    fun toggleLayerSelection(id: String) {
+        if (layers.none { it.id == id }) return
+        if (id in selectedLayerIds && selectedLayerIds.size > 1) {
+            selectedLayerIds -= id
+            if (activeLayerId == id) activeLayerId = selectedLayerIds.last()
+        } else {
+            selectedLayerIds += id
+            activeLayerId = id
+            layers.filter { it.id != id }.forEach { it.editingMask = false }
+        }
+        notifyLayers()
     }
 
     fun toggleLayerVisibility(id: String) {
@@ -3134,14 +3323,17 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun createGroupFromActiveLayer() {
-        val layer = activeLayer() ?: return
-        if (layer.groupId != null) {
-            onEngineMessage?.invoke("La capa ya pertenece a un grupo.")
-            return
+        val selected = layers.filter { it.id in selectedLayerIds }.ifEmpty {
+            listOfNotNull(activeLayer())
         }
-        val group = LayerGroupData(name = "Grupo ${layerGroups.size + 1}")
+        if (selected.isEmpty()) return
+        val parentId = selected.map { it.groupId }.distinct().singleOrNull()
+        val group = LayerGroupData(
+            name = "Grupo ${layerGroups.size + 1}",
+            parentGroupId = parentId,
+        )
         layerGroups += group
-        layer.groupId = group.id
+        selected.forEach { it.groupId = group.id }
         notifyLayers()
         onDocumentChanged?.invoke()
     }
@@ -3149,8 +3341,11 @@ class DrawingView(context: Context) : View(context) {
     fun ungroupActiveLayer() {
         val layer = activeLayer() ?: return
         val groupId = layer.groupId ?: return
-        layer.groupId = null
-        if (layers.none { it.groupId == groupId }) layerGroups.removeAll { it.id == groupId }
+        val parentId = layerGroups.firstOrNull { it.id == groupId }?.parentGroupId
+        layers.filter { it.id in selectedLayerIds }.forEach { selected ->
+            if (selected.groupId == groupId) selected.groupId = parentId
+        }
+        pruneEmptyGroups()
         notifyLayers()
         onDocumentChanged?.invoke()
     }
@@ -3229,13 +3424,22 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun moveActiveLayer(up: Boolean) {
-        val index = layers.indexOfFirst { it.id == activeLayerId }
-        if (index < 0) return
-        val target = if (up) index + 1 else index - 1
-        if (target !in layers.indices) return
-        val layer = layers.removeAt(index)
-        layers.add(target, layer)
-        notifyLayers()
+        val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
+        if (up) {
+            for (index in layers.lastIndex - 1 downTo 0) {
+                if (layers[index].id in selected && layers[index + 1].id !in selected) {
+                    val layer = layers.removeAt(index)
+                    layers.add(index + 1, layer)
+                }
+            }
+        } else {
+            for (index in 1..layers.lastIndex) {
+                if (layers[index].id in selected && layers[index - 1].id !in selected) {
+                    val layer = layers.removeAt(index)
+                    layers.add(index - 1, layer)
+                }
+            }
+        }
         commitDocumentChange()
     }
 
@@ -3407,6 +3611,15 @@ class DrawingView(context: Context) : View(context) {
         return output
     }
 
+    fun exportBasicPsd(output: OutputStream) {
+        val bitmap = exportCompositeBitmap(includePaper = false)
+        try {
+            BasicPsdCodec.write(bitmap, output)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private fun renderCompositePreview(maxSize: Int = 720): Bitmap {
         val scale = min(1f, maxSize / max(documentWidth, documentHeight).toFloat())
         val previewWidth = max(1, (documentWidth * scale).toInt())
@@ -3470,7 +3683,7 @@ class DrawingView(context: Context) : View(context) {
         val command = PixelPatchCommand(bitmap = patch, left = left, top = top)
         drawCommand(layer.surface, command)
         layers += layer
-        activeLayerId = layer.id
+        selectOnly(layer.id)
         recordCommands(layer, listOf(command))
         markLayerDirty(layer, commandBounds(command))
         updateCacheBudgets()
@@ -3642,6 +3855,8 @@ class DrawingView(context: Context) : View(context) {
         val savedGuideMode = guideMode
         val savedRulersVisible = rulersVisible
         val savedRulersUseCentimeters = rulersUseCentimeters
+        val savedVerticalRulerGuides = verticalRulerGuides.toList()
+        val savedHorizontalRulerGuides = horizontalRulerGuides.toList()
         val savedAngleSnappingEnabled = angleSnappingEnabled
         val savedPerspectiveSnappingEnabled = perspectiveSnappingEnabled
         val savedPerspectiveEditing = perspectiveEditing
@@ -3762,10 +3977,13 @@ class DrawingView(context: Context) : View(context) {
                             setProperty("group.$index.visible", group.visible.toString())
                             setProperty("group.$index.opacity", group.opacity.toString())
                             setProperty("group.$index.collapsed", group.collapsed.toString())
+                            setProperty("group.$index.parentGroupId", group.parentGroupId.orEmpty())
                         }
                         setProperty("guideMode", savedGuideMode.name)
                         setProperty("rulersVisible", savedRulersVisible.toString())
                         setProperty("rulersUseCentimeters", savedRulersUseCentimeters.toString())
+                        setProperty("rulerGuides.vertical", savedVerticalRulerGuides.joinToString(","))
+                        setProperty("rulerGuides.horizontal", savedHorizontalRulerGuides.joinToString(","))
                         setProperty("angleSnappingEnabled", savedAngleSnappingEnabled.toString())
                         setProperty("perspectiveSnappingEnabled", savedPerspectiveSnappingEnabled.toString())
                         setProperty("perspectiveEditing", savedPerspectiveEditing.toString())
@@ -3865,6 +4083,7 @@ class DrawingView(context: Context) : View(context) {
             }
             layers.clear()
             layerGroups.clear()
+            selectedLayerIds.clear()
 
             val groupCount = properties.getProperty("groupCount", "0").toIntOrNull() ?: 0
             repeat(groupCount) { index ->
@@ -3875,6 +4094,7 @@ class DrawingView(context: Context) : View(context) {
                     opacity = properties.getProperty("group.$index.opacity", "1.0")
                         .toFloatOrNull()?.coerceIn(0f, 1f) ?: 1f,
                     collapsed = properties.getProperty("group.$index.collapsed", "false").toBoolean(),
+                    parentGroupId = properties.getProperty("group.$index.parentGroupId", "").ifBlank { null },
                 )
             }
             guideMode = runCatching {
@@ -3882,6 +4102,14 @@ class DrawingView(context: Context) : View(context) {
             }.getOrDefault(GuideMode.NONE)
             rulersVisible = properties.getProperty("rulersVisible", "false").toBoolean()
             rulersUseCentimeters = properties.getProperty("rulersUseCentimeters", "false").toBoolean()
+            verticalRulerGuides.clear()
+            verticalRulerGuides += properties.getProperty("rulerGuides.vertical", "")
+                .split(',')
+                .mapNotNull { it.toFloatOrNull()?.coerceIn(0f, documentWidth.toFloat()) }
+            horizontalRulerGuides.clear()
+            horizontalRulerGuides += properties.getProperty("rulerGuides.horizontal", "")
+                .split(',')
+                .mapNotNull { it.toFloatOrNull()?.coerceIn(0f, documentHeight.toFloat()) }
             angleSnappingEnabled = properties.getProperty("angleSnappingEnabled", "false").toBoolean()
             perspectiveSnappingEnabled =
                 properties.getProperty("perspectiveSnappingEnabled", "false").toBoolean()
@@ -3990,10 +4218,8 @@ class DrawingView(context: Context) : View(context) {
                 layers += layer
             }
 
-            val validGroupIds = layerGroups.mapTo(mutableSetOf()) { it.id }
-            layers.forEach { layer -> if (layer.groupId !in validGroupIds) layer.groupId = null }
-            layerGroups.removeAll { group -> layers.none { it.groupId == group.id } }
-            activeLayerId = layers.last().id
+            pruneEmptyGroups()
+            selectOnly(layers.last().id)
             undoStack.clear()
             clearRedoHistory()
             updateCacheBudgets()
@@ -4015,14 +4241,38 @@ class DrawingView(context: Context) : View(context) {
 
     private fun configureLayerPaint(layer: LayerData, effectiveOpacity: Float = layer.opacity) {
         layerPaint.alpha = (effectiveOpacity * 255f).toInt().coerceIn(0, 255)
-        layerPaint.xfermode = when (layer.blendMode) {
-            LayerBlendMode.NORMAL -> null
-            LayerBlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
-            LayerBlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
-            LayerBlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
-            LayerBlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
-            LayerBlendMode.DARKEN -> PorterDuffXfermode(PorterDuff.Mode.DARKEN)
-            LayerBlendMode.LIGHTEN -> PorterDuffXfermode(PorterDuff.Mode.LIGHTEN)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            layerPaint.xfermode = null
+            layerPaint.blendMode = when (layer.blendMode) {
+                LayerBlendMode.NORMAL -> null
+                LayerBlendMode.MULTIPLY -> BlendMode.MULTIPLY
+                LayerBlendMode.SCREEN -> BlendMode.SCREEN
+                LayerBlendMode.OVERLAY -> BlendMode.OVERLAY
+                LayerBlendMode.ADD -> BlendMode.PLUS
+                LayerBlendMode.DARKEN -> BlendMode.DARKEN
+                LayerBlendMode.LIGHTEN -> BlendMode.LIGHTEN
+                LayerBlendMode.SOFT_LIGHT -> BlendMode.SOFT_LIGHT
+                LayerBlendMode.HARD_LIGHT -> BlendMode.HARD_LIGHT
+                LayerBlendMode.DIFFERENCE -> BlendMode.DIFFERENCE
+                LayerBlendMode.COLOR_DODGE -> BlendMode.COLOR_DODGE
+                LayerBlendMode.COLOR_BURN -> BlendMode.COLOR_BURN
+            }
+        } else {
+            layerPaint.xfermode = when (layer.blendMode) {
+                LayerBlendMode.NORMAL -> null
+                LayerBlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+                LayerBlendMode.SCREEN -> PorterDuffXfermode(PorterDuff.Mode.SCREEN)
+                LayerBlendMode.OVERLAY -> PorterDuffXfermode(PorterDuff.Mode.OVERLAY)
+                LayerBlendMode.ADD -> PorterDuffXfermode(PorterDuff.Mode.ADD)
+                LayerBlendMode.DARKEN -> PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+                LayerBlendMode.LIGHTEN -> PorterDuffXfermode(PorterDuff.Mode.LIGHTEN)
+                LayerBlendMode.SOFT_LIGHT,
+                LayerBlendMode.HARD_LIGHT,
+                LayerBlendMode.DIFFERENCE,
+                LayerBlendMode.COLOR_DODGE,
+                LayerBlendMode.COLOR_BURN,
+                -> null
+            }
         }
     }
 
@@ -4065,6 +4315,28 @@ class DrawingView(context: Context) : View(context) {
 
     private fun activeLayer(): LayerData? = layers.firstOrNull { it.id == activeLayerId }
 
+    private fun selectOnly(id: String) {
+        activeLayerId = id
+        selectedLayerIds.clear()
+        selectedLayerIds += id
+    }
+
+    private fun pruneEmptyGroups() {
+        var changed: Boolean
+        do {
+            val occupied = layers.mapNotNullTo(mutableSetOf()) { it.groupId }
+            occupied += layerGroups.mapNotNull { it.parentGroupId }
+            changed = layerGroups.removeAll { it.id !in occupied }
+        } while (changed)
+        val valid = layerGroups.mapTo(mutableSetOf()) { it.id }
+        layerGroups.forEach { group ->
+            if (group.parentGroupId !in valid) group.parentGroupId = null
+        }
+        layers.forEach { layer ->
+            if (layer.groupId !in valid) layer.groupId = null
+        }
+    }
+
     private fun notifyLayers() {
         onLayersChanged?.invoke(
             layers.asReversed().map { layer ->
@@ -4077,6 +4349,7 @@ class DrawingView(context: Context) : View(context) {
                     alphaLocked = layer.alphaLocked,
                     clipping = layer.clipping,
                     isActive = layer.id == activeLayerId,
+                    isSelected = layer.id in selectedLayerIds,
                     groupId = layer.groupId,
                     hasMask = layer.maskSurface != null,
                     maskEnabled = layer.maskEnabled,
@@ -4086,6 +4359,7 @@ class DrawingView(context: Context) : View(context) {
         )
         onLayerGroupsChanged?.invoke(
             layerGroups.map { group ->
+                val depth = groupAncestors(group.parentGroupId).count().coerceAtMost(8)
                 LayerGroupUiModel(
                     id = group.id,
                     name = group.name,
@@ -4093,6 +4367,8 @@ class DrawingView(context: Context) : View(context) {
                     opacity = group.opacity,
                     collapsed = group.collapsed,
                     layerCount = layers.count { it.groupId == group.id },
+                    parentGroupId = group.parentGroupId,
+                    depth = depth,
                 )
             },
         )

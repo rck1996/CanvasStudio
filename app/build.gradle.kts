@@ -16,8 +16,8 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "2.0.0-beta06"
+        versionCode = 27
+        versionName = "2.1.0-beta02"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }

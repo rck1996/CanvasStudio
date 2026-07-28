@@ -1,8 +1,15 @@
 package com.orbyte.canvasstudio.drawing
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.net.Uri
+import android.util.Base64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.util.UUID
 
 object BrushRepository {
     private const val PREFERENCES = "canvas_studio_brushes"
@@ -77,11 +84,28 @@ object BrushRepository {
         return updated
     }
 
-    fun exportJson(brushes: List<BrushPreset>): String = JSONObject().apply {
+    fun exportJson(brushes: List<BrushPreset>): String = exportJsonInternal(brushes, embedAssets = false)
+
+    fun exportJsonWithAssets(brushes: List<BrushPreset>): String =
+        exportJsonInternal(brushes, embedAssets = true)
+
+    private fun exportJsonInternal(brushes: List<BrushPreset>, embedAssets: Boolean): String = JSONObject().apply {
         put("format", "CanvasStudioBrushLibrary")
         put("version", EXPORT_VERSION)
         put("brushes", JSONArray().apply {
-            brushes.takeLast(MAX_CUSTOM_BRUSHES).forEach { put(encode(it)) }
+            brushes.takeLast(MAX_CUSTOM_BRUSHES).forEach { brush ->
+                put(
+                    encode(brush).apply {
+                        if (embedAssets) {
+                            brush.tipAssetPath
+                                ?.let(::File)
+                                ?.takeIf { it.isFile && it.length() in 1..MAX_EMBEDDED_TIP_BYTES }
+                                ?.readBytes()
+                                ?.let { bytes -> put("tipAssetPng", Base64.encodeToString(bytes, Base64.NO_WRAP)) }
+                        }
+                    },
+                )
+            }
         })
     }.toString(2)
 
@@ -110,6 +134,66 @@ object BrushRepository {
         throw IllegalArgumentException(error.message ?: "No se pudo importar la biblioteca.", error)
     }
 
+    fun importJsonWithAssets(context: Context, raw: String): List<BrushPreset> {
+        val imported = importJson(raw)
+        val root = JSONObject(raw)
+        val source = root.getJSONArray("brushes")
+        return imported.mapIndexed { index, brush ->
+            val encoded = source.optJSONObject(index)?.optString("tipAssetPng").orEmpty()
+            if (encoded.isBlank()) return@mapIndexed brush.copy(tipAssetPath = null)
+            val bytes = runCatching { Base64.decode(encoded, Base64.DEFAULT) }.getOrNull()
+                ?.takeIf { it.size.toLong() in 1L..MAX_EMBEDDED_TIP_BYTES }
+                ?: return@mapIndexed brush.copy(tipAssetPath = null)
+            val directory = File(context.filesDir, "brush-tips").apply { mkdirs() }
+            val output = File(directory, "${UUID.randomUUID()}.png")
+            output.writeBytes(bytes)
+            brush.copy(tipAssetPath = output.absolutePath)
+        }
+    }
+
+    fun importTipAsset(context: Context, uri: Uri): String {
+        val decoded = context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+            ?: throw IllegalArgumentException("No se pudo leer la imagen de la punta.")
+        require(decoded.width > 0 && decoded.height > 0) { "La imagen de la punta está vacía." }
+        val scale = (256f / maxOf(decoded.width, decoded.height)).coerceAtMost(1f)
+        val width = (decoded.width * scale).toInt().coerceAtLeast(1)
+        val height = (decoded.height * scale).toInt().coerceAtLeast(1)
+        val source = if (width == decoded.width && height == decoded.height) {
+            decoded
+        } else {
+            Bitmap.createScaledBitmap(decoded, width, height, true).also { decoded.recycle() }
+        }
+        val pixels = IntArray(width * height)
+        source.getPixels(pixels, 0, width, 0, 0, width, height)
+        val hasTransparency = pixels.any { Color.alpha(it) < 250 }
+        pixels.indices.forEach { index ->
+            val pixel = pixels[index]
+            val alpha = if (hasTransparency) {
+                Color.alpha(pixel)
+            } else {
+                val luminance = (
+                    Color.red(pixel) * .2126f +
+                        Color.green(pixel) * .7152f +
+                        Color.blue(pixel) * .0722f
+                    ).toInt()
+                255 - luminance
+            }
+            pixels[index] = Color.argb(alpha.coerceIn(0, 255), 255, 255, 255)
+        }
+        source.recycle()
+        val mask = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        mask.setPixels(pixels, 0, width, 0, 0, width, height)
+        val directory = File(context.filesDir, "brush-tips").apply { mkdirs() }
+        val output = File(directory, "${UUID.randomUUID()}.png")
+        output.outputStream().use { stream ->
+            check(mask.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+                "No se pudo guardar la punta."
+            }
+        }
+        mask.recycle()
+        return output.absolutePath
+    }
+
     private fun encode(brush: BrushPreset): JSONObject = JSONObject().apply {
         put("id", brush.id)
         put("name", brush.name)
@@ -131,6 +215,7 @@ object BrushRepository {
         put("scatter", brush.scatter.toDouble())
         put("grain", brush.grain.toDouble())
         put("velocitySize", brush.velocitySize.toDouble())
+        brush.tipAssetPath?.let { put("tipAssetPath", it) }
     }
 
     private fun decode(item: JSONObject): BrushPreset? = runCatching {
@@ -155,6 +240,9 @@ object BrushRepository {
             scatter = item.optDouble("scatter", 0.0).toFloat(),
             grain = item.optDouble("grain", 0.0).toFloat(),
             velocitySize = item.optDouble("velocitySize", 0.0).toFloat(),
+            tipAssetPath = item.optString("tipAssetPath").takeIf(String::isNotBlank),
         )
     }.getOrNull()
+
+    private const val MAX_EMBEDDED_TIP_BYTES = 2L * 1024L * 1024L
 }

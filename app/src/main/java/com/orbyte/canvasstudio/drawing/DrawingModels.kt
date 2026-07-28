@@ -55,6 +55,11 @@ enum class LayerBlendMode {
     ADD,
     DARKEN,
     LIGHTEN,
+    SOFT_LIGHT,
+    HARD_LIGHT,
+    DIFFERENCE,
+    COLOR_DODGE,
+    COLOR_BURN,
 }
 
 enum class BrushKind {
@@ -92,6 +97,7 @@ data class BrushPreset(
     val scatter: Float = 0f,
     val grain: Float = 0f,
     val velocitySize: Float = 0f,
+    val tipAssetPath: String? = null,
 )
 
 data class BrushSettings(
@@ -113,6 +119,7 @@ data class BrushSettings(
     val grain: Float = 0f,
     val velocitySize: Float = 0f,
     val kind: BrushKind = BrushKind.PENCIL,
+    val tipAssetPath: String? = null,
 )
 
 data class StrokePoint(
@@ -197,6 +204,7 @@ data class LayerUiModel(
     val alphaLocked: Boolean,
     val clipping: Boolean,
     val isActive: Boolean,
+    val isSelected: Boolean = isActive,
     val groupId: String? = null,
     val hasMask: Boolean = false,
     val maskEnabled: Boolean = true,
@@ -210,6 +218,8 @@ data class LayerGroupUiModel(
     val opacity: Float,
     val collapsed: Boolean,
     val layerCount: Int,
+    val parentGroupId: String? = null,
+    val depth: Int = 0,
 )
 
 val premiumBrushes = listOf(
@@ -440,4 +450,12 @@ val premiumBrushes = listOf(
     BrushPreset("bristle", "Pincel de cerdas", "Pintura", BrushKind.BRISTLE, 88f, .76f, .62f, .08f, .12f, .64f, .2f, true, true, .84f, .48f, .06f, .06f, .14f, .54f, .06f),
     BrushPreset("granulated-watercolor", "Acuarela granulada", "Acuarela", BrushKind.WATERCOLOR, 104f, .26f, .18f, .075f, .14f, .42f, .32f, true, true, 1.24f, .32f, 0f, .04f, .08f, .74f, 0f),
     BrushPreset("thick-oil", "Óleo espeso", "Óleo", BrushKind.OIL, 92f, .9f, .82f, .07f, .16f, .8f, .26f, true, true, .86f, .24f, .04f, .06f, .06f, .32f, .04f),
+    BrushPreset("pencil-2h", "Lápiz 2H", "Lápices", BrushKind.PENCIL, 9f, .58f, .9f, .055f, .3f, .62f, .3f, true, true, 1.35f, .16f, .1f, .08f, 0f, .08f, .05f),
+    BrushPreset("graphite-shader", "Grafito inclinado", "Lápices", BrushKind.PENCIL, 48f, .48f, .38f, .085f, .1f, .5f, .32f, true, true, .88f, .9f, .04f, .04f, .03f, .48f, .02f),
+    BrushPreset("sumi-ink", "Tinta sumi", "Tinta", BrushKind.INK, 58f, .86f, .72f, .045f, .24f, .88f, .04f, true, true, .72f, .38f, .34f, .26f, .02f, .08f, .2f),
+    BrushPreset("calligraphy-flat", "Caligrafía plana", "Tinta", BrushKind.INK, 46f, 1f, .98f, .035f, .42f, 1f, .14f, true, false, .82f, .62f, .22f, .18f, 0f, 0f, .1f),
+    BrushPreset("pastel-soft", "Pastel suave", "Textura", BrushKind.CHALK, 62f, .54f, .28f, .09f, .08f, .48f, .28f, true, true, 1.05f, .64f, .04f, .04f, .18f, .78f, .02f),
+    BrushPreset("spray-grain", "Spray granulado", "Aerógrafo", BrushKind.AIRBRUSH, 118f, .24f, .16f, .065f, .06f, .42f, .46f, true, true, 1.2f, .08f, 0f, 0f, .48f, .62f, 0f),
+    BrushPreset("wet-round", "Redondo húmedo", "Acuarela", BrushKind.WATERCOLOR, 76f, .32f, .22f, .06f, .18f, .4f, .18f, true, true, .92f, .28f, .1f, .08f, .04f, .52f, .08f),
+    BrushPreset("impasto-bristle", "Cerda impasto", "Óleo", BrushKind.OIL, 108f, .94f, .86f, .075f, .12f, .84f, .22f, true, true, .78f, .54f, .06f, .05f, .12f, .44f, .06f),
 )

@@ -98,6 +98,9 @@ data class BrushPreset(
     val grain: Float = 0f,
     val velocitySize: Float = 0f,
     val tipAssetPath: String? = null,
+    val tipProfile: BrushTipProfile = defaultTipProfile(kind),
+    val grainProfile: BrushGrainProfile = defaultGrainProfile(kind, grain),
+    val renderProfile: BrushRenderProfile = defaultRenderProfile(kind),
 )
 
 data class BrushSettings(
@@ -120,6 +123,9 @@ data class BrushSettings(
     val velocitySize: Float = 0f,
     val kind: BrushKind = BrushKind.PENCIL,
     val tipAssetPath: String? = null,
+    val tipProfile: BrushTipProfile = defaultTipProfile(kind),
+    val grainProfile: BrushGrainProfile = defaultGrainProfile(kind, grain),
+    val renderProfile: BrushRenderProfile = defaultRenderProfile(kind),
 )
 
 data class StrokePoint(
@@ -128,6 +134,7 @@ data class StrokePoint(
     val pressure: Float,
     val tilt: Float,
     val timestampMillis: Long,
+    val orientation: Float = 0f,
 )
 
 sealed interface DrawCommand {

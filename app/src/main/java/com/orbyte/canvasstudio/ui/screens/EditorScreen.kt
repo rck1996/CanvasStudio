@@ -137,6 +137,8 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
+import com.orbyte.canvasstudio.drawing.BrushRenderMode
+import com.orbyte.canvasstudio.drawing.BrushTipShape
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
@@ -233,6 +235,9 @@ fun EditorScreen(
                 grain = selectedPreset.grain,
                 velocitySize = selectedPreset.velocitySize,
                 tipAssetPath = selectedPreset.tipAssetPath,
+                tipProfile = selectedPreset.tipProfile,
+                grainProfile = selectedPreset.grainProfile,
+                renderProfile = selectedPreset.renderProfile,
                 kind = selectedPreset.kind,
                 color = AndroidColor.rgb(37, 42, 49),
             ),
@@ -292,6 +297,9 @@ fun EditorScreen(
             grain = preset.grain,
             velocitySize = preset.velocitySize,
             tipAssetPath = preset.tipAssetPath,
+            tipProfile = preset.tipProfile,
+            grainProfile = preset.grainProfile,
+            renderProfile = preset.renderProfile,
             kind = preset.kind,
         )
         selectedTool = DrawingTool.BRUSH
@@ -872,6 +880,9 @@ fun EditorScreen(
                             grain = brushSettings.grain,
                             velocitySize = brushSettings.velocitySize,
                             tipAssetPath = brushSettings.tipAssetPath,
+                            tipProfile = brushSettings.tipProfile,
+                            grainProfile = brushSettings.grainProfile,
+                            renderProfile = brushSettings.renderProfile,
                         )
                         updateCustomBrushes(customBrushes + custom)
                         selectedPreset = custom
@@ -1752,7 +1763,7 @@ private fun ExpandedBrushLibraryDialog(
                                 .padding(4.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            listOf("General", "Dinámicas").forEach { section ->
+                            listOf("General", "Material", "Dinámicas").forEach { section ->
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable { settingsSection = section },
                                     color = if (settingsSection == section) StudioPalette.AccentSoft else Color.Transparent,
@@ -1786,10 +1797,146 @@ private fun ExpandedBrushLibraryDialog(
                                 onSettingsChanged(settings.copy(spacing = it))
                             }
                             SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(grain = it))
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grain = it,
+                                        grainProfile = settings.grainProfile.copy(depth = it),
+                                    ),
+                                )
                             }
                             SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
                                 onSettingsChanged(settings.copy(stabilization = it))
+                            }
+                        } else if (settingsSection == "Material") {
+                            Text("Punta", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+                            SettingSlider(
+                                "Redondez",
+                                settings.tipProfile.roundness,
+                                .08f..1f,
+                                "${(settings.tipProfile.roundness * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        tipProfile = settings.tipProfile.copy(roundness = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Ángulo",
+                                settings.tipProfile.angleDegrees,
+                                -180f..180f,
+                                "${settings.tipProfile.angleDegrees.toInt()}°",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        tipProfile = settings.tipProfile.copy(angleDegrees = it),
+                                    ),
+                                )
+                            }
+                            if (settings.tipProfile.shape in setOf(
+                                    BrushTipShape.BRISTLE,
+                                    BrushTipShape.PARTICLE,
+                                )
+                            ) {
+                                SettingSlider(
+                                    "Cantidad",
+                                    settings.tipProfile.count.toFloat(),
+                                    2f..14f,
+                                    settings.tipProfile.count.toString(),
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            tipProfile = settings.tipProfile.copy(count = it.toInt()),
+                                        ),
+                                    )
+                                }
+                            }
+                            Text("Grano", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+                            SettingSlider(
+                                "Profundidad",
+                                settings.grainProfile.depth,
+                                0f..1f,
+                                "${(settings.grainProfile.depth * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grain = it,
+                                        grainProfile = settings.grainProfile.copy(depth = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Escala",
+                                settings.grainProfile.scale,
+                                .15f..4f,
+                                String.format(Locale.US, "%.2fx", settings.grainProfile.scale),
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grainProfile = settings.grainProfile.copy(scale = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Contraste",
+                                settings.grainProfile.contrast,
+                                0f..1f,
+                                "${(settings.grainProfile.contrast * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grainProfile = settings.grainProfile.copy(contrast = it),
+                                    ),
+                                )
+                            }
+                            Text(
+                                "Render y medio",
+                                color = StudioPalette.Text,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            SettingSlider(
+                                "Acumulación",
+                                settings.renderProfile.buildup,
+                                0f..1f,
+                                "${(settings.renderProfile.buildup * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        renderProfile = settings.renderProfile.copy(buildup = it),
+                                    ),
+                                )
+                            }
+                            if (settings.kind in setOf(
+                                    BrushKind.WATERCOLOR,
+                                    BrushKind.OIL,
+                                    BrushKind.PAINT,
+                                    BrushKind.BRISTLE,
+                                )
+                            ) {
+                                SettingSlider(
+                                    "Humedad",
+                                    settings.renderProfile.wetness,
+                                    0f..1f,
+                                    "${(settings.renderProfile.wetness * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(wetness = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Arrastre",
+                                    settings.renderProfile.drag,
+                                    0f..1f,
+                                    "${(settings.renderProfile.drag * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(drag = it),
+                                        ),
+                                    )
+                                }
                             }
                         } else {
                             SettingSlider("Tamaño mínimo", settings.minSize, .02f..1f, "${(settings.minSize * 100).toInt()}%") {
@@ -1892,7 +2039,7 @@ private fun BrushDock(
             Column(Modifier.weight(1f)) {
                 Text("Biblioteca de pinceles", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "Motor 2.0 · presión, textura, taper y velocidad",
+                    "Motor 3.0 · punta, grano, render y dinámica del S Pen",
                     color = StudioPalette.TextMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -2010,7 +2157,12 @@ private fun BrushDock(
             onSettingsChanged(settings.copy(scatter = it))
         }
         SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-            onSettingsChanged(settings.copy(grain = it))
+            onSettingsChanged(
+                settings.copy(
+                    grain = it,
+                    grainProfile = settings.grainProfile.copy(depth = it),
+                ),
+            )
         }
         SettingSlider("Respuesta a velocidad", settings.velocitySize, 0f..1f, "${(settings.velocitySize * 100).toInt()}%") {
             onSettingsChanged(settings.copy(velocitySize = it))
@@ -2184,6 +2336,9 @@ private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = cop
     grain = settings.grain,
     velocitySize = settings.velocitySize,
     tipAssetPath = settings.tipAssetPath,
+    tipProfile = settings.tipProfile,
+    grainProfile = settings.grainProfile,
+    renderProfile = settings.renderProfile,
 )
 
 @Composable
@@ -2196,13 +2351,20 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
         val usableWidth = (size.width - 16f).coerceAtLeast(1f)
         val centerY = size.height * .56f
         val baseWidth = (1.2f + preset.sizePx / 8.5f).coerceAtMost(size.height * .7f)
-        val strength = (preset.opacity * preset.flow).coerceIn(.05f, 1f)
-        val texture = preset.grain.coerceIn(0f, 1f)
+        val renderStrength = when (preset.renderProfile.mode) {
+            BrushRenderMode.LIGHT_GLAZE -> .28f + preset.renderProfile.buildup * .34f
+            BrushRenderMode.UNIFORM_GLAZE -> .56f + preset.renderProfile.buildup * .36f
+            BrushRenderMode.INTENSE_GLAZE -> .82f + preset.renderProfile.buildup * .18f
+            BrushRenderMode.BLENDING -> .68f + preset.renderProfile.buildup * .28f
+        }
+        val strength = (preset.opacity * preset.flow * renderStrength).coerceIn(.03f, 1f)
+        val texture = preset.grainProfile.depth.coerceIn(0f, 1f)
         val softness = 1f - preset.hardness.coerceIn(0f, 1f)
         val strands = when (preset.kind) {
-            BrushKind.BRISTLE -> 6
-            BrushKind.DRY_BRUSH, BrushKind.CHARCOAL, BrushKind.CHALK -> 4
-            BrushKind.OIL -> 3
+            BrushKind.BRISTLE, BrushKind.DRY_BRUSH, BrushKind.OIL ->
+                preset.tipProfile.count.coerceIn(2, 10)
+            BrushKind.CHARCOAL, BrushKind.CHALK ->
+                preset.tipProfile.count.coerceIn(2, 8)
             else -> 1
         }
         repeat(72) { index ->
@@ -2213,7 +2375,11 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
             val startTaper = if (preset.taperStart > 0f) (t / preset.taperStart).coerceIn(.08f, 1f) else 1f
             val endTaper = if (preset.taperEnd > 0f) ((1f - t) / preset.taperEnd).coerceIn(.08f, 1f) else 1f
             val speed = 1f - preset.velocitySize * kotlin.math.abs(kotlin.math.cos(t * Math.PI * 2)).toFloat() * .38f
-            val width = (baseWidth * response * minOf(startTaper, endTaper) * speed).coerceAtLeast(.7f)
+            val tipRoundness = preset.tipProfile.roundness.coerceIn(.08f, 1f)
+            val width = (
+                baseWidth * response * minOf(startTaper, endTaper) * speed *
+                    (.72f + tipRoundness * .28f)
+                ).coerceAtLeast(.7f)
             val wave = kotlin.math.sin(t * Math.PI * 2.2).toFloat() * size.height * .11f
             val nextWave = kotlin.math.sin(nextT * Math.PI * 2.2).toFloat() * size.height * .11f
             val scatter = preset.scatter * width * kotlin.math.sin(index * 12.9898f)
@@ -2238,6 +2404,17 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
                 drawCircle(
                     Color.White.copy(alpha = strength * (.035f + softness * .04f)),
                     radius = width * (1.2f + softness),
+                    center = Offset(8f + t * usableWidth, centerY + wave),
+                )
+            }
+            if (preset.renderProfile.wetness > .1f && index % 3 == 0) {
+                drawCircle(
+                    Color.White.copy(
+                        alpha = (
+                            strength * preset.renderProfile.wetness * .045f
+                            ).coerceIn(.005f, .08f),
+                    ),
+                    radius = width * (1.08f + preset.renderProfile.wetness * .35f),
                     center = Offset(8f + t * usableWidth, centerY + wave),
                 )
             }

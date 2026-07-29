@@ -1154,6 +1154,14 @@ Comprueba:
 - certificación masiva en Galaxy Tab S8: completada;
 - firma, APK, AAB y documentación de distribución: completados.
 
+### Fase 9 — pinceles profesionales
+
+- motor 3.0 separado en punta, grano, render y medio;
+- orientación real del S Pen y muestras históricas;
+- granos originales de papel, lienzo, cerda y acuarela sin costuras;
+- editor de material y preview reactivo;
+- matriz visual automática y pruebas masivas de retención en Galaxy Tab S8.
+
 ### Futuro posterior a la beta
 
 - gestión de color avanzada;
@@ -1178,6 +1186,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/PHASE_4_TEST_BUILD.md`](docs/PHASE_4_TEST_BUILD.md) | Alcance de la primera build de fase 4 |
 | [`docs/PHASE_4_1.md`](docs/PHASE_4_1.md) | Grupos, máscaras y perspectiva editable |
 | [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |
+| [`docs/PHASE_9_PROFESSIONAL_BRUSHES.md`](docs/PHASE_9_PROFESSIONAL_BRUSHES.md) | Motor 3.0, investigación, materiales y validación visual |
 | [`docs/PERFORMANCE_HOTFIX_1.5.1.md`](docs/PERFORMANCE_HOTFIX_1.5.1.md) | Primer hotfix de rendimiento |
 | [`docs/PERFORMANCE_HOTFIX_1.5.2.md`](docs/PERFORMANCE_HOTFIX_1.5.2.md) | Procesamiento de pinceles texturizados |
 | [`docs/CRASH_HOTFIX_1.5.3.md`](docs/CRASH_HOTFIX_1.5.3.md) | Corrección del cierre por desbordamiento |

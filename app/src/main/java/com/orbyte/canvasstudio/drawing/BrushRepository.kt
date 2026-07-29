@@ -216,14 +216,49 @@ object BrushRepository {
         put("grain", brush.grain.toDouble())
         put("velocitySize", brush.velocitySize.toDouble())
         brush.tipAssetPath?.let { put("tipAssetPath", it) }
+        put("tipProfile", JSONObject().apply {
+            put("shape", brush.tipProfile.shape.name)
+            put("roundness", brush.tipProfile.roundness.toDouble())
+            put("angleDegrees", brush.tipProfile.angleDegrees.toDouble())
+            put("rotationMode", brush.tipProfile.rotationMode.name)
+            put("rotationJitter", brush.tipProfile.rotationJitter.toDouble())
+            put("count", brush.tipProfile.count)
+            put("countJitter", brush.tipProfile.countJitter.toDouble())
+        })
+        put("grainProfile", JSONObject().apply {
+            put("mode", brush.grainProfile.mode.name)
+            put("scale", brush.grainProfile.scale.toDouble())
+            put("depth", brush.grainProfile.depth.toDouble())
+            put("contrast", brush.grainProfile.contrast.toDouble())
+            put("movement", brush.grainProfile.movement.toDouble())
+            put("source", brush.grainProfile.source.name)
+        })
+        put("renderProfile", JSONObject().apply {
+            put("mode", brush.renderProfile.mode.name)
+            put("buildup", brush.renderProfile.buildup.toDouble())
+            put("wetness", brush.renderProfile.wetness.toDouble())
+            put("dilution", brush.renderProfile.dilution.toDouble())
+            put("drag", brush.renderProfile.drag.toDouble())
+        })
     }
 
     private fun decode(item: JSONObject): BrushPreset? = runCatching {
+        val kind = enumValueOrDefault(
+            item.optString("kind"),
+            BrushKind.PENCIL,
+        )
+        val grain = item.optDouble("grain", 0.0).toFloat()
+        val defaultTip = defaultTipProfile(kind)
+        val defaultGrain = defaultGrainProfile(kind, grain)
+        val defaultRender = defaultRenderProfile(kind)
+        val tipJson = item.optJSONObject("tipProfile")
+        val grainJson = item.optJSONObject("grainProfile")
+        val renderJson = item.optJSONObject("renderProfile")
         BrushPreset(
             id = item.getString("id"),
             name = item.optString("name", "Pincel personalizado"),
             category = item.optString("category", "Personalizados"),
-            kind = BrushKind.valueOf(item.optString("kind", BrushKind.PENCIL.name)),
+            kind = kind,
             sizePx = item.optDouble("sizePx", 24.0).toFloat(),
             opacity = item.optDouble("opacity", 1.0).toFloat(),
             hardness = item.optDouble("hardness", .85).toFloat(),
@@ -238,11 +273,70 @@ object BrushRepository {
             taperStart = item.optDouble("taperStart", .08).toFloat(),
             taperEnd = item.optDouble("taperEnd", .06).toFloat(),
             scatter = item.optDouble("scatter", 0.0).toFloat(),
-            grain = item.optDouble("grain", 0.0).toFloat(),
+            grain = grain,
             velocitySize = item.optDouble("velocitySize", 0.0).toFloat(),
             tipAssetPath = item.optString("tipAssetPath").takeIf(String::isNotBlank),
+            tipProfile = BrushTipProfile(
+                shape = enumValueOrDefault(tipJson?.optString("shape"), defaultTip.shape),
+                roundness = tipJson?.optDouble("roundness", defaultTip.roundness.toDouble())?.toFloat()
+                    ?: defaultTip.roundness,
+                angleDegrees = tipJson?.optDouble("angleDegrees", defaultTip.angleDegrees.toDouble())?.toFloat()
+                    ?: defaultTip.angleDegrees,
+                rotationMode = enumValueOrDefault(
+                    tipJson?.optString("rotationMode"),
+                    defaultTip.rotationMode,
+                ),
+                rotationJitter = tipJson?.optDouble(
+                    "rotationJitter",
+                    defaultTip.rotationJitter.toDouble(),
+                )?.toFloat() ?: defaultTip.rotationJitter,
+                count = tipJson?.optInt("count", defaultTip.count) ?: defaultTip.count,
+                countJitter = tipJson?.optDouble(
+                    "countJitter",
+                    defaultTip.countJitter.toDouble(),
+                )?.toFloat() ?: defaultTip.countJitter,
+            ),
+            grainProfile = BrushGrainProfile(
+                mode = enumValueOrDefault(grainJson?.optString("mode"), defaultGrain.mode),
+                scale = grainJson?.optDouble("scale", defaultGrain.scale.toDouble())?.toFloat()
+                    ?: defaultGrain.scale,
+                depth = grainJson?.optDouble("depth", defaultGrain.depth.toDouble())?.toFloat()
+                    ?: defaultGrain.depth,
+                contrast = grainJson?.optDouble(
+                    "contrast",
+                    defaultGrain.contrast.toDouble(),
+                )?.toFloat() ?: defaultGrain.contrast,
+                movement = grainJson?.optDouble(
+                    "movement",
+                    defaultGrain.movement.toDouble(),
+                )?.toFloat() ?: defaultGrain.movement,
+                source = enumValueOrDefault(
+                    grainJson?.optString("source"),
+                    defaultGrain.source,
+                ),
+            ),
+            renderProfile = BrushRenderProfile(
+                mode = enumValueOrDefault(renderJson?.optString("mode"), defaultRender.mode),
+                buildup = renderJson?.optDouble(
+                    "buildup",
+                    defaultRender.buildup.toDouble(),
+                )?.toFloat() ?: defaultRender.buildup,
+                wetness = renderJson?.optDouble(
+                    "wetness",
+                    defaultRender.wetness.toDouble(),
+                )?.toFloat() ?: defaultRender.wetness,
+                dilution = renderJson?.optDouble(
+                    "dilution",
+                    defaultRender.dilution.toDouble(),
+                )?.toFloat() ?: defaultRender.dilution,
+                drag = renderJson?.optDouble("drag", defaultRender.drag.toDouble())?.toFloat()
+                    ?: defaultRender.drag,
+            ),
         )
     }.getOrNull()
+
+    private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String?, default: T): T =
+        enumValues<T>().firstOrNull { it.name == value } ?: default
 
     private const val MAX_EMBEDDED_TIP_BYTES = 2L * 1024L * 1024L
 }

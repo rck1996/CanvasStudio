@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
 import android.graphics.BlendMode
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
@@ -113,6 +114,9 @@ class DrawingView(context: Context) : View(context) {
         strokeJoin = Paint.Join.ROUND
     }
     private val clearXfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
+    private val sourceOverXfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_OVER)
+    private val multiplyXfermode = PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
+    private val screenXfermode = PorterDuffXfermode(PorterDuff.Mode.SCREEN)
     private val tipBitmapCache = object : LinkedHashMap<String, Bitmap>(8, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Bitmap>?): Boolean {
             val remove = size > 8
@@ -120,6 +124,21 @@ class DrawingView(context: Context) : View(context) {
             return remove
         }
     }
+    private data class GrainTextureEntry(
+        val bitmap: Bitmap,
+        val shader: BitmapShader,
+    )
+    private val grainTextureCache =
+        object : LinkedHashMap<BrushTextureKey, GrainTextureEntry>(12, .75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<BrushTextureKey, GrainTextureEntry>?,
+            ): Boolean {
+                val remove = size > 12
+                if (remove) eldest?.value?.bitmap?.recycle()
+                return remove
+            }
+        }
+    private val grainShaderMatrix = Matrix()
     private var cachedMaskFilterKey: Int = Int.MIN_VALUE
     private var cachedMaskFilter: BlurMaskFilter? = null
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -629,8 +648,7 @@ class DrawingView(context: Context) : View(context) {
             if (points.isEmpty()) {
                 RectF()
             } else {
-                val radius = command.settings.sizePx *
-                    (1f + command.settings.tiltResponse.coerceIn(0f, 1f) * 0.9f) * 0.8f + 8f
+                val radius = maximumBrushExtent(command.settings)
                 RectF(
                     points.minOf { it.x } - radius,
                     points.minOf { it.y } - radius,
@@ -689,7 +707,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun strokeSegmentBounds(from: StrokePoint, to: StrokePoint, settings: BrushSettings): RectF {
-        val radius = settings.sizePx * (1f + settings.tiltResponse.coerceIn(0f, 1f) * 0.9f) * 0.8f + 8f
+        val radius = maximumBrushExtent(settings)
         return RectF(
             min(from.x, to.x) - radius,
             min(from.y, to.y) - radius,
@@ -698,7 +716,41 @@ class DrawingView(context: Context) : View(context) {
         )
     }
 
+    private fun maximumBrushExtent(settings: BrushSettings): Float {
+        val tilt = max(
+            settings.tiltResponse,
+            settings.dynamicsProfile.tiltSize,
+        ).coerceIn(0f, 1f)
+        val primaryRadius = settings.sizePx * .5f * (1f + tilt * .9f)
+        val scatterExtent = primaryRadius * settings.scatter.coerceIn(0f, 1f)
+        val particleExtent = if (
+            settings.tipProfile.shape == BrushTipShape.PARTICLE ||
+            settings.kind == BrushKind.CHARCOAL ||
+            settings.kind == BrushKind.CHALK
+        ) {
+            primaryRadius * (1.3f + settings.scatter.coerceIn(0f, 1f))
+        } else {
+            primaryRadius
+        }
+        val dual = settings.dualBrushProfile
+        val dualExtent = if (dual.enabled) {
+            primaryRadius * (
+                dual.sizeScale.coerceIn(.1f, 2f) +
+                    dual.offset.coerceIn(-1f, 1f).let(::abs) +
+                    dual.scatter.coerceIn(0f, 1f)
+                )
+        } else {
+            0f
+        }
+        val blurExtent = settings.sizePx * (1f - settings.hardness.coerceIn(0f, 1f)) * .24f
+        val wetExtent = settings.sizePx * settings.renderProfile.bleed.coerceIn(0f, 1f) * .28f
+        return max(max(primaryRadius + scatterExtent, particleExtent), dualExtent) +
+            blurExtent + wetExtent + 10f
+    }
+
     private fun isStampBrush(kind: BrushKind): Boolean = when (kind) {
+        BrushKind.PENCIL,
+        BrushKind.INK,
         BrushKind.MARKER,
         BrushKind.PAINT,
         BrushKind.AIRBRUSH,
@@ -709,7 +761,6 @@ class DrawingView(context: Context) : View(context) {
         BrushKind.WATERCOLOR,
         BrushKind.OIL,
         -> true
-        else -> false
     }
 
     private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
@@ -1473,8 +1524,11 @@ class DrawingView(context: Context) : View(context) {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) requestFocus()
         transform.invert(inverse)
         val current = mapToDocument(event.getX(activePointerIndex), event.getY(activePointerIndex))
-        val pressure = max(0.08f, event.getPressure(activePointerIndex).coerceIn(0f, 1f))
-        val tilt = event.getAxisValue(MotionEvent.AXIS_TILT, activePointerIndex).coerceIn(0f, 1f)
+        val pressure = event.getPressure(activePointerIndex).coerceIn(0f, 1f)
+        val tilt = normalizedStylusTilt(
+            event.getAxisValue(MotionEvent.AXIS_TILT, activePointerIndex),
+        )
+        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION, activePointerIndex)
         val eventTool = if (event.getToolType(activePointerIndex) == MotionEvent.TOOL_TYPE_ERASER) {
             DrawingTool.ERASER
         } else {
@@ -1502,6 +1556,7 @@ class DrawingView(context: Context) : View(context) {
                         y = current[1],
                         pressure = pressure,
                         tilt = tilt,
+                        orientation = orientation,
                         time = event.eventTime,
                         deferUntilCommit = !stylusPresent,
                     )
@@ -1546,12 +1601,34 @@ class DrawingView(context: Context) : View(context) {
                                 points,
                                 mapped[0],
                                 mapped[1],
-                                max(0.08f, event.getHistoricalPressure(activePointerIndex, historyIndex).coerceIn(0f, 1f)),
-                                tilt,
+                                event.getHistoricalPressure(
+                                    activePointerIndex,
+                                    historyIndex,
+                                ).coerceIn(0f, 1f),
+                                normalizedStylusTilt(
+                                    event.getHistoricalAxisValue(
+                                        MotionEvent.AXIS_TILT,
+                                        activePointerIndex,
+                                        historyIndex,
+                                    ),
+                                ),
+                                event.getHistoricalAxisValue(
+                                    MotionEvent.AXIS_ORIENTATION,
+                                    activePointerIndex,
+                                    historyIndex,
+                                ),
                                 event.getHistoricalEventTime(historyIndex),
                             )
                         }
-                        appendStrokePoint(points, current[0], current[1], pressure, tilt, event.eventTime)
+                        appendStrokePoint(
+                            points,
+                            current[0],
+                            current[1],
+                            pressure,
+                            tilt,
+                            orientation,
+                            event.eventTime,
+                        )
                     }
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE, DrawingTool.GRADIENT -> {
                         shapeEnd = snappedShapePoint(
@@ -1685,11 +1762,14 @@ class DrawingView(context: Context) : View(context) {
         y: Float,
         pressure: Float,
         tilt: Float,
+        orientation: Float,
         time: Long,
         deferUntilCommit: Boolean = false,
     ) {
         val settings = brushSettings
-        val points = mutableListOf(StrokePoint(x, y, pressure, tilt, time))
+        val points = mutableListOf(
+            StrokePoint(x, y, pressure, tilt, time, orientation),
+        )
         activeStrokePoints = points
         activeInputTool = drawingTool
         activeStrokeSettings = settings
@@ -1725,6 +1805,7 @@ class DrawingView(context: Context) : View(context) {
                     settings = settings,
                     stampIndex = 0,
                     angleRadians = (2.0 * PI * index / max(1, matrices.size)).toFloat(),
+                    orientation = orientation,
                 )
             }
         }
@@ -1737,6 +1818,7 @@ class DrawingView(context: Context) : View(context) {
         rawY: Float,
         pressure: Float,
         tilt: Float,
+        orientation: Float,
         time: Long,
     ) {
         val previous = points.lastOrNull() ?: return
@@ -1746,7 +1828,7 @@ class DrawingView(context: Context) : View(context) {
         val y = previous.y + (rawY - previous.y) * response
         val distance = hypot(x - previous.x, y - previous.y)
         if (distance < minimumInputDistance(settings)) return
-        points += StrokePoint(x, y, pressure, tilt, time)
+        points += StrokePoint(x, y, pressure, tilt, time, orientation)
         if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
             if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
                 deferredStrokeOverlay.invalidateSelf()
@@ -1840,6 +1922,17 @@ class DrawingView(context: Context) : View(context) {
             for (index in 2 until transformed.size) {
                 bounds.union(strokeSegmentBounds(transformed[index - 1], transformed[index], settings))
             }
+            val pickupSurface = surfaceFor(layer, activeHistoryTarget(layer))
+            val pickupColors = if (settings.renderProfile.colorPickup > .001f) {
+                IntArray(transformed.size - 1) { localIndex ->
+                    pickupSurface.samplePixel(
+                        transformed[localIndex + 1].x,
+                        transformed[localIndex + 1].y,
+                    ) ?: 0
+                }
+            } else {
+                null
+            }
             drawOnLayer(layer, bounds) { canvas ->
                 for (localIndex in 1 until transformed.size) {
                     val globalEndPointIndex = firstEndPointIndex - 1 + localIndex
@@ -1851,6 +1944,8 @@ class DrawingView(context: Context) : View(context) {
                         drawingTool = drawingTool,
                         settings = settings,
                         progress = progress,
+                        segmentIndex = globalEndPointIndex - 1,
+                        sampledColor = pickupColors?.get(localIndex - 1),
                     )
                 }
             }
@@ -2465,17 +2560,35 @@ class DrawingView(context: Context) : View(context) {
             RectF(commandBounds).apply { intersect(replayClipBounds) }
         }
         if (bounds.isEmpty) return
-        val operation: (Canvas) -> Unit = { canvas ->
-            val checkpoint = replayClipBounds?.let {
-                canvas.save().also { canvas.clipRect(replayClipBounds) }
+        val pickupColors = (command as? StrokeCommand)
+            ?.takeIf { it.settings.renderProfile.colorPickup > .001f && it.points.size > 1 }
+            ?.let { stroke ->
+                IntArray(stroke.points.size - 1) { index ->
+                    surface.samplePixel(stroke.points[index + 1].x, stroke.points[index + 1].y) ?: 0
+                }
             }
-            drawCommand(canvas, command)
-            if (checkpoint != null) canvas.restoreToCount(checkpoint)
-        }
         if (target == HistoryTarget.CONTENT && layer?.alphaLocked == true && command !is TransformSelectionCommand) {
-            surface.drawPreservingAlpha(bounds, operation)
+            surface.drawPreservingAlpha(bounds) { canvas ->
+                val checkpoint = replayClipBounds?.let {
+                    canvas.save().also { canvas.clipRect(replayClipBounds) }
+                }
+                drawCommand(canvas, command, pickupColors, replayClipBounds)
+                if (checkpoint != null) canvas.restoreToCount(checkpoint)
+            }
         } else {
-            surface.draw(bounds, operation)
+            surface.drawPerTile(bounds) { canvas, tileBounds ->
+                val renderBounds = if (replayClipBounds == null) {
+                    tileBounds
+                } else {
+                    RectF(tileBounds).apply { intersect(replayClipBounds) }
+                }
+                if (!renderBounds.isEmpty) {
+                    val checkpoint = canvas.save()
+                    canvas.clipRect(renderBounds)
+                    drawCommand(canvas, command, pickupColors, renderBounds)
+                    canvas.restoreToCount(checkpoint)
+                }
+            }
         }
     }
 
@@ -2510,7 +2623,12 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
-    private fun drawCommand(canvas: Canvas, command: DrawCommand) {
+    private fun drawCommand(
+        canvas: Canvas,
+        command: DrawCommand,
+        pickupColors: IntArray? = null,
+        renderClipBounds: RectF? = null,
+    ) {
         when (command) {
             is StrokeCommand -> {
                 val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
@@ -2523,7 +2641,13 @@ class DrawingView(context: Context) : View(context) {
                         command.clipFeatherPx,
                     )
                 }
-                command.points.firstOrNull()?.let { first ->
+                command.points.firstOrNull()?.takeIf { first ->
+                    renderClipBounds == null ||
+                        RectF.intersects(
+                            strokeSegmentBounds(first, first, command.settings),
+                            renderClipBounds,
+                        )
+                }?.let { first ->
                     drawBrushStamp(
                         canvas = canvas,
                         x = first.x,
@@ -2534,10 +2658,24 @@ class DrawingView(context: Context) : View(context) {
                         settings = command.settings,
                         stampIndex = 0,
                         angleRadians = 0f,
+                        orientation = first.orientation,
                     )
                 }
                 val segmentCount = (command.points.size - 1).coerceAtLeast(0)
                 for (index in 0 until segmentCount) {
+                    if (
+                        renderClipBounds != null &&
+                        !RectF.intersects(
+                            strokeSegmentBounds(
+                                command.points[index],
+                                command.points[index + 1],
+                                command.settings,
+                            ),
+                            renderClipBounds,
+                        )
+                    ) {
+                        continue
+                    }
                     val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
                     drawStrokeSegment(
                         canvas,
@@ -2546,6 +2684,8 @@ class DrawingView(context: Context) : View(context) {
                         command.tool,
                         command.settings,
                         progress,
+                        index,
+                        pickupColors?.getOrNull(index),
                     )
                 }
                 if (clipPath != null && clipSave != null) {
@@ -2703,6 +2843,8 @@ class DrawingView(context: Context) : View(context) {
         drawingTool: DrawingTool,
         settings: BrushSettings,
         progress: Float = 1f,
+        segmentIndex: Int = 0,
+        sampledColor: Int? = null,
     ) {
         val deltaX = to.x - from.x
         val deltaY = to.y - from.y
@@ -2710,10 +2852,14 @@ class DrawingView(context: Context) : View(context) {
         val elapsed = (to.timestampMillis - from.timestampMillis).coerceAtLeast(1L).toFloat()
         val speed = distance / elapsed
         val speedFactor = (speed / 2.4f).coerceIn(0f, 1f)
-        val velocityMultiplier = 1f - settings.velocitySize.coerceIn(0f, 1f) * speedFactor * 0.62f
-        val effectivePressure = ((from.pressure + to.pressure) / 2f) * taperFactor(settings, progress) * velocityMultiplier
+        val effectivePressure = ((from.pressure + to.pressure) / 2f) * taperFactor(settings, progress)
         val angleRadians = atan2(deltaY.toDouble(), deltaX.toDouble()).toFloat()
         val stampBased = isStampBrush(settings.kind)
+        val pigmentColor = mixPigmentColor(
+            settings.color,
+            sampledColor,
+            settings.renderProfile.colorPickup,
+        )
 
         if (stampBased) {
             val step = max(1.5f, settings.sizePx * stampSpacing(settings))
@@ -2725,19 +2871,35 @@ class DrawingView(context: Context) : View(context) {
                     x = from.x + deltaX * stampProgress,
                     y = from.y + deltaY * stampProgress,
                     pressure = (from.pressure + (to.pressure - from.pressure) * stampProgress) *
-                        taperFactor(settings, progress) * velocityMultiplier,
+                        taperFactor(settings, progress),
                     tilt = from.tilt + (to.tilt - from.tilt) * stampProgress,
                     drawingTool = drawingTool,
                     settings = settings,
-                    stampIndex = index,
+                    stampIndex = segmentIndex.coerceAtLeast(0) * MAX_STAMPS_PER_SEGMENT + index,
                     angleRadians = angleRadians,
+                    orientation = interpolateCircularRadians(
+                        from.orientation,
+                        to.orientation,
+                        stampProgress,
+                    ),
+                    speedFactor = speedFactor,
+                    resolvedColor = pigmentColor,
+                    strokeProgress = progress,
                 )
             }
             return
         }
 
         val tilt = (from.tilt + to.tilt) / 2f
-        configurePaint(strokePaint, drawingTool, settings, effectivePressure, tilt)
+        configurePaint(
+            strokePaint,
+            drawingTool,
+            settings,
+            effectivePressure,
+            tilt,
+            speedFactor = speedFactor,
+            resolvedColor = pigmentColor,
+        )
         canvas.drawLine(from.x, from.y, to.x, to.y, strokePaint)
 
         if (settings.kind == BrushKind.PENCIL && drawingTool != DrawingTool.ERASER) {
@@ -2762,8 +2924,35 @@ class DrawingView(context: Context) : View(context) {
         settings: BrushSettings,
         stampIndex: Int,
         angleRadians: Float,
+        orientation: Float = 0f,
+        speedFactor: Float = 0f,
+        resolvedColor: Int = settings.color,
+        strokeProgress: Float = 0f,
     ) {
-        configurePaint(strokePaint, drawingTool, settings, pressure, tilt)
+        configurePaint(
+            strokePaint,
+            drawingTool,
+            settings,
+            pressure,
+            tilt,
+            speedFactor = speedFactor,
+            resolvedColor = resolvedColor,
+        )
+        if (drawingTool != DrawingTool.ERASER && settings.renderProfile.wetness > .001f) {
+            val charge = settings.renderProfile.charge.coerceIn(0f, 1f)
+            val attack = settings.renderProfile.attack.coerceIn(0f, 1f)
+            val pigmentLoad = charge * (
+                1f - strokeProgress.coerceIn(0f, 1f) * (1f - attack) * .72f
+                )
+            strokePaint.alpha = (strokePaint.alpha * pigmentLoad.coerceIn(.08f, 1f))
+                .toInt().coerceIn(1, 255)
+        }
+        if (drawingTool != DrawingTool.ERASER) {
+            strokePaint.alpha = (
+                strokePaint.alpha *
+                    grainCoverage(settings.grainProfile, x, y, stampIndex)
+                ).toInt().coerceIn(1, 255)
+        }
         val diameter = strokePaint.strokeWidth
         val radius = max(0.6f, diameter / 2f)
         strokePaint.style = Paint.Style.FILL
@@ -2774,17 +2963,23 @@ class DrawingView(context: Context) : View(context) {
         val scatterRadius = radius * settings.scatter.coerceIn(0f, 1f)
         val stampX = x + noiseX * scatterRadius
         val stampY = y + noiseY * scatterRadius
+        val resolvedAngle = resolveBrushRotation(
+            settings = settings,
+            strokeAngle = angleRadians,
+            stylusOrientation = orientation,
+            seed = seed,
+        )
         val customTip = settings.tipAssetPath?.let(::loadTipBitmap)
         if (customTip != null) {
             canvas.save()
-            canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+            canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
             val aspect = customTip.width.toFloat() / customTip.height.coerceAtLeast(1)
             val halfWidth = if (aspect >= 1f) radius else radius * aspect
             val halfHeight = if (aspect >= 1f) radius / aspect else radius
             strokePaint.colorFilter = if (drawingTool == DrawingTool.ERASER) {
                 null
             } else {
-                PorterDuffColorFilter(settings.color, PorterDuff.Mode.SRC_IN)
+                PorterDuffColorFilter(resolvedColor, PorterDuff.Mode.SRC_IN)
             }
             canvas.drawBitmap(
                 customTip,
@@ -2799,23 +2994,114 @@ class DrawingView(context: Context) : View(context) {
             )
             strokePaint.colorFilter = null
             canvas.restore()
+            drawDualBrushStamp(
+                canvas = canvas,
+                x = stampX,
+                y = stampY,
+                radius = radius,
+                settings = settings,
+                drawingTool = drawingTool,
+                stampIndex = stampIndex,
+                angleRadians = resolvedAngle,
+                seed = seed,
+                resolvedColor = resolvedColor,
+            )
             strokePaint.style = Paint.Style.STROKE
             return
         }
+        applyGrainTexture(
+            paint = strokePaint,
+            settings = settings,
+            drawingTool = drawingTool,
+            x = stampX,
+            y = stampY,
+            stampIndex = stampIndex,
+            angleRadians = resolvedAngle,
+            resolvedColor = resolvedColor,
+        )
 
         when (settings.kind) {
+            BrushKind.PENCIL -> {
+                val baseAlpha = strokePaint.alpha
+                val roundness = settings.tipProfile.roundness.coerceIn(.08f, 1f)
+                val tiltWidth = 1f + tilt * settings.tiltResponse.coerceIn(0f, 1f) * 1.35f
+                canvas.save()
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                canvas.drawOval(
+                    RectF(
+                        stampX - radius * tiltWidth,
+                        stampY - radius * roundness,
+                        stampX + radius * tiltWidth,
+                        stampY + radius * roundness,
+                    ),
+                    strokePaint,
+                )
+                if (settings.grainProfile.depth > .08f) {
+                    strokePaint.alpha = (baseAlpha * .24f).toInt().coerceIn(1, 255)
+                    strokePaint.style = Paint.Style.STROKE
+                    strokePaint.strokeWidth = max(.55f, diameter * .055f)
+                    val toothOffset = radius * roundness * .42f
+                    canvas.drawLine(
+                        stampX - radius * .74f,
+                        stampY - toothOffset,
+                        stampX + radius * .74f,
+                        stampY - toothOffset,
+                        strokePaint,
+                    )
+                    strokePaint.style = Paint.Style.FILL
+                }
+                canvas.restore()
+                strokePaint.alpha = baseAlpha
+            }
+
+            BrushKind.INK -> {
+                canvas.save()
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                when (settings.tipProfile.shape) {
+                    BrushTipShape.ROUND -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
+                    BrushTipShape.OVAL, BrushTipShape.CHISEL -> canvas.drawOval(
+                        RectF(
+                            stampX - radius,
+                            stampY - radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
+                            stampX + radius,
+                            stampY + radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
+                        ),
+                        strokePaint,
+                    )
+                    BrushTipShape.BRISTLE, BrushTipShape.PARTICLE -> {
+                        val count = settings.tipProfile.count.coerceIn(2, 8)
+                        repeat(count) { part ->
+                            val unit = part / (count - 1f)
+                            val offset = (unit - .5f) * radius * 1.2f
+                            canvas.drawOval(
+                                RectF(
+                                    stampX - radius,
+                                    stampY + offset - max(.4f, radius * .05f),
+                                    stampX + radius,
+                                    stampY + offset + max(.4f, radius * .05f),
+                                ),
+                                strokePaint,
+                            )
+                        }
+                    }
+                }
+                canvas.restore()
+            }
+
             BrushKind.CHARCOAL, BrushKind.CHALK -> {
-                val particles = when {
+                val adaptiveCount = when {
                     diameter >= 144f -> 2
                     diameter >= 96f -> 3
-                    settings.kind == BrushKind.CHARCOAL -> 5
-                    else -> 4
+                    else -> settings.tipProfile.count
                 }
+                val countNoise = (((seed ushr 5) and 0xFF) / 255f - .5f) *
+                    settings.tipProfile.countJitter.coerceIn(0f, 1f)
+                val particles = (adaptiveCount * (1f + countNoise)).toInt().coerceIn(2, 12)
                 val baseAlpha = strokePaint.alpha
                 // A translucent directional core keeps very large charcoal/chalk strokes
                 // continuous; particles alone look like disconnected circles above ~100 px.
                 canvas.save()
-                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 strokePaint.alpha = (
                     baseAlpha * if (settings.kind == BrushKind.CHARCOAL) .2f else .14f
                 ).toInt().coerceIn(1, 255)
@@ -2838,16 +3124,41 @@ class DrawingView(context: Context) : View(context) {
                     val grain = settings.grain.coerceIn(0f, 1f)
                     val particleRadius = radius * (0.08f + ((particleSeed ushr 8) and 0xFF) / 255f * (0.18f + grain * 0.22f))
                     strokePaint.alpha = (baseAlpha * (0.18f + grain * 0.28f + particle * 0.045f)).toInt().coerceIn(1, 255)
-                    canvas.drawCircle(stampX + xNoise * spread, stampY + yNoise * spread, max(0.55f, particleRadius), strokePaint)
+                    val particleX = stampX + xNoise * spread
+                    val particleY = stampY + yNoise * spread
+                    val aspect = .32f + ((particleSeed ushr 20) and 0xFF) / 255f * .54f
+                    canvas.save()
+                    canvas.rotate(
+                        (((particleSeed ushr 12) and 0xFF) / 255f * 180f) +
+                            resolvedAngle * 180f / PI.toFloat(),
+                        particleX,
+                        particleY,
+                    )
+                    canvas.drawOval(
+                        RectF(
+                            particleX - max(.55f, particleRadius),
+                            particleY - max(.45f, particleRadius * aspect),
+                            particleX + max(.55f, particleRadius),
+                            particleY + max(.45f, particleRadius * aspect),
+                        ),
+                        strokePaint,
+                    )
+                    canvas.restore()
                 }
                 strokePaint.alpha = baseAlpha
             }
 
             BrushKind.MARKER -> {
                 canvas.save()
-                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                val roundness = settings.tipProfile.roundness.coerceIn(.12f, 1f)
                 canvas.drawOval(
-                    RectF(stampX - radius, stampY - radius * 0.42f, stampX + radius, stampY + radius * 0.42f),
+                    RectF(
+                        stampX - radius,
+                        stampY - radius * roundness,
+                        stampX + radius,
+                        stampY + radius * roundness,
+                    ),
                     strokePaint,
                 )
                 canvas.restore()
@@ -2872,11 +3183,15 @@ class DrawingView(context: Context) : View(context) {
             BrushKind.DRY_BRUSH -> {
                 val baseAlpha = strokePaint.alpha
                 canvas.save()
-                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
-                repeat(4) { bristle ->
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                val bristleCount = settings.tipProfile.count.coerceIn(3, 12)
+                repeat(bristleCount) { bristle ->
                     if (((seed ushr (bristle * 3)) and 0x3) != 0) {
-                        val offset = (bristle - 1.5f) * radius * .28f
-                        strokePaint.alpha = (baseAlpha * (.3f + bristle * .09f)).toInt().coerceIn(1, 255)
+                        val offset = (bristle - (bristleCount - 1) / 2f) *
+                            radius * 1.12f / bristleCount
+                        strokePaint.alpha = (
+                            baseAlpha * (.3f + bristle * .36f / bristleCount)
+                            ).toInt().coerceIn(1, 255)
                         canvas.drawOval(
                             RectF(
                                 stampX - radius * .7f,
@@ -2895,10 +3210,14 @@ class DrawingView(context: Context) : View(context) {
             BrushKind.BRISTLE -> {
                 val baseAlpha = strokePaint.alpha
                 canvas.save()
-                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
-                repeat(5) { bristle ->
-                    val offset = (bristle - 2f) * radius * .19f
-                    strokePaint.alpha = (baseAlpha * (.42f + bristle * .08f)).toInt().coerceIn(1, 255)
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                val bristleCount = settings.tipProfile.count.coerceIn(3, 14)
+                repeat(bristleCount) { bristle ->
+                    val offset = (bristle - (bristleCount - 1) / 2f) *
+                        radius * 1.05f / bristleCount
+                    strokePaint.alpha = (
+                        baseAlpha * (.42f + bristle * .4f / bristleCount)
+                        ).toInt().coerceIn(1, 255)
                     canvas.drawOval(
                         RectF(
                             stampX - radius,
@@ -2915,37 +3234,271 @@ class DrawingView(context: Context) : View(context) {
 
             BrushKind.WATERCOLOR -> {
                 val baseAlpha = strokePaint.alpha
-                strokePaint.alpha = (baseAlpha * .58f).toInt().coerceIn(1, 255)
-                canvas.drawCircle(stampX, stampY, radius, strokePaint)
+                val wetness = settings.renderProfile.wetness.coerceIn(0f, 1f)
+                val dilution = settings.renderProfile.dilution.coerceIn(0f, 1f)
+                val bleed = settings.renderProfile.bleed.coerceIn(0f, 1f)
+                val wetRadius = radius * (1f + bleed * .12f)
+                strokePaint.alpha = (
+                    baseAlpha * (.64f - dilution * .24f)
+                    ).toInt().coerceIn(1, 255)
+                canvas.drawOval(
+                    RectF(
+                        stampX - wetRadius,
+                        stampY - wetRadius * (.78f + wetness * .18f),
+                        stampX + wetRadius,
+                        stampY + wetRadius * (.78f + wetness * .18f),
+                    ),
+                    strokePaint,
+                )
                 strokePaint.style = Paint.Style.STROKE
-                strokePaint.strokeWidth = max(1f, radius * .07f)
-                strokePaint.alpha = (baseAlpha * (.22f + settings.grain * .22f)).toInt().coerceIn(1, 255)
-                canvas.drawCircle(stampX + noiseX * radius * .08f, stampY + noiseY * radius * .08f, radius * .88f, strokePaint)
+                strokePaint.strokeWidth = max(1f, radius * (.035f + wetness * .055f))
+                strokePaint.alpha = (
+                    baseAlpha * (.1f + wetness * .18f + settings.grain * .12f)
+                    ).toInt().coerceIn(1, 255)
+                canvas.drawOval(
+                    RectF(
+                        stampX - radius * .91f + noiseX * radius * .06f,
+                        stampY - radius * .77f + noiseY * radius * .06f,
+                        stampX + radius * .91f + noiseX * radius * .06f,
+                        stampY + radius * .77f + noiseY * radius * .06f,
+                    ),
+                    strokePaint,
+                )
                 strokePaint.style = Paint.Style.FILL
                 strokePaint.alpha = baseAlpha
             }
 
             BrushKind.OIL -> {
                 val baseAlpha = strokePaint.alpha
+                val bristleCount = settings.tipProfile.count.coerceIn(4, 14)
+                val drag = settings.renderProfile.drag.coerceIn(0f, 1f)
                 canvas.save()
-                canvas.rotate(angleRadians * 180f / PI.toFloat(), stampX, stampY)
-                canvas.drawOval(
-                    RectF(stampX - radius, stampY - radius * .48f, stampX + radius, stampY + radius * .48f),
-                    strokePaint,
-                )
-                strokePaint.alpha = (baseAlpha * .2f).toInt().coerceIn(1, 255)
-                canvas.drawOval(
-                    RectF(stampX - radius * .72f, stampY - radius * .3f, stampX + radius * .72f, stampY - radius * .12f),
-                    strokePaint,
-                )
+                canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                repeat(bristleCount) { bristle ->
+                    val unit = bristle / (bristleCount - 1f)
+                    val offset = (unit - .5f) * radius * 1.1f
+                    val bristleSeed = seed xor (bristle + 3) * 1103515245
+                    val lengthNoise = .72f + ((bristleSeed ushr 9) and 0xFF) / 255f * .28f
+                    val thickness = radius * (.035f + (1f - drag) * .035f)
+                    strokePaint.alpha = (
+                        baseAlpha * (.48f + ((bristleSeed ushr 18) and 0xFF) / 255f * .42f)
+                        ).toInt().coerceIn(1, 255)
+                    canvas.drawOval(
+                        RectF(
+                            stampX - radius * lengthNoise,
+                            stampY + offset - thickness,
+                            stampX + radius,
+                            stampY + offset + thickness,
+                        ),
+                        strokePaint,
+                    )
+                }
                 canvas.restore()
                 strokePaint.alpha = baseAlpha
             }
 
             BrushKind.AIRBRUSH -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
-            else -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
         }
+        drawDualBrushStamp(
+            canvas = canvas,
+            x = stampX,
+            y = stampY,
+            radius = radius,
+            settings = settings,
+            drawingTool = drawingTool,
+            stampIndex = stampIndex,
+            angleRadians = resolvedAngle,
+            seed = seed,
+            resolvedColor = resolvedColor,
+        )
+        strokePaint.shader = null
+        strokePaint.colorFilter = null
         strokePaint.style = Paint.Style.STROKE
+    }
+
+    private fun drawDualBrushStamp(
+        canvas: Canvas,
+        x: Float,
+        y: Float,
+        radius: Float,
+        settings: BrushSettings,
+        drawingTool: DrawingTool,
+        stampIndex: Int,
+        angleRadians: Float,
+        seed: Int,
+        resolvedColor: Int,
+    ) {
+        val dual = settings.dualBrushProfile
+        if (!dual.enabled || dual.opacity <= .001f) return
+
+        val originalAlpha = strokePaint.alpha
+        val originalXfermode = strokePaint.xfermode
+        val originalStyle = strokePaint.style
+        val secondaryRadius = max(.45f, radius * dual.sizeScale.coerceIn(.1f, 2f))
+        val noiseX = ((seed ushr 3 and 0xFFFF) / 32767.5f) - 1f
+        val noiseY = ((seed ushr 11 and 0xFFFF) / 32767.5f) - 1f
+        val normalX = -sin(angleRadians)
+        val normalY = cos(angleRadians)
+        val offset = radius * dual.offset.coerceIn(-1f, 1f)
+        val scatter = radius * dual.scatter.coerceIn(0f, 1f)
+        val centerX = x + normalX * offset + noiseX * scatter
+        val centerY = y + normalY * offset + noiseY * scatter
+        val dualAngle = when (dual.tip.rotationMode) {
+            BrushRotationMode.FOLLOW_STROKE -> angleRadians
+            BrushRotationMode.FIXED -> 0f
+            BrushRotationMode.STYLUS -> angleRadians
+            BrushRotationMode.RANDOM -> ((seed ushr 8) and 0xFFFF) / 65535f * 2f * PI.toFloat()
+        } + Math.toRadians(dual.tip.angleDegrees.toDouble()).toFloat()
+
+        strokePaint.alpha = (originalAlpha * dual.opacity.coerceIn(0f, 1f))
+            .toInt().coerceIn(1, 255)
+        if (drawingTool != DrawingTool.ERASER) {
+            strokePaint.xfermode = when (dual.blendMode) {
+                DualBrushBlendMode.NORMAL -> sourceOverXfermode
+                DualBrushBlendMode.MULTIPLY -> multiplyXfermode
+                DualBrushBlendMode.SCREEN -> screenXfermode
+            }
+        }
+        strokePaint.style = Paint.Style.FILL
+        applyGrainTexture(
+            paint = strokePaint,
+            settings = settings,
+            drawingTool = drawingTool,
+            x = centerX,
+            y = centerY,
+            stampIndex = stampIndex,
+            angleRadians = dualAngle,
+            profile = dual.grain,
+            resolvedColor = resolvedColor,
+        )
+        canvas.save()
+        canvas.rotate(dualAngle * 180f / PI.toFloat(), centerX, centerY)
+        val roundness = dual.tip.roundness.coerceIn(.08f, 1f)
+        when (dual.tip.shape) {
+            BrushTipShape.ROUND -> canvas.drawCircle(centerX, centerY, secondaryRadius, strokePaint)
+            BrushTipShape.OVAL, BrushTipShape.CHISEL -> canvas.drawOval(
+                RectF(
+                    centerX - secondaryRadius,
+                    centerY - secondaryRadius * roundness,
+                    centerX + secondaryRadius,
+                    centerY + secondaryRadius * roundness,
+                ),
+                strokePaint,
+            )
+            BrushTipShape.BRISTLE -> {
+                val count = dual.tip.count.coerceIn(2, 8)
+                repeat(count) { bristle ->
+                    val unit = bristle / (count - 1f)
+                    val bristleY = centerY + (unit - .5f) * secondaryRadius * 1.4f
+                    canvas.drawOval(
+                        RectF(
+                            centerX - secondaryRadius,
+                            bristleY - max(.35f, secondaryRadius * .045f),
+                            centerX + secondaryRadius,
+                            bristleY + max(.35f, secondaryRadius * .045f),
+                        ),
+                        strokePaint,
+                    )
+                }
+            }
+            BrushTipShape.PARTICLE -> {
+                val count = dual.tip.count.coerceIn(1, 6)
+                repeat(count) { particle ->
+                    val particleSeed = seed xor (particle + 7) * 1103515245
+                    val px = ((particleSeed and 0xFFFF) / 32767.5f - 1f) * secondaryRadius
+                    val py = (((particleSeed ushr 16) and 0xFFFF) / 32767.5f - 1f) *
+                        secondaryRadius
+                    val particleRadius = secondaryRadius * (
+                        .12f + ((particleSeed ushr 9) and 0xFF) / 255f * .24f
+                        )
+                    canvas.drawOval(
+                        RectF(
+                            centerX + px - particleRadius,
+                            centerY + py - particleRadius * roundness,
+                            centerX + px + particleRadius,
+                            centerY + py + particleRadius * roundness,
+                        ),
+                        strokePaint,
+                    )
+                }
+            }
+        }
+        canvas.restore()
+        strokePaint.shader = null
+        strokePaint.colorFilter = null
+        strokePaint.alpha = originalAlpha
+        strokePaint.xfermode = originalXfermode
+        strokePaint.style = originalStyle
+    }
+
+    private fun applyGrainTexture(
+        paint: Paint,
+        settings: BrushSettings,
+        drawingTool: DrawingTool,
+        x: Float,
+        y: Float,
+        stampIndex: Int,
+        angleRadians: Float,
+        profile: BrushGrainProfile = settings.grainProfile,
+        resolvedColor: Int = settings.color,
+    ) {
+        if (
+            drawingTool == DrawingTool.ERASER ||
+            profile.depth <= .01f ||
+            profile.source == BrushGrainSource.NONE
+        ) {
+            paint.shader = null
+            paint.colorFilter = null
+            return
+        }
+        val key = brushTextureKey(profile)
+        val entry = grainTextureCache[key] ?: run {
+            val bitmap = createBrushGrainBitmap(key)
+            GrainTextureEntry(
+                bitmap = bitmap,
+                shader = BitmapShader(bitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT),
+            ).also { grainTextureCache[key] = it }
+        }
+        val textureScale = profile.scale.coerceIn(.15f, 4f)
+        grainShaderMatrix.reset()
+        grainShaderMatrix.setScale(textureScale, textureScale)
+        if (profile.mode == BrushGrainMode.MOVING) {
+            val movement = profile.movement.coerceIn(0f, 1f)
+            grainShaderMatrix.postRotate(
+                angleRadians * 180f / PI.toFloat() * movement,
+                x,
+                y,
+            )
+            grainShaderMatrix.postTranslate(
+                x * movement + stampIndex * 1.7f,
+                y * movement + stampIndex * .9f,
+            )
+        }
+        entry.shader.setLocalMatrix(grainShaderMatrix)
+        paint.shader = entry.shader
+        paint.colorFilter = PorterDuffColorFilter(resolvedColor, PorterDuff.Mode.SRC_IN)
+    }
+
+    private fun resolveBrushRotation(
+        settings: BrushSettings,
+        strokeAngle: Float,
+        stylusOrientation: Float,
+        seed: Int,
+    ): Float {
+        val profile = settings.tipProfile
+        val base = when (profile.rotationMode) {
+            BrushRotationMode.FOLLOW_STROKE -> strokeAngle
+            BrushRotationMode.FIXED -> 0f
+            BrushRotationMode.STYLUS -> stylusOrientation
+            BrushRotationMode.RANDOM -> {
+                val unit = ((seed ushr 8) and 0xFFFF) / 65535f
+                unit * (2f * PI.toFloat())
+            }
+        }
+        val jitterUnit = ((seed and 0xFFFF) / 65535f) - .5f
+        return base +
+            Math.toRadians(profile.angleDegrees.toDouble()).toFloat() +
+            jitterUnit * profile.rotationJitter.coerceIn(0f, 1f) * PI.toFloat()
     }
 
     private fun loadTipBitmap(path: String): Bitmap? {
@@ -2995,21 +3548,57 @@ class DrawingView(context: Context) : View(context) {
         pressure: Float,
         tilt: Float,
         isPreview: Boolean = false,
+        speedFactor: Float = 0f,
+        resolvedColor: Int = settings.color,
     ) {
-        val safePressure = calibratedPressure(pressure, settings.pressureCurve)
+        val dynamics = settings.dynamicsProfile
+        val legacyPressure = calibratedPressure(pressure, settings.pressureCurve)
+        val sizePressure = applyInputCurve(legacyPressure, dynamics.sizePressure)
+        val opacityPressureValue = applyInputCurve(legacyPressure, dynamics.opacityPressure)
+        val flowPressureValue = applyInputCurve(legacyPressure, dynamics.flowPressure)
         val minimum = settings.minSize.coerceIn(0.02f, 1f)
         val pressureFactor = if (settings.pressureSize) {
-            minimum + safePressure * (1f - minimum)
+            minimum + sizePressure * (1f - minimum)
         } else {
             1f
         }
-        val tiltExpansion = 1f + tilt.coerceIn(0f, 1f) * settings.tiltResponse.coerceIn(0f, 1f) * 0.9f
-        paint.strokeWidth = settings.sizePx * pressureFactor * tiltExpansion
-        val pressureOpacity = if (settings.pressureOpacity) 0.12f + safePressure * 0.88f else 1f
+        val resolvedTilt = (
+            (tilt.coerceIn(0f, 1f) - dynamics.tiltThreshold.coerceIn(0f, .95f)) /
+                (1f - dynamics.tiltThreshold.coerceIn(0f, .95f))
+            ).coerceIn(0f, 1f)
+        val tiltExpansion = 1f + resolvedTilt *
+            max(settings.tiltResponse, dynamics.tiltSize).coerceIn(0f, 1f) * .9f
+        val velocityWidth = 1f -
+            max(settings.velocitySize, dynamics.velocitySize).coerceIn(0f, 1f) *
+            speedFactor.coerceIn(0f, 1f) * .62f
+        paint.strokeWidth = settings.sizePx * pressureFactor * tiltExpansion * velocityWidth
+        val pressureOpacity = if (settings.pressureOpacity) {
+            .08f + opacityPressureValue * .92f
+        } else {
+            1f
+        }
+        val velocityOpacity = 1f -
+            dynamics.velocityOpacity.coerceIn(0f, 1f) * speedFactor.coerceIn(0f, 1f) * .72f
+        val tiltOpacity = 1f -
+            dynamics.tiltOpacity.coerceIn(0f, 1f) * resolvedTilt * .45f
+        val dynamicFlow = if (settings.pressureOpacity) {
+            .18f + flowPressureValue * .82f
+        } else {
+            1f
+        }
         val previewFactor = if (isPreview) 0.72f else 1f
-        paint.alpha = (settings.opacity * settings.flow * pressureOpacity * previewFactor * 255f)
+        val renderMultiplier = if (drawingTool == DrawingTool.ERASER) {
+            1f
+        } else {
+            renderAlphaMultiplier(settings.renderProfile) *
+                (1f - settings.renderProfile.dilution.coerceIn(0f, 1f) * .48f)
+        }
+        paint.alpha = (
+            settings.opacity * settings.flow * pressureOpacity * dynamicFlow * previewFactor *
+                velocityOpacity * tiltOpacity * renderMultiplier * 255f
+            )
             .toInt().coerceIn(1, 255)
-        paint.color = settings.color
+        paint.color = resolvedColor
         paint.style = Paint.Style.STROKE
         paint.strokeCap = if (settings.kind == BrushKind.MARKER) Paint.Cap.SQUARE else Paint.Cap.ROUND
         paint.strokeJoin = Paint.Join.ROUND

@@ -96,6 +96,34 @@ internal class SparseTileSurface(
         true
     }
 
+    /**
+     * Variant used by command replay so the renderer can reject segments that do
+     * not intersect the current tile instead of replaying a long stroke in full.
+     */
+    fun drawPerTile(bounds: RectF, block: (Canvas, RectF) -> Unit): Boolean = synchronized(lock) {
+        val keys = TileStorage.keysForBounds(bounds, width, height)
+        if (keys.isEmpty()) return@synchronized false
+        keys.forEach { key ->
+            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEach
+            val rect = TileStorage.tileRect(key, width, height)
+            val tileBounds = RectF(
+                rect.left.toFloat(),
+                rect.top.toFloat(),
+                rect.right.toFloat(),
+                rect.bottom.toFloat(),
+            )
+            val tileCanvas = Canvas(bitmap)
+            tileCanvas.save()
+            tileCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+            tileCanvas.clipRect(tileBounds)
+            block(tileCanvas, tileBounds)
+            tileCanvas.restore()
+            markModified(key)
+        }
+        trimCache(emptySet())
+        true
+    }
+
     /** Draws while preserving the alpha that already exists in each affected tile. */
     fun drawPreservingAlpha(bounds: RectF, block: (Canvas) -> Unit): Boolean = synchronized(lock) {
         val keys = TileStorage.keysForBounds(bounds, width, height)
@@ -208,6 +236,22 @@ internal class SparseTileSurface(
         val rect = TileStorage.tileRect(key, width, height)
         target.drawBitmap(bitmap, rect.left - x, rect.top - y, paint)
         trimCache(setOf(key))
+    }
+
+    /** Samples one document-space pixel without allocating a temporary bitmap. */
+    fun samplePixel(x: Float, y: Float): Int? = synchronized(lock) {
+        if (x < 0f || x >= width.toFloat() || y < 0f || y >= height.toFloat()) {
+            return@synchronized null
+        }
+        val key = TileStorage.Key(
+            column = (x / TileStorage.TILE_SIZE).toInt(),
+            row = (y / TileStorage.TILE_SIZE).toInt(),
+        )
+        val bitmap = obtainTile(key, createIfMissing = false) ?: return@synchronized null
+        val rect = TileStorage.tileRect(key, width, height)
+        val localX = (x.toInt() - rect.left).coerceIn(0, bitmap.width - 1)
+        val localY = (y.toInt() - rect.top).coerceIn(0, bitmap.height - 1)
+        bitmap.getPixel(localX, localY)
     }
 
     fun renderBitmap(maxPixels: Long): Bitmap = synchronized(lock) {

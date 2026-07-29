@@ -4,8 +4,8 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Release candidate para tablets / fase 8
-> **Versión incluida en este repositorio:** `2.1.0`
+> **Estado del proyecto:** Release candidate para tablets / fase 9.1
+> **Versión incluida en este repositorio:** `2.2.0`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -13,7 +13,13 @@ Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un 
 
 ## Capturas en dispositivo real
 
-Las siguientes capturas fueron obtenidas de la variante de depuración ejecutada en una Samsung Galaxy Tab S8 (`SM-X700`). Muestran la interfaz de tablet y el lienzo con trazos reales; no son renders promocionales.
+Las siguientes capturas fueron obtenidas directamente de una Samsung Galaxy Tab S8 (`SM-X700`). Muestran la interfaz de tablet y el lienzo con trazos reales; no son renders promocionales.
+
+![Academia interactiva de pinceles de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-tutorial-2.2.0.png)
+
+![Biblioteca Brush Studio 4.0 de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-brush-studio-4-tab-s8.png)
+
+![Editor de punta y material de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-brush-material-4-tab-s8.png)
 
 ![Editor de Canvas Studio en una Galaxy Tab S8](docs/images/editor-tab-s8.png)
 
@@ -1028,7 +1034,7 @@ El checklist detallado está en [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.m
 
 ## Limitaciones actuales
 
-Canvas Studio `2.1.0` es una release candidate para distribución controlada en tablets.
+Canvas Studio `2.2.0` es una release candidate para distribución controlada en tablets.
 
 ### Motor y rendimiento
 
@@ -1154,6 +1160,29 @@ Comprueba:
 - certificación masiva en Galaxy Tab S8: completada;
 - firma, APK, AAB y documentación de distribución: completados.
 
+### Fase 9 — pinceles profesionales
+
+- motor 3.0 separado en punta, grano, render y medio;
+- orientación real del S Pen y muestras históricas;
+- granos originales de papel, lienzo, cerda y acuarela sin costuras;
+- editor de material y preview reactivo;
+- matriz visual automática y pruebas masivas de retención en Galaxy Tab S8.
+
+### Fase 9.1 — Brush Studio 4.0 y academia interactiva
+
+- curvas independientes de presión para tamaño, opacidad y flujo;
+- respuesta separada de velocidad e inclinación, con el rango físico completo del S Pen;
+- segunda punta no recursiva con grano, escala, dispersión y modos de combinación;
+- acuarela y óleo con carga, ataque, sangrado y recogida de color del lienzo;
+- perfiles authored por preset para diferenciar 2H, HB, 6B, tintas, acuarelas y óleos;
+- bounds conservadores que incluyen partículas, blur, sangrado y Dual Brush;
+- replay filtrado por tile para evitar el costo `tiles × trazo completo`;
+- tutorial interactivo de siete etapas, accesible desde **Más opciones → Tutorial de pinceles**;
+- 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
+
+La arquitectura busca una experiencia profesional comparable en tablet Android. No afirma
+compatibilidad binaria ni identidad exacta con el motor propietario o los recursos de Procreate.
+
 ### Futuro posterior a la beta
 
 - gestión de color avanzada;
@@ -1178,6 +1207,8 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/PHASE_4_TEST_BUILD.md`](docs/PHASE_4_TEST_BUILD.md) | Alcance de la primera build de fase 4 |
 | [`docs/PHASE_4_1.md`](docs/PHASE_4_1.md) | Grupos, máscaras y perspectiva editable |
 | [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |
+| [`docs/PHASE_9_PROFESSIONAL_BRUSHES.md`](docs/PHASE_9_PROFESSIONAL_BRUSHES.md) | Motor 3.0, investigación, materiales y validación visual |
+| [`docs/PHASE_9_1_BRUSH_STUDIO_4.md`](docs/PHASE_9_1_BRUSH_STUDIO_4.md) | Dual Brush, dinámicas independientes, mezcla húmeda, tutorial y pruebas masivas |
 | [`docs/PERFORMANCE_HOTFIX_1.5.1.md`](docs/PERFORMANCE_HOTFIX_1.5.1.md) | Primer hotfix de rendimiento |
 | [`docs/PERFORMANCE_HOTFIX_1.5.2.md`](docs/PERFORMANCE_HOTFIX_1.5.2.md) | Procesamiento de pinceles texturizados |
 | [`docs/CRASH_HOTFIX_1.5.3.md`](docs/CRASH_HOTFIX_1.5.3.md) | Corrección del cierre por desbordamiento |

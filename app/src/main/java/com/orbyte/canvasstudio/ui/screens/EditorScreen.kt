@@ -137,6 +137,8 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
+import com.orbyte.canvasstudio.drawing.BrushRenderMode
+import com.orbyte.canvasstudio.drawing.BrushTipShape
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
@@ -205,6 +207,7 @@ private val toolSpecs = listOf(
 fun EditorScreen(
     document: EditorDocument,
     onBackToGallery: () -> Unit,
+    onOpenTutorial: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -233,6 +236,11 @@ fun EditorScreen(
                 grain = selectedPreset.grain,
                 velocitySize = selectedPreset.velocitySize,
                 tipAssetPath = selectedPreset.tipAssetPath,
+                tipProfile = selectedPreset.tipProfile,
+                grainProfile = selectedPreset.grainProfile,
+                renderProfile = selectedPreset.renderProfile,
+                dynamicsProfile = selectedPreset.dynamicsProfile,
+                dualBrushProfile = selectedPreset.dualBrushProfile,
                 kind = selectedPreset.kind,
                 color = AndroidColor.rgb(37, 42, 49),
             ),
@@ -292,6 +300,11 @@ fun EditorScreen(
             grain = preset.grain,
             velocitySize = preset.velocitySize,
             tipAssetPath = preset.tipAssetPath,
+            tipProfile = preset.tipProfile,
+            grainProfile = preset.grainProfile,
+            renderProfile = preset.renderProfile,
+            dynamicsProfile = preset.dynamicsProfile,
+            dualBrushProfile = preset.dualBrushProfile,
             kind = preset.kind,
         )
         selectedTool = DrawingTool.BRUSH
@@ -645,6 +658,7 @@ fun EditorScreen(
             zenMode = zenMode,
             onToggleZen = { zenMode = !zenMode },
             onShowHelp = { showHelp = true },
+            onOpenTutorial = onOpenTutorial,
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -872,6 +886,11 @@ fun EditorScreen(
                             grain = brushSettings.grain,
                             velocitySize = brushSettings.velocitySize,
                             tipAssetPath = brushSettings.tipAssetPath,
+                            tipProfile = brushSettings.tipProfile,
+                            grainProfile = brushSettings.grainProfile,
+                            renderProfile = brushSettings.renderProfile,
+                            dynamicsProfile = brushSettings.dynamicsProfile,
+                            dualBrushProfile = brushSettings.dualBrushProfile,
                         )
                         updateCustomBrushes(customBrushes + custom)
                         selectedPreset = custom
@@ -1039,6 +1058,7 @@ private fun EditorTopBar(
     zenMode: Boolean,
     onToggleZen: () -> Unit,
     onShowHelp: () -> Unit,
+    onOpenTutorial: () -> Unit,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     BoxWithConstraints(
@@ -1159,6 +1179,11 @@ private fun EditorTopBar(
                         text = { Text("Ayuda rápida") },
                         leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null) },
                         onClick = { menuExpanded = false; onShowHelp() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Tutorial de pinceles") },
+                        leadingIcon = { Icon(Icons.Outlined.Brush, null) },
+                        onClick = { menuExpanded = false; onOpenTutorial() },
                     )
                     DropdownMenuItem(
                         text = { Text(if (gridVisible) "Ocultar cuadrícula" else "Mostrar cuadrícula") },
@@ -1752,7 +1777,7 @@ private fun ExpandedBrushLibraryDialog(
                                 .padding(4.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            listOf("General", "Dinámicas").forEach { section ->
+                            listOf("General", "Material", "Dinámicas").forEach { section ->
                                 Surface(
                                     modifier = Modifier.weight(1f).clickable { settingsSection = section },
                                     color = if (settingsSection == section) StudioPalette.AccentSoft else Color.Transparent,
@@ -1786,10 +1811,256 @@ private fun ExpandedBrushLibraryDialog(
                                 onSettingsChanged(settings.copy(spacing = it))
                             }
                             SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(grain = it))
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grain = it,
+                                        grainProfile = settings.grainProfile.copy(depth = it),
+                                    ),
+                                )
                             }
                             SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
                                 onSettingsChanged(settings.copy(stabilization = it))
+                            }
+                        } else if (settingsSection == "Material") {
+                            Text("Punta", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+                            SettingSlider(
+                                "Redondez",
+                                settings.tipProfile.roundness,
+                                .08f..1f,
+                                "${(settings.tipProfile.roundness * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        tipProfile = settings.tipProfile.copy(roundness = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Ángulo",
+                                settings.tipProfile.angleDegrees,
+                                -180f..180f,
+                                "${settings.tipProfile.angleDegrees.toInt()}°",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        tipProfile = settings.tipProfile.copy(angleDegrees = it),
+                                    ),
+                                )
+                            }
+                            if (settings.tipProfile.shape in setOf(
+                                    BrushTipShape.BRISTLE,
+                                    BrushTipShape.PARTICLE,
+                                )
+                            ) {
+                                SettingSlider(
+                                    "Cantidad",
+                                    settings.tipProfile.count.toFloat(),
+                                    2f..14f,
+                                    settings.tipProfile.count.toString(),
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            tipProfile = settings.tipProfile.copy(count = it.toInt()),
+                                        ),
+                                    )
+                                }
+                            }
+                            Text("Grano", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+                            SettingSlider(
+                                "Profundidad",
+                                settings.grainProfile.depth,
+                                0f..1f,
+                                "${(settings.grainProfile.depth * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grain = it,
+                                        grainProfile = settings.grainProfile.copy(depth = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Escala",
+                                settings.grainProfile.scale,
+                                .15f..4f,
+                                String.format(Locale.US, "%.2fx", settings.grainProfile.scale),
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grainProfile = settings.grainProfile.copy(scale = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Contraste",
+                                settings.grainProfile.contrast,
+                                0f..1f,
+                                "${(settings.grainProfile.contrast * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        grainProfile = settings.grainProfile.copy(contrast = it),
+                                    ),
+                                )
+                            }
+                            Text(
+                                "Pincel dual",
+                                color = StudioPalette.Text,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            BrushToggle("Segunda punta", settings.dualBrushProfile.enabled) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dualBrushProfile = settings.dualBrushProfile.copy(enabled = it),
+                                    ),
+                                )
+                            }
+                            if (settings.dualBrushProfile.enabled) {
+                                SettingSlider(
+                                    "Escala secundaria",
+                                    settings.dualBrushProfile.sizeScale,
+                                    .1f..2f,
+                                    String.format(Locale.US, "%.2fx", settings.dualBrushProfile.sizeScale),
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dualBrushProfile = settings.dualBrushProfile.copy(sizeScale = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Opacidad secundaria",
+                                    settings.dualBrushProfile.opacity,
+                                    0f..1f,
+                                    "${(settings.dualBrushProfile.opacity * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dualBrushProfile = settings.dualBrushProfile.copy(opacity = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Dispersión secundaria",
+                                    settings.dualBrushProfile.scatter,
+                                    0f..1f,
+                                    "${(settings.dualBrushProfile.scatter * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dualBrushProfile = settings.dualBrushProfile.copy(scatter = it),
+                                        ),
+                                    )
+                                }
+                            }
+                            Text(
+                                "Render y medio",
+                                color = StudioPalette.Text,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            SettingSlider(
+                                "Acumulación",
+                                settings.renderProfile.buildup,
+                                0f..1f,
+                                "${(settings.renderProfile.buildup * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        renderProfile = settings.renderProfile.copy(buildup = it),
+                                    ),
+                                )
+                            }
+                            if (settings.kind in setOf(
+                                    BrushKind.WATERCOLOR,
+                                    BrushKind.OIL,
+                                    BrushKind.PAINT,
+                                    BrushKind.BRISTLE,
+                                )
+                            ) {
+                                SettingSlider(
+                                    "Humedad",
+                                    settings.renderProfile.wetness,
+                                    0f..1f,
+                                    "${(settings.renderProfile.wetness * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(wetness = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Arrastre",
+                                    settings.renderProfile.drag,
+                                    0f..1f,
+                                    "${(settings.renderProfile.drag * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(drag = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Dilución",
+                                    settings.renderProfile.dilution,
+                                    0f..1f,
+                                    "${(settings.renderProfile.dilution * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(dilution = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Carga",
+                                    settings.renderProfile.charge,
+                                    0f..1f,
+                                    "${(settings.renderProfile.charge * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(charge = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Ataque",
+                                    settings.renderProfile.attack,
+                                    0f..1f,
+                                    "${(settings.renderProfile.attack * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(attack = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Sangrado",
+                                    settings.renderProfile.bleed,
+                                    0f..1f,
+                                    "${(settings.renderProfile.bleed * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(bleed = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Recogida de color",
+                                    settings.renderProfile.colorPickup,
+                                    0f..1f,
+                                    "${(settings.renderProfile.colorPickup * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            renderProfile = settings.renderProfile.copy(colorPickup = it),
+                                        ),
+                                    )
+                                }
                             }
                         } else {
                             SettingSlider("Tamaño mínimo", settings.minSize, .02f..1f, "${(settings.minSize * 100).toInt()}%") {
@@ -1799,6 +2070,48 @@ private fun ExpandedBrushLibraryDialog(
                                 onSettingsChanged(settings.copy(pressureCurve = it))
                             }
                             PressureCurvePreview(settings.pressureCurve)
+                            SettingSlider(
+                                "Curva de tamaño",
+                                settings.dynamicsProfile.sizePressure.gamma,
+                                .25f..4f,
+                                "%.2f".format(settings.dynamicsProfile.sizePressure.gamma),
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(
+                                            sizePressure = settings.dynamicsProfile.sizePressure.copy(gamma = it),
+                                        ),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Curva de opacidad",
+                                settings.dynamicsProfile.opacityPressure.gamma,
+                                .25f..4f,
+                                "%.2f".format(settings.dynamicsProfile.opacityPressure.gamma),
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(
+                                            opacityPressure = settings.dynamicsProfile.opacityPressure.copy(gamma = it),
+                                        ),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Curva de flujo",
+                                settings.dynamicsProfile.flowPressure.gamma,
+                                .25f..4f,
+                                "%.2f".format(settings.dynamicsProfile.flowPressure.gamma),
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(
+                                            flowPressure = settings.dynamicsProfile.flowPressure.copy(gamma = it),
+                                        ),
+                                    ),
+                                )
+                            }
                             SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
                                 onSettingsChanged(settings.copy(tiltResponse = it))
                             }
@@ -1812,7 +2125,48 @@ private fun ExpandedBrushLibraryDialog(
                                 onSettingsChanged(settings.copy(scatter = it))
                             }
                             SettingSlider("Respuesta a velocidad", settings.velocitySize, 0f..1f, "${(settings.velocitySize * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(velocitySize = it))
+                                onSettingsChanged(
+                                    settings.copy(
+                                        velocitySize = it,
+                                        dynamicsProfile = settings.dynamicsProfile.copy(velocitySize = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Velocidad → opacidad",
+                                settings.dynamicsProfile.velocityOpacity,
+                                0f..1f,
+                                "${(settings.dynamicsProfile.velocityOpacity * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(velocityOpacity = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Umbral de inclinación",
+                                settings.dynamicsProfile.tiltThreshold,
+                                0f..0.9f,
+                                "${(settings.dynamicsProfile.tiltThreshold * 90f).toInt()}°",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(tiltThreshold = it),
+                                    ),
+                                )
+                            }
+                            SettingSlider(
+                                "Inclinación → opacidad",
+                                settings.dynamicsProfile.tiltOpacity,
+                                0f..1f,
+                                "${(settings.dynamicsProfile.tiltOpacity * 100).toInt()}%",
+                            ) {
+                                onSettingsChanged(
+                                    settings.copy(
+                                        dynamicsProfile = settings.dynamicsProfile.copy(tiltOpacity = it),
+                                    ),
+                                )
                             }
                             BrushToggle("Presión controla tamaño", settings.pressureSize) {
                                 onSettingsChanged(settings.copy(pressureSize = it))
@@ -1892,7 +2246,7 @@ private fun BrushDock(
             Column(Modifier.weight(1f)) {
                 Text("Biblioteca de pinceles", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "Motor 2.0 · presión, textura, taper y velocidad",
+                    "Motor 3.0 · punta, grano, render y dinámica del S Pen",
                     color = StudioPalette.TextMuted,
                     style = MaterialTheme.typography.bodyMedium,
                 )
@@ -2010,7 +2364,12 @@ private fun BrushDock(
             onSettingsChanged(settings.copy(scatter = it))
         }
         SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-            onSettingsChanged(settings.copy(grain = it))
+            onSettingsChanged(
+                settings.copy(
+                    grain = it,
+                    grainProfile = settings.grainProfile.copy(depth = it),
+                ),
+            )
         }
         SettingSlider("Respuesta a velocidad", settings.velocitySize, 0f..1f, "${(settings.velocitySize * 100).toInt()}%") {
             onSettingsChanged(settings.copy(velocitySize = it))
@@ -2184,6 +2543,11 @@ private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = cop
     grain = settings.grain,
     velocitySize = settings.velocitySize,
     tipAssetPath = settings.tipAssetPath,
+    tipProfile = settings.tipProfile,
+    grainProfile = settings.grainProfile,
+    renderProfile = settings.renderProfile,
+    dynamicsProfile = settings.dynamicsProfile,
+    dualBrushProfile = settings.dualBrushProfile,
 )
 
 @Composable
@@ -2196,28 +2560,79 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
         val usableWidth = (size.width - 16f).coerceAtLeast(1f)
         val centerY = size.height * .56f
         val baseWidth = (1.2f + preset.sizePx / 8.5f).coerceAtMost(size.height * .7f)
-        val strength = (preset.opacity * preset.flow).coerceIn(.05f, 1f)
-        val texture = preset.grain.coerceIn(0f, 1f)
+        val renderStrength = when (preset.renderProfile.mode) {
+            BrushRenderMode.LIGHT_GLAZE -> .28f + preset.renderProfile.buildup * .34f
+            BrushRenderMode.UNIFORM_GLAZE -> .56f + preset.renderProfile.buildup * .36f
+            BrushRenderMode.INTENSE_GLAZE -> .82f + preset.renderProfile.buildup * .18f
+            BrushRenderMode.BLENDING -> .68f + preset.renderProfile.buildup * .28f
+        }
+        val strength = (preset.opacity * preset.flow * renderStrength).coerceIn(.03f, 1f)
+        val texture = preset.grainProfile.depth.coerceIn(0f, 1f)
         val softness = 1f - preset.hardness.coerceIn(0f, 1f)
+        val dynamics = preset.dynamicsProfile
         val strands = when (preset.kind) {
-            BrushKind.BRISTLE -> 6
-            BrushKind.DRY_BRUSH, BrushKind.CHARCOAL, BrushKind.CHALK -> 4
-            BrushKind.OIL -> 3
+            BrushKind.BRISTLE, BrushKind.DRY_BRUSH, BrushKind.OIL ->
+                preset.tipProfile.count.coerceIn(2, 10)
+            BrushKind.CHARCOAL, BrushKind.CHALK ->
+                preset.tipProfile.count.coerceIn(2, 8)
             else -> 1
         }
         repeat(72) { index ->
             val t = index / 71f
             val nextT = ((index + 1) / 71f).coerceAtMost(1f)
-            val pressure = Math.pow(kotlin.math.sin(Math.PI * t).coerceAtLeast(.02), preset.pressureCurve.toDouble()).toFloat()
-            val response = if (preset.pressureSize) preset.minSize + (1f - preset.minSize) * pressure else 1f
+            val rawPressure = kotlin.math.sin(Math.PI * t).coerceAtLeast(.02).toFloat()
+            val pressure = Math.pow(rawPressure.toDouble(), preset.pressureCurve.toDouble()).toFloat()
+            val sizePressure = Math.pow(
+                pressure.toDouble(),
+                dynamics.sizePressure.gamma.coerceIn(.25f, 4f).toDouble(),
+            ).toFloat()
+            val opacityPressureValue = Math.pow(
+                pressure.toDouble(),
+                dynamics.opacityPressure.gamma.coerceIn(.25f, 4f).toDouble(),
+            ).toFloat()
+            val flowPressureValue = Math.pow(
+                pressure.toDouble(),
+                dynamics.flowPressure.gamma.coerceIn(.25f, 4f).toDouble(),
+            ).toFloat()
+            val response = if (preset.pressureSize) {
+                preset.minSize + (1f - preset.minSize) * sizePressure
+            } else {
+                1f
+            }
             val startTaper = if (preset.taperStart > 0f) (t / preset.taperStart).coerceIn(.08f, 1f) else 1f
             val endTaper = if (preset.taperEnd > 0f) ((1f - t) / preset.taperEnd).coerceIn(.08f, 1f) else 1f
-            val speed = 1f - preset.velocitySize * kotlin.math.abs(kotlin.math.cos(t * Math.PI * 2)).toFloat() * .38f
-            val width = (baseWidth * response * minOf(startTaper, endTaper) * speed).coerceAtLeast(.7f)
+            val speedSignal = kotlin.math.abs(kotlin.math.cos(t * Math.PI * 2)).toFloat()
+            val speed = 1f -
+                maxOf(preset.velocitySize, dynamics.velocitySize) * speedSignal * .38f
+            val tiltSignal = ((kotlin.math.sin(t * Math.PI * 1.45) + 1.0) * .5).toFloat()
+            val tiltAmount = (
+                (tiltSignal - dynamics.tiltThreshold) /
+                    (1f - dynamics.tiltThreshold.coerceAtMost(.95f))
+                ).coerceIn(0f, 1f)
+            val tipRoundness = preset.tipProfile.roundness.coerceIn(.08f, 1f)
+            val width = (
+                baseWidth * response * minOf(startTaper, endTaper) * speed *
+                    (1f + tiltAmount * maxOf(preset.tiltResponse, dynamics.tiltSize) * .55f) *
+                    (.72f + tipRoundness * .28f)
+                ).coerceAtLeast(.7f)
             val wave = kotlin.math.sin(t * Math.PI * 2.2).toFloat() * size.height * .11f
             val nextWave = kotlin.math.sin(nextT * Math.PI * 2.2).toFloat() * size.height * .11f
             val scatter = preset.scatter * width * kotlin.math.sin(index * 12.9898f)
-            val alphaPressure = if (preset.pressureOpacity) (.2f + pressure * .8f) else 1f
+            val alphaPressure = if (preset.pressureOpacity) {
+                .08f + opacityPressureValue * .92f
+            } else {
+                1f
+            }
+            val dynamicFlow = if (preset.pressureOpacity) .18f + flowPressureValue * .82f else 1f
+            val velocityAlpha = 1f - dynamics.velocityOpacity * speedSignal * .72f
+            val tiltAlpha = 1f - dynamics.tiltOpacity * tiltAmount * .45f
+            val wetLoad = if (preset.renderProfile.wetness > .001f) {
+                preset.renderProfile.charge * (
+                    1f - t * (1f - preset.renderProfile.attack) * .72f
+                    )
+            } else {
+                1f
+            }
             val grainPulse = 1f - texture * .48f * kotlin.math.abs(kotlin.math.sin(index * 5.73f))
             val familyAlpha = when (preset.kind) {
                 BrushKind.AIRBRUSH, BrushKind.WATERCOLOR -> .48f
@@ -2227,17 +2642,47 @@ private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifie
             repeat(strands) { strand ->
                 val offset = (strand - (strands - 1) / 2f) * width * .16f
                 drawLine(
-                    color = Color.White.copy(alpha = (strength * alphaPressure * grainPulse * familyAlpha / kotlin.math.sqrt(strands.toFloat())).coerceIn(.03f, 1f)),
+                    color = Color.White.copy(
+                        alpha = (
+                            strength * alphaPressure * dynamicFlow * velocityAlpha * tiltAlpha *
+                                wetLoad * grainPulse * familyAlpha /
+                                kotlin.math.sqrt(strands.toFloat())
+                            ).coerceIn(.03f, 1f),
+                    ),
                     start = Offset(8f + t * usableWidth, centerY + wave + scatter + offset),
                     end = Offset(8f + nextT * usableWidth, centerY + nextWave + scatter + offset),
                     strokeWidth = if (strands == 1) width * (1f + softness * .35f) else (width / strands * 1.45f).coerceAtLeast(.8f),
                     cap = if (preset.kind == BrushKind.MARKER || preset.kind == BrushKind.OIL) StrokeCap.Square else StrokeCap.Round,
                 )
             }
+            if (preset.dualBrushProfile.enabled && index % 2 == 0) {
+                val dual = preset.dualBrushProfile
+                val dualOffset = width * (dual.offset + dual.scatter * kotlin.math.sin(index * 4.71f))
+                drawLine(
+                    color = Color.White.copy(
+                        alpha = (strength * dual.opacity * grainPulse * .5f).coerceIn(.01f, .72f),
+                    ),
+                    start = Offset(8f + t * usableWidth, centerY + wave + dualOffset),
+                    end = Offset(8f + nextT * usableWidth, centerY + nextWave + dualOffset),
+                    strokeWidth = (width * dual.sizeScale).coerceAtLeast(.5f),
+                    cap = StrokeCap.Round,
+                )
+            }
             if (preset.kind == BrushKind.AIRBRUSH) {
                 drawCircle(
                     Color.White.copy(alpha = strength * (.035f + softness * .04f)),
                     radius = width * (1.2f + softness),
+                    center = Offset(8f + t * usableWidth, centerY + wave),
+                )
+            }
+            if (preset.renderProfile.wetness > .1f && index % 3 == 0) {
+                drawCircle(
+                    Color.White.copy(
+                        alpha = (
+                            strength * preset.renderProfile.wetness * .045f
+                            ).coerceIn(.005f, .08f),
+                    ),
+                    radius = width * (1.08f + preset.renderProfile.wetness * .35f),
                     center = Offset(8f + t * usableWidth, centerY + wave),
                 )
             }

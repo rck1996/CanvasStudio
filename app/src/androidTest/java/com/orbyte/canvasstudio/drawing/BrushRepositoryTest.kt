@@ -50,6 +50,9 @@ class BrushRepositoryTest {
         assertTrue(imported.all { it.id.startsWith("custom-") })
         assertTrue(imported.all { it.category == "Personalizados" })
         assertFalse(imported.map { it.id }.distinct().size != imported.size)
+        assertEquals(original.map { it.tipProfile }, imported.map { it.tipProfile })
+        assertEquals(original.map { it.grainProfile }, imported.map { it.grainProfile })
+        assertEquals(original.map { it.renderProfile }, imported.map { it.renderProfile })
     }
 
     @Test

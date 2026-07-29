@@ -1,20 +1,12 @@
 package com.orbyte.canvasstudio.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -22,11 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
-import com.orbyte.canvasstudio.R
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
@@ -37,8 +25,9 @@ import com.orbyte.canvasstudio.model.defaultProjects
 import com.orbyte.canvasstudio.ui.screens.EditorScreen
 import com.orbyte.canvasstudio.ui.screens.GalleryScreen
 import com.orbyte.canvasstudio.ui.screens.NewCanvasDialog
+import com.orbyte.canvasstudio.ui.tutorial.ProfessionalBrushTutorialHost
 
-private enum class Destination { GALLERY, EDITOR }
+private enum class Destination { GALLERY, EDITOR, TUTORIAL }
 
 @Composable
 fun StudioApp() {
@@ -46,10 +35,16 @@ fun StudioApp() {
     val preferences = remember {
         context.getSharedPreferences("canvas_studio_preferences", android.content.Context.MODE_PRIVATE)
     }
-    var showOnboarding by rememberSaveable {
-        mutableStateOf(!preferences.getBoolean("onboarding_complete", false))
+    var destination by rememberSaveable {
+        mutableStateOf(
+            if (preferences.getBoolean("brush_tutorial_complete", false)) {
+                Destination.GALLERY
+            } else {
+                Destination.TUTORIAL
+            },
+        )
     }
-    var destination by remember { mutableStateOf(Destination.GALLERY) }
+    var tutorialReturnDestination by rememberSaveable { mutableStateOf(Destination.GALLERY) }
     var activeDocument by remember {
         mutableStateOf(
             EditorDocument(
@@ -156,6 +151,20 @@ fun StudioApp() {
                     addOrRefreshLocalCard(activeDocument)
                     destination = Destination.GALLERY
                 },
+                onOpenTutorial = {
+                    tutorialReturnDestination = Destination.EDITOR
+                    destination = Destination.TUTORIAL
+                },
+            )
+
+            Destination.TUTORIAL -> ProfessionalBrushTutorialHost(
+                onFinish = {
+                    preferences.edit().putBoolean("brush_tutorial_complete", true).apply()
+                    destination = tutorialReturnDestination
+                },
+                onExit = {
+                    destination = tutorialReturnDestination
+                },
             )
         }
     }
@@ -176,37 +185,4 @@ fun StudioApp() {
         )
     }
 
-    if (showOnboarding) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Bienvenido a Canvas Studio") },
-            text = {
-                Column {
-                    Image(
-                        painter = painterResource(R.drawable.canvas_studio_logo),
-                        contentDescription = "Logo de Canvas Studio",
-                        modifier = Modifier.fillMaxWidth().height(96.dp),
-                        contentScale = ContentScale.Fit,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text("Diseñado para tablets y lápices sensibles a presión.")
-                    Spacer(Modifier.height(8.dp))
-                    Text("• Dibuja con S Pen o stylus; presión e inclinación se aplican automáticamente.")
-                    Text("• Usa dos dedos para mover, ampliar o girar el lienzo.")
-                    Text("• El autoguardado mantiene tiles y metadata; las versiones locales protegen cambios recientes.")
-                    Text("• Abre Más opciones en el editor para guías, simetría y ayuda.")
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        preferences.edit().putBoolean("onboarding_complete", true).apply()
-                        showOnboarding = false
-                    },
-                ) {
-                    Text("Empezar")
-                }
-            },
-        )
-    }
 }

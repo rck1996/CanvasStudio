@@ -1,6 +1,7 @@
 package com.orbyte.canvasstudio.drawing
 
 import kotlin.math.floor
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -47,6 +48,48 @@ enum class BrushRenderMode {
     BLENDING,
 }
 
+enum class DualBrushBlendMode {
+    NORMAL,
+    MULTIPLY,
+    SCREEN,
+}
+
+/**
+ * Independent response curves prevent size, opacity and pigment flow from feeling
+ * like three aliases of the same pressure slider.
+ */
+data class BrushInputCurve(
+    val gamma: Float = 1f,
+    val minimum: Float = 0f,
+    val maximum: Float = 1f,
+)
+
+data class BrushDynamicsProfile(
+    val sizePressure: BrushInputCurve = BrushInputCurve(),
+    val opacityPressure: BrushInputCurve = BrushInputCurve(),
+    val flowPressure: BrushInputCurve = BrushInputCurve(),
+    val velocitySize: Float = 0f,
+    val velocityOpacity: Float = 0f,
+    val tiltSize: Float = 0f,
+    val tiltOpacity: Float = 0f,
+    val tiltThreshold: Float = 0.18f,
+)
+
+/**
+ * A second independently shaped dab. It is deliberately non-recursive so custom
+ * brushes cannot create unbounded render trees or multiply work per stamp.
+ */
+data class DualBrushProfile(
+    val enabled: Boolean = false,
+    val tip: BrushTipProfile = BrushTipProfile(),
+    val grain: BrushGrainProfile = BrushGrainProfile(),
+    val sizeScale: Float = 0.72f,
+    val opacity: Float = 0.35f,
+    val offset: Float = 0f,
+    val scatter: Float = 0f,
+    val blendMode: DualBrushBlendMode = DualBrushBlendMode.MULTIPLY,
+)
+
 data class BrushTipProfile(
     val shape: BrushTipShape = BrushTipShape.ROUND,
     val roundness: Float = 1f,
@@ -72,7 +115,184 @@ data class BrushRenderProfile(
     val wetness: Float = 0f,
     val dilution: Float = 0f,
     val drag: Float = 0f,
+    val charge: Float = 1f,
+    val attack: Float = 0f,
+    val bleed: Float = 0f,
+    val colorPickup: Float = 0f,
 )
+
+internal fun applyInputCurve(value: Float, curve: BrushInputCurve): Float {
+    val normalized = value.coerceIn(0f, 1f).pow(curve.gamma.coerceIn(0.25f, 4f))
+    val minimum = curve.minimum.coerceIn(0f, 1f)
+    val maximum = curve.maximum.coerceIn(minimum, 1f)
+    return minimum + normalized * (maximum - minimum)
+}
+
+internal fun mixPigmentColor(loadedColor: Int, sampledColor: Int?, pickup: Float): Int {
+    val sampled = sampledColor ?: return loadedColor
+    val sampledAlpha = sampled ushr 24 and 0xFF
+    val amount = pickup.coerceIn(0f, 1f) * (sampledAlpha / 255f)
+    if (amount <= .001f) return loadedColor
+
+    fun mixChannel(shift: Int): Int {
+        val loaded = ((loadedColor ushr shift) and 0xFF) / 255f
+        val existing = ((sampled ushr shift) and 0xFF) / 255f
+        val linearLoaded = loaded.pow(2.2f)
+        val linearExisting = existing.pow(2.2f)
+        return (
+            (linearLoaded + (linearExisting - linearLoaded) * amount)
+                .coerceIn(0f, 1f).pow(1f / 2.2f) * 255f
+            ).toInt().coerceIn(0, 255)
+    }
+
+    return (0xFF shl 24) or
+        (mixChannel(16) shl 16) or
+        (mixChannel(8) shl 8) or
+        mixChannel(0)
+}
+
+internal fun defaultDynamicsProfile(kind: BrushKind): BrushDynamicsProfile = when (kind) {
+    BrushKind.PENCIL -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .82f, minimum = .06f),
+        opacityPressure = BrushInputCurve(gamma = 1.24f, minimum = .04f),
+        flowPressure = BrushInputCurve(gamma = 1.08f, minimum = .08f),
+        velocitySize = .12f,
+        tiltSize = .72f,
+        tiltOpacity = .18f,
+        tiltThreshold = .12f,
+    )
+    BrushKind.INK -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .68f, minimum = .02f),
+        opacityPressure = BrushInputCurve(gamma = .78f, minimum = .32f),
+        velocitySize = .18f,
+    )
+    BrushKind.MARKER -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(minimum = .72f),
+        opacityPressure = BrushInputCurve(gamma = .9f, minimum = .28f),
+        flowPressure = BrushInputCurve(gamma = .82f, minimum = .44f),
+        tiltSize = .28f,
+    )
+    BrushKind.WATERCOLOR -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .88f, minimum = .18f),
+        opacityPressure = BrushInputCurve(gamma = 1.38f, minimum = .04f, maximum = .78f),
+        flowPressure = BrushInputCurve(gamma = 1.2f, minimum = .08f, maximum = .7f),
+        velocityOpacity = .28f,
+        tiltSize = .34f,
+    )
+    BrushKind.OIL, BrushKind.BRISTLE, BrushKind.DRY_BRUSH -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .78f, minimum = .14f),
+        opacityPressure = BrushInputCurve(gamma = .86f, minimum = .18f),
+        flowPressure = BrushInputCurve(gamma = .72f, minimum = .16f),
+        velocityOpacity = .16f,
+        tiltSize = .42f,
+    )
+    BrushKind.CHARCOAL, BrushKind.CHALK -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .92f, minimum = .16f),
+        opacityPressure = BrushInputCurve(gamma = 1.3f, minimum = .04f),
+        flowPressure = BrushInputCurve(gamma = 1.18f, minimum = .06f),
+        tiltSize = .86f,
+        tiltOpacity = .34f,
+        tiltThreshold = .08f,
+    )
+    BrushKind.PAINT, BrushKind.AIRBRUSH -> BrushDynamicsProfile(
+        sizePressure = BrushInputCurve(gamma = .9f, minimum = .2f),
+        opacityPressure = BrushInputCurve(gamma = 1.12f, minimum = .08f),
+        flowPressure = BrushInputCurve(gamma = .94f, minimum = .12f),
+        velocityOpacity = .12f,
+        tiltSize = .16f,
+    )
+}
+
+internal fun defaultDualBrushProfile(kind: BrushKind): DualBrushProfile = when (kind) {
+    BrushKind.PENCIL -> DualBrushProfile(
+        enabled = true,
+        tip = BrushTipProfile(
+            shape = BrushTipShape.PARTICLE,
+            roundness = .3f,
+            rotationMode = BrushRotationMode.RANDOM,
+            rotationJitter = .8f,
+            count = 2,
+            countJitter = .35f,
+        ),
+        grain = BrushGrainProfile(
+            mode = BrushGrainMode.TEXTURIZED,
+            scale = .58f,
+            depth = .42f,
+            contrast = .74f,
+            movement = 0f,
+            source = BrushGrainSource.PAPER_FINE,
+        ),
+        sizeScale = .46f,
+        opacity = .2f,
+        scatter = .26f,
+    )
+    BrushKind.CHARCOAL, BrushKind.CHALK -> DualBrushProfile(
+        enabled = true,
+        tip = BrushTipProfile(
+            shape = BrushTipShape.PARTICLE,
+            roundness = .44f,
+            rotationMode = BrushRotationMode.RANDOM,
+            rotationJitter = 1f,
+            count = 3,
+            countJitter = .5f,
+        ),
+        grain = BrushGrainProfile(
+            mode = BrushGrainMode.TEXTURIZED,
+            scale = 1.3f,
+            depth = .72f,
+            contrast = .86f,
+            movement = 0f,
+            source = BrushGrainSource.PAPER_ROUGH,
+        ),
+        sizeScale = .64f,
+        opacity = .28f,
+        scatter = .72f,
+    )
+    BrushKind.DRY_BRUSH, BrushKind.BRISTLE, BrushKind.OIL -> DualBrushProfile(
+        enabled = true,
+        tip = BrushTipProfile(
+            shape = BrushTipShape.BRISTLE,
+            roundness = .14f,
+            rotationMode = BrushRotationMode.FOLLOW_STROKE,
+            count = 4,
+            countJitter = .3f,
+        ),
+        grain = BrushGrainProfile(
+            mode = BrushGrainMode.MOVING,
+            scale = .7f,
+            depth = .54f,
+            contrast = .76f,
+            movement = .9f,
+            source = BrushGrainSource.BRISTLE,
+        ),
+        sizeScale = .82f,
+        opacity = .32f,
+        offset = .08f,
+        scatter = .12f,
+    )
+    BrushKind.WATERCOLOR -> DualBrushProfile(
+        enabled = true,
+        tip = BrushTipProfile(
+            shape = BrushTipShape.OVAL,
+            roundness = .74f,
+            rotationMode = BrushRotationMode.RANDOM,
+            rotationJitter = .35f,
+        ),
+        grain = BrushGrainProfile(
+            mode = BrushGrainMode.TEXTURIZED,
+            scale = 1.6f,
+            depth = .48f,
+            contrast = .62f,
+            movement = .04f,
+            source = BrushGrainSource.WATERCOLOR,
+        ),
+        sizeScale = 1.06f,
+        opacity = .14f,
+        scatter = .08f,
+        blendMode = DualBrushBlendMode.NORMAL,
+    )
+    else -> DualBrushProfile()
+}
 
 fun defaultTipProfile(kind: BrushKind): BrushTipProfile = when (kind) {
     BrushKind.PENCIL -> BrushTipProfile(
@@ -192,6 +412,10 @@ fun defaultRenderProfile(kind: BrushKind): BrushRenderProfile = when (kind) {
         wetness = 0.82f,
         dilution = 0.72f,
         drag = 0.2f,
+        charge = .72f,
+        attack = .18f,
+        bleed = .7f,
+        colorPickup = .42f,
     )
     BrushKind.OIL -> BrushRenderProfile(
         mode = BrushRenderMode.BLENDING,
@@ -199,11 +423,18 @@ fun defaultRenderProfile(kind: BrushKind): BrushRenderProfile = when (kind) {
         wetness = 0.28f,
         dilution = 0.04f,
         drag = 0.76f,
+        charge = .92f,
+        attack = .08f,
+        bleed = .08f,
+        colorPickup = .28f,
     )
     BrushKind.PAINT, BrushKind.BRISTLE -> BrushRenderProfile(
         mode = BrushRenderMode.BLENDING,
         buildup = 0.68f,
         drag = 0.46f,
+        charge = .86f,
+        attack = .06f,
+        colorPickup = .12f,
     )
     BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH -> BrushRenderProfile(
         mode = BrushRenderMode.UNIFORM_GLAZE,

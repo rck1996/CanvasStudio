@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.2.0
+
+- Brush Studio 4.0 con dinámicas independientes de tamaño, opacidad, flujo, velocidad e inclinación;
+- rango físico completo de inclinación del S Pen e interpolación angular sin saltos;
+- Dual Brush no recursivo con punta/grano propios y modos Normal, Multiply y Screen;
+- medios húmedos con carga, ataque, sangrado y recogida de pigmento existente;
+- presets authored para diferenciar materiales y herramientas de una misma familia;
+- bounds ampliados para segunda punta, partículas, blur y sangrado;
+- replay filtrado por tile para reducir el costo de trazos largos y gruesos;
+- preview reactivo a los nuevos parámetros y controles avanzados dentro del editor;
+- tutorial interactivo tablet-first de siete etapas;
+- 44 pruebas instrumentadas completas más una regresión de 500 trazos largos de 180 px en Galaxy Tab S8.
+
 ## 2.1.0
 
 - corregido el parpadeo completo del dibujo al pasar de un dedo a navegación con dos dedos;

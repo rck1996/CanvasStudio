@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -122,6 +123,65 @@ class BrushRetentionMatrixTest {
         }
     }
 
+    @Test
+    @LargeTest
+    fun professionalDualAndWetBrushesRetainSentinelsAfter500LongStrokes() {
+        val view = DrawingView(context)
+        val presets = listOf(
+            "pencil-6b",
+            "charcoal",
+            "bristle",
+            "granulated-watercolor",
+            "impasto-bristle",
+        ).map { id -> premiumBrushes.first { it.id == id } }
+        val sentinels = listOf(
+            TestPoint(180f, 72f),
+            TestPoint(700f, 72f),
+            TestPoint(1_220f, 72f),
+            TestPoint(1_740f, 72f),
+        )
+        val start = android.os.SystemClock.elapsedRealtime()
+
+        try {
+            instrumentation.runOnMainSync {
+                view.configureDocument(DOCUMENT_SIZE, DOCUMENT_SIZE)
+                view.tool = DrawingTool.BRUSH
+                view.brushSettings = premiumBrushes.first { it.id == "technical-ink" }
+                    .toStressSettings().copy(sizePx = 28f, color = Color.BLACK)
+                sentinels.forEachIndexed { index, point -> drawStroke(view, point, index) }
+
+                repeat(500) { stroke ->
+                    val preset = presets[stroke % presets.size]
+                    view.brushSettings = preset.toStressSettings().copy(
+                        sizePx = 180f,
+                        color = Color.rgb(82, 92, 108),
+                    )
+                    drawLongStroke(
+                        view = view,
+                        y = 300f + (stroke % 45) * 35f,
+                        index = sentinels.size + stroke,
+                    )
+                }
+            }
+            val result = instrumentation.runOnMainSyncWithResult {
+                view.exportCompositeBitmap(includePaper = false)
+            }
+            try {
+                val retained = sentinels.count { result.hasDarkInkNear(it) }
+                assertTrue(
+                    "La carga mixta de 500 trazos perdió centinelas antiguos: $retained/${sentinels.size}",
+                    retained == sentinels.size,
+                )
+            } finally {
+                result.recycle()
+            }
+            val elapsed = android.os.SystemClock.elapsedRealtime() - start
+            assertTrue("La prueba masiva tardó demasiado: ${elapsed}ms", elapsed < 120_000L)
+        } finally {
+            instrumentation.runOnMainSync { view.configureDocument(256, 256) }
+        }
+    }
+
     private fun BrushPreset.toStressSettings(): BrushSettings = BrushSettings(
         sizePx = 120f,
         opacity = opacity.coerceAtLeast(.55f),
@@ -141,6 +201,11 @@ class BrushRetentionMatrixTest {
         grain = grain,
         velocitySize = 0f,
         kind = kind,
+        tipProfile = tipProfile,
+        grainProfile = grainProfile,
+        renderProfile = renderProfile,
+        dynamicsProfile = dynamicsProfile,
+        dualBrushProfile = dualBrushProfile,
     )
 
     private fun BrushPreset.toModifiedSettings(sizePx: Float): BrushSettings = BrushSettings(
@@ -162,6 +227,11 @@ class BrushRetentionMatrixTest {
         grain = grain,
         velocitySize = velocitySize,
         kind = kind,
+        tipProfile = tipProfile,
+        grainProfile = grainProfile,
+        renderProfile = renderProfile,
+        dynamicsProfile = dynamicsProfile,
+        dualBrushProfile = dualBrushProfile,
     )
 
     private fun drawStroke(view: DrawingView, point: TestPoint, index: Int) {
@@ -229,6 +299,23 @@ class BrushRetentionMatrixTest {
         val pixels = IntArray(area.width() * area.height())
         getPixels(pixels, 0, area.width(), area.left, area.top, area.width(), area.height())
         return pixels.count { Color.alpha(it) > 8 } >= 20
+    }
+
+    private fun Bitmap.hasDarkInkNear(point: TestPoint): Boolean {
+        val area = Rect(
+            (point.x - 92f).toInt().coerceAtLeast(0),
+            (point.y - 60f).toInt().coerceAtLeast(0),
+            (point.x + 92f).toInt().coerceAtMost(width),
+            (point.y + 60f).toInt().coerceAtMost(height),
+        )
+        val pixels = IntArray(area.width() * area.height())
+        getPixels(pixels, 0, area.width(), area.left, area.top, area.width(), area.height())
+        return pixels.count {
+            Color.alpha(it) > 16 &&
+                Color.red(it) < 45 &&
+                Color.green(it) < 45 &&
+                Color.blue(it) < 45
+        } >= 12
     }
 
     private fun <T> android.app.Instrumentation.runOnMainSyncWithResult(block: () -> T): T {

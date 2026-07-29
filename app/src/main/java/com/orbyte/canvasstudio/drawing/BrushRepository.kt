@@ -239,7 +239,52 @@ object BrushRepository {
             put("wetness", brush.renderProfile.wetness.toDouble())
             put("dilution", brush.renderProfile.dilution.toDouble())
             put("drag", brush.renderProfile.drag.toDouble())
+            put("charge", brush.renderProfile.charge.toDouble())
+            put("attack", brush.renderProfile.attack.toDouble())
+            put("bleed", brush.renderProfile.bleed.toDouble())
+            put("colorPickup", brush.renderProfile.colorPickup.toDouble())
         })
+        put("dynamicsProfile", JSONObject().apply {
+            put("sizePressure", encodeCurve(brush.dynamicsProfile.sizePressure))
+            put("opacityPressure", encodeCurve(brush.dynamicsProfile.opacityPressure))
+            put("flowPressure", encodeCurve(brush.dynamicsProfile.flowPressure))
+            put("velocitySize", brush.dynamicsProfile.velocitySize.toDouble())
+            put("velocityOpacity", brush.dynamicsProfile.velocityOpacity.toDouble())
+            put("tiltSize", brush.dynamicsProfile.tiltSize.toDouble())
+            put("tiltOpacity", brush.dynamicsProfile.tiltOpacity.toDouble())
+            put("tiltThreshold", brush.dynamicsProfile.tiltThreshold.toDouble())
+        })
+        put("dualBrushProfile", JSONObject().apply {
+            put("enabled", brush.dualBrushProfile.enabled)
+            put("sizeScale", brush.dualBrushProfile.sizeScale.toDouble())
+            put("opacity", brush.dualBrushProfile.opacity.toDouble())
+            put("offset", brush.dualBrushProfile.offset.toDouble())
+            put("scatter", brush.dualBrushProfile.scatter.toDouble())
+            put("blendMode", brush.dualBrushProfile.blendMode.name)
+            put("tip", JSONObject().apply {
+                put("shape", brush.dualBrushProfile.tip.shape.name)
+                put("roundness", brush.dualBrushProfile.tip.roundness.toDouble())
+                put("angleDegrees", brush.dualBrushProfile.tip.angleDegrees.toDouble())
+                put("rotationMode", brush.dualBrushProfile.tip.rotationMode.name)
+                put("rotationJitter", brush.dualBrushProfile.tip.rotationJitter.toDouble())
+                put("count", brush.dualBrushProfile.tip.count)
+                put("countJitter", brush.dualBrushProfile.tip.countJitter.toDouble())
+            })
+            put("grain", JSONObject().apply {
+                put("mode", brush.dualBrushProfile.grain.mode.name)
+                put("scale", brush.dualBrushProfile.grain.scale.toDouble())
+                put("depth", brush.dualBrushProfile.grain.depth.toDouble())
+                put("contrast", brush.dualBrushProfile.grain.contrast.toDouble())
+                put("movement", brush.dualBrushProfile.grain.movement.toDouble())
+                put("source", brush.dualBrushProfile.grain.source.name)
+            })
+        })
+    }
+
+    private fun encodeCurve(curve: BrushInputCurve): JSONObject = JSONObject().apply {
+        put("gamma", curve.gamma.toDouble())
+        put("minimum", curve.minimum.toDouble())
+        put("maximum", curve.maximum.toDouble())
     }
 
     private fun decode(item: JSONObject): BrushPreset? = runCatching {
@@ -254,6 +299,10 @@ object BrushRepository {
         val tipJson = item.optJSONObject("tipProfile")
         val grainJson = item.optJSONObject("grainProfile")
         val renderJson = item.optJSONObject("renderProfile")
+        val dynamicsJson = item.optJSONObject("dynamicsProfile")
+        val dualJson = item.optJSONObject("dualBrushProfile")
+        val defaultDynamics = defaultDynamicsProfile(kind)
+        val defaultDual = defaultDualBrushProfile(kind)
         BrushPreset(
             id = item.getString("id"),
             name = item.optString("name", "Pincel personalizado"),
@@ -331,9 +380,115 @@ object BrushRepository {
                 )?.toFloat() ?: defaultRender.dilution,
                 drag = renderJson?.optDouble("drag", defaultRender.drag.toDouble())?.toFloat()
                     ?: defaultRender.drag,
+                charge = renderJson?.optDouble("charge", defaultRender.charge.toDouble())?.toFloat()
+                    ?: defaultRender.charge,
+                attack = renderJson?.optDouble("attack", defaultRender.attack.toDouble())?.toFloat()
+                    ?: defaultRender.attack,
+                bleed = renderJson?.optDouble("bleed", defaultRender.bleed.toDouble())?.toFloat()
+                    ?: defaultRender.bleed,
+                colorPickup = renderJson?.optDouble(
+                    "colorPickup",
+                    defaultRender.colorPickup.toDouble(),
+                )?.toFloat() ?: defaultRender.colorPickup,
             ),
+            dynamicsProfile = BrushDynamicsProfile(
+                sizePressure = decodeCurve(
+                    dynamicsJson?.optJSONObject("sizePressure"),
+                    defaultDynamics.sizePressure,
+                ),
+                opacityPressure = decodeCurve(
+                    dynamicsJson?.optJSONObject("opacityPressure"),
+                    defaultDynamics.opacityPressure,
+                ),
+                flowPressure = decodeCurve(
+                    dynamicsJson?.optJSONObject("flowPressure"),
+                    defaultDynamics.flowPressure,
+                ),
+                velocitySize = dynamicsJson?.optDouble(
+                    "velocitySize",
+                    defaultDynamics.velocitySize.toDouble(),
+                )?.toFloat() ?: defaultDynamics.velocitySize,
+                velocityOpacity = dynamicsJson?.optDouble(
+                    "velocityOpacity",
+                    defaultDynamics.velocityOpacity.toDouble(),
+                )?.toFloat() ?: defaultDynamics.velocityOpacity,
+                tiltSize = dynamicsJson?.optDouble(
+                    "tiltSize",
+                    defaultDynamics.tiltSize.toDouble(),
+                )?.toFloat() ?: defaultDynamics.tiltSize,
+                tiltOpacity = dynamicsJson?.optDouble(
+                    "tiltOpacity",
+                    defaultDynamics.tiltOpacity.toDouble(),
+                )?.toFloat() ?: defaultDynamics.tiltOpacity,
+                tiltThreshold = dynamicsJson?.optDouble(
+                    "tiltThreshold",
+                    defaultDynamics.tiltThreshold.toDouble(),
+                )?.toFloat() ?: defaultDynamics.tiltThreshold,
+            ),
+            dualBrushProfile = decodeDualBrush(dualJson, defaultDual),
         )
     }.getOrNull()
+
+    private fun decodeCurve(json: JSONObject?, default: BrushInputCurve): BrushInputCurve =
+        BrushInputCurve(
+            gamma = json?.optDouble("gamma", default.gamma.toDouble())?.toFloat() ?: default.gamma,
+            minimum = json?.optDouble("minimum", default.minimum.toDouble())?.toFloat()
+                ?: default.minimum,
+            maximum = json?.optDouble("maximum", default.maximum.toDouble())?.toFloat()
+                ?: default.maximum,
+        )
+
+    private fun decodeDualBrush(json: JSONObject?, default: DualBrushProfile): DualBrushProfile {
+        if (json == null) return default
+        val tip = json.optJSONObject("tip")
+        val grain = json.optJSONObject("grain")
+        return DualBrushProfile(
+            enabled = json.optBoolean("enabled", default.enabled),
+            tip = BrushTipProfile(
+                shape = enumValueOrDefault(tip?.optString("shape"), default.tip.shape),
+                roundness = tip?.optDouble("roundness", default.tip.roundness.toDouble())?.toFloat()
+                    ?: default.tip.roundness,
+                angleDegrees = tip?.optDouble(
+                    "angleDegrees",
+                    default.tip.angleDegrees.toDouble(),
+                )?.toFloat() ?: default.tip.angleDegrees,
+                rotationMode = enumValueOrDefault(
+                    tip?.optString("rotationMode"),
+                    default.tip.rotationMode,
+                ),
+                rotationJitter = tip?.optDouble(
+                    "rotationJitter",
+                    default.tip.rotationJitter.toDouble(),
+                )?.toFloat() ?: default.tip.rotationJitter,
+                count = tip?.optInt("count", default.tip.count) ?: default.tip.count,
+                countJitter = tip?.optDouble(
+                    "countJitter",
+                    default.tip.countJitter.toDouble(),
+                )?.toFloat() ?: default.tip.countJitter,
+            ),
+            grain = BrushGrainProfile(
+                mode = enumValueOrDefault(grain?.optString("mode"), default.grain.mode),
+                scale = grain?.optDouble("scale", default.grain.scale.toDouble())?.toFloat()
+                    ?: default.grain.scale,
+                depth = grain?.optDouble("depth", default.grain.depth.toDouble())?.toFloat()
+                    ?: default.grain.depth,
+                contrast = grain?.optDouble(
+                    "contrast",
+                    default.grain.contrast.toDouble(),
+                )?.toFloat() ?: default.grain.contrast,
+                movement = grain?.optDouble(
+                    "movement",
+                    default.grain.movement.toDouble(),
+                )?.toFloat() ?: default.grain.movement,
+                source = enumValueOrDefault(grain?.optString("source"), default.grain.source),
+            ),
+            sizeScale = json.optDouble("sizeScale", default.sizeScale.toDouble()).toFloat(),
+            opacity = json.optDouble("opacity", default.opacity.toDouble()).toFloat(),
+            offset = json.optDouble("offset", default.offset.toDouble()).toFloat(),
+            scatter = json.optDouble("scatter", default.scatter.toDouble()).toFloat(),
+            blendMode = enumValueOrDefault(json.optString("blendMode"), default.blendMode),
+        )
+    }
 
     private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String?, default: T): T =
         enumValues<T>().firstOrNull { it.name == value } ?: default

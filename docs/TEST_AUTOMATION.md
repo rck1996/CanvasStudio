@@ -7,16 +7,23 @@ instrumentación directamente sobre el motor raster; no depende de capturas, tex
 reconocido ni coordenadas de pantalla.
 
 ```powershell
-.\scripts\test-raster-engine.ps1 -Iterations 20
+.\scripts\test-raster-engine.ps1 -Iterations 5
 ```
 
 Para reutilizar APK ya instalados:
 
 ```powershell
-.\scripts\test-raster-engine.ps1 -SkipBuild -SkipInstall -Iterations 20
+.\scripts\test-raster-engine.ps1 -SkipBuild -SkipInstall -Iterations 5
 ```
 
-Cada ciclo ejecuta 28 pruebas. La suite cubre:
+La suite rápida excluye únicamente las pruebas marcadas `LargeTest`. Para ejecutar además la
+regresión de 500 trazos largos y gruesos:
+
+```powershell
+.\scripts\test-raster-engine.ps1 -Iterations 1 -IncludeMassive
+```
+
+Cada ciclo rápido ejecuta al menos 40 pruebas. La suite cubre:
 
 - 200 marcas gruesas únicas en `4096 × 2732`;
 - 539 trazos distribuidos entre once familias de pincel;
@@ -26,7 +33,10 @@ Cada ciclo ejecuta 28 pruebas. La suite cubre:
 - transición de un dedo a navegación con dos dedos sin vaciar el compuesto;
 - guardado, reinicio, recuperación de metadata y versiones locales;
 - presets, recursos bitmap, shortcuts y PSD;
-- política de memoria y exportación 8K con seis capas dispersas.
+- política de memoria y exportación 8K con seis capas dispersas;
+- curvas independientes, Dual Brush, mezcla húmeda y rango físico del S Pen;
+- tutorial interactivo y persistencia de su progreso;
+- opcionalmente, 500 trazos largos de 180 px alternando cinco medios profesionales.
 
 El script detecta dinámicamente el total de tests, exige un mínimo configurable y genera
 `build/reports/phase8-certification/latest.json`.

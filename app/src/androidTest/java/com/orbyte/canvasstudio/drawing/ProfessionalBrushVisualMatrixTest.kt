@@ -79,6 +79,8 @@ class ProfessionalBrushVisualMatrixTest {
         tipProfile = tipProfile,
         grainProfile = grainProfile,
         renderProfile = renderProfile,
+        dynamicsProfile = dynamicsProfile,
+        dualBrushProfile = dualBrushProfile,
     )
 
     private fun drawExpressiveStroke(view: DrawingView, row: Int, preset: BrushPreset) {

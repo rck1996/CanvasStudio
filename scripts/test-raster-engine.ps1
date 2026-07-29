@@ -2,9 +2,10 @@
 param(
     [string]$Serial,
     [ValidateRange(1, 100)] [int]$Iterations = 10,
-    [ValidateRange(1, 1000)] [int]$MinimumExpectedTests = 25,
+    [ValidateRange(1, 1000)] [int]$MinimumExpectedTests = 40,
     [switch]$SkipBuild,
-    [switch]$SkipInstall
+    [switch]$SkipInstall,
+    [switch]$IncludeMassive
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,7 +56,16 @@ $started = Get-Date
 $iterationTimes = [System.Collections.Generic.List[double]]::new()
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     $iterationStarted = Get-Date
-    $result = & $adb -s $Serial shell am instrument -w -r $runner
+    $instrumentArguments = @('-s', $Serial, 'shell', 'am', 'instrument', '-w', '-r')
+    if (-not $IncludeMassive) {
+        $instrumentArguments += @(
+            '-e',
+            'notAnnotation',
+            'androidx.test.filters.LargeTest'
+        )
+    }
+    $instrumentArguments += $runner
+    $result = & $adb @instrumentArguments
     $resultText = $result -join "`n"
     $match = [regex]::Match($resultText, 'OK \((\d+) tests\)')
     $executedTests = if ($match.Success) { [int]$match.Groups[1].Value } else { 0 }
@@ -69,7 +79,9 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
 }
 
 $elapsed = (Get-Date) - $started
-$strokeChecks = $Iterations * $retentionStrokesPerIteration
+$strokeChecks = $Iterations * (
+    $retentionStrokesPerIteration + $(if ($IncludeMassive) { 500 } else { 0 })
+)
 New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
 $report = [ordered]@{
     timestampUtc = (Get-Date).ToUniversalTime().ToString('o')

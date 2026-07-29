@@ -3,10 +3,22 @@ package com.orbyte.canvasstudio.drawing
 import android.graphics.Bitmap
 import android.graphics.Color
 import java.util.UUID
+import kotlin.math.PI
 import kotlin.math.pow
 
 fun calibratedPressure(rawPressure: Float, curve: Float): Float =
     rawPressure.coerceIn(0f, 1f).pow(curve.coerceIn(0.35f, 2.5f))
+
+fun normalizedStylusTilt(rawTiltRadians: Float): Float =
+    (rawTiltRadians / (PI.toFloat() / 2f)).coerceIn(0f, 1f)
+
+fun interpolateCircularRadians(from: Float, to: Float, amount: Float): Float {
+    val fullTurn = (PI * 2).toFloat()
+    var delta = (to - from) % fullTurn
+    if (delta > PI) delta -= fullTurn
+    if (delta < -PI) delta += fullTurn
+    return from + delta * amount.coerceIn(0f, 1f)
+}
 
 fun inputSamplingDistance(settings: BrushSettings, stampBased: Boolean): Float {
     if (!stampBased) return 0.18f
@@ -101,6 +113,8 @@ data class BrushPreset(
     val tipProfile: BrushTipProfile = defaultTipProfile(kind),
     val grainProfile: BrushGrainProfile = defaultGrainProfile(kind, grain),
     val renderProfile: BrushRenderProfile = defaultRenderProfile(kind),
+    val dynamicsProfile: BrushDynamicsProfile = defaultDynamicsProfile(kind),
+    val dualBrushProfile: DualBrushProfile = defaultDualBrushProfile(kind),
 )
 
 data class BrushSettings(
@@ -126,6 +140,8 @@ data class BrushSettings(
     val tipProfile: BrushTipProfile = defaultTipProfile(kind),
     val grainProfile: BrushGrainProfile = defaultGrainProfile(kind, grain),
     val renderProfile: BrushRenderProfile = defaultRenderProfile(kind),
+    val dynamicsProfile: BrushDynamicsProfile = defaultDynamicsProfile(kind),
+    val dualBrushProfile: DualBrushProfile = defaultDualBrushProfile(kind),
 )
 
 data class StrokePoint(
@@ -465,4 +481,102 @@ val premiumBrushes = listOf(
     BrushPreset("spray-grain", "Spray granulado", "Aerógrafo", BrushKind.AIRBRUSH, 118f, .24f, .16f, .065f, .06f, .42f, .46f, true, true, 1.2f, .08f, 0f, 0f, .48f, .62f, 0f),
     BrushPreset("wet-round", "Redondo húmedo", "Acuarela", BrushKind.WATERCOLOR, 76f, .32f, .22f, .06f, .18f, .4f, .18f, true, true, .92f, .28f, .1f, .08f, .04f, .52f, .08f),
     BrushPreset("impasto-bristle", "Cerda impasto", "Óleo", BrushKind.OIL, 108f, .94f, .86f, .075f, .12f, .84f, .22f, true, true, .78f, .54f, .06f, .05f, .12f, .44f, .06f),
-)
+).map(::professionalizePreset)
+
+/**
+ * Preset-level tuning is intentional: two brushes in the same family should not
+ * merely differ by size and label.
+ */
+private fun professionalizePreset(preset: BrushPreset): BrushPreset {
+    val dynamics = preset.dynamicsProfile.copy(
+        sizePressure = preset.dynamicsProfile.sizePressure.copy(gamma = preset.pressureCurve),
+        velocitySize = maxOf(preset.dynamicsProfile.velocitySize, preset.velocitySize),
+        tiltSize = maxOf(preset.dynamicsProfile.tiltSize, preset.tiltResponse),
+    )
+    return when (preset.id) {
+        "pencil-2h", "mechanical-pencil" -> preset.copy(
+            dynamicsProfile = dynamics.copy(
+                opacityPressure = BrushInputCurve(gamma = 1.5f, minimum = .08f, maximum = .72f),
+                tiltSize = .18f,
+            ),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .1f, sizeScale = .3f),
+        )
+        "pencil-6b", "graphite-shader" -> preset.copy(
+            dynamicsProfile = dynamics.copy(
+                opacityPressure = BrushInputCurve(gamma = .86f, minimum = .08f),
+                tiltSize = .96f,
+                tiltOpacity = .36f,
+            ),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .34f, scatter = .44f),
+        )
+        "technical-ink" -> preset.copy(
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(minimum = 1f),
+                opacityPressure = BrushInputCurve(minimum = 1f),
+                velocitySize = 0f,
+            ),
+        )
+        "g-nib", "comic-nib", "manga-ink" -> preset.copy(
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = .58f, minimum = .015f),
+                velocitySize = maxOf(.22f, dynamics.velocitySize),
+            ),
+        )
+        "calligraphy-flat", "sumi-ink" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.CHISEL,
+                roundness = if (preset.id == "calligraphy-flat") .18f else .46f,
+                rotationMode = BrushRotationMode.STYLUS,
+                angleDegrees = -24f,
+            ),
+            dynamicsProfile = dynamics.copy(tiltSize = .56f, tiltOpacity = .18f),
+        )
+        "granulated-watercolor" -> preset.copy(
+            grainProfile = preset.grainProfile.copy(
+                scale = 1.72f,
+                depth = maxOf(.76f, preset.grainProfile.depth),
+                contrast = .76f,
+            ),
+            renderProfile = preset.renderProfile.copy(
+                charge = .58f,
+                attack = .28f,
+                bleed = .82f,
+                colorPickup = .5f,
+            ),
+            dynamicsProfile = dynamics.copy(velocityOpacity = .36f),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .22f, scatter = .14f),
+        )
+        "wet-round" -> preset.copy(
+            renderProfile = preset.renderProfile.copy(
+                charge = .82f,
+                attack = .12f,
+                bleed = .66f,
+                colorPickup = .56f,
+            ),
+            dynamicsProfile = dynamics.copy(velocityOpacity = .22f),
+        )
+        "impasto-bristle", "thick-oil" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(count = if (preset.id == "impasto-bristle") 11 else 8),
+            renderProfile = preset.renderProfile.copy(
+                charge = .96f,
+                drag = if (preset.id == "impasto-bristle") .88f else .72f,
+                colorPickup = .34f,
+            ),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .42f, sizeScale = .9f),
+        )
+        "dry-brush", "bristle" -> preset.copy(
+            renderProfile = preset.renderProfile.copy(charge = .66f, attack = .14f),
+            dualBrushProfile = preset.dualBrushProfile.copy(
+                opacity = if (preset.id == "dry-brush") .24f else .38f,
+                scatter = if (preset.id == "dry-brush") .24f else .08f,
+            ),
+        )
+        "charcoal", "pastel-soft", "chalk" -> preset.copy(
+            dynamicsProfile = dynamics.copy(tiltSize = .92f, tiltOpacity = .4f),
+            dualBrushProfile = preset.dualBrushProfile.copy(
+                opacity = if (preset.id == "charcoal") .34f else .24f,
+            ),
+        )
+        else -> preset.copy(dynamicsProfile = dynamics)
+    }
+}

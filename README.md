@@ -1008,8 +1008,9 @@ La suite determinista recomendada no depende de coordenadas ni de reconocimiento
 Las builds `debug` exponen contadores locales, sin persistencia ni telemetría externa, para
 medir eventos de lápiz, muestras aceptadas/descartadas, dabs, tiles, caché, replay regional,
 prefetch, guardado y tiempos de las etapas de entrada, pincel, raster y frame. El renderer de
-producción sigue siendo Canvas/Bitmap con tiles dispersos; la separación prepara backends futuros
-sin cambiar el resultado visual ni introducir Vulkan como dependencia.
+producción sigue siendo Canvas/Bitmap con tiles dispersos. Las builds debug incluyen además un
+backend Vulkan compute experimental para tinta técnica y grafito inclinado, activable manualmente
+desde el selector **Renderer** y con fallback transaccional a Canvas.
 
 La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy Tab S8:
 560 ejecuciones y 16.140 verificaciones de retención de trazos. Incluye 11 familias de
@@ -1052,11 +1053,12 @@ El checklist detallado está en [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.m
 
 ## Limitaciones actuales
 
-Canvas Studio `2.2.0` es una release candidate para distribución controlada en tablets.
+Canvas Studio `2.3.0` es una release candidate para distribución controlada en tablets.
 
 ### Motor y rendimiento
 
-- No existe backend Vulkan dedicado.
+- Vulkan existe solo como experimento debug para tinta técnica y grafito inclinado; Canvas/Bitmap
+  continúa como valor predeterminado y cubre todos los pinceles no soportados.
 - AndroidX Ink proporciona preview de baja latencia exclusivamente al stylus; el raster tiled conserva el resultado final.
 - Algunas composiciones con máscara o clipping requieren superficies temporales.
 - Deshacer muchos trazos complejos y superpuestos puede ser más lento que dibujar.
@@ -1195,7 +1197,7 @@ Comprueba:
 - perfiles authored por preset para diferenciar 2H, HB, 6B, tintas, acuarelas y óleos;
 - bounds conservadores que incluyen partículas, blur, sangrado y Dual Brush;
 - replay filtrado por tile para evitar el costo `tiles × trazo completo`;
-- tutorial interactivo de siete etapas, accesible desde **Más opciones → Tutorial de pinceles**;
+- tutorial interactivo de catorce módulos, accesible desde **Más opciones → Tutorial interactivo**;
 - 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
 
 La arquitectura busca una experiencia profesional comparable en tablet Android. No afirma
@@ -1222,6 +1224,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 |---|---|
 | [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md) | Estado funcional por área |
 | [`docs/PHASE_3B_SPARSE_RENDERER.md`](docs/PHASE_3B_SPARSE_RENDERER.md) | Renderer disperso y tiles |
+| [`docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md`](docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md) | Vulkan experimental, materiales y tutorial modular |
 | [`docs/PHASE_4_TEST_BUILD.md`](docs/PHASE_4_TEST_BUILD.md) | Alcance de la primera build de fase 4 |
 | [`docs/PHASE_4_1.md`](docs/PHASE_4_1.md) | Grupos, máscaras y perspectiva editable |
 | [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.0
+
+- backend Vulkan 1.1 compute experimental para tinta técnica y grafito inclinado;
+- selector debug Auto / Canvas/Bitmap / Vulkan con fallback transaccional seguro;
+- lotes de dabs por tile, buffers reutilizables, timestamps GPU y trazas Perfetto;
+- refinamiento material de HB, 6B, tinta técnica, plumilla cómic, rotulador plano y acuarela granulada;
+- fixtures deterministas de presión, velocidad, curva, tilt, acumulación y cruce de tiles;
+- tutorial modular de trece lecciones con validación por eventos, práctica temporal y progreso local;
+- pruebas A/B Canvas/Vulkan, 200 trazos gruesos, 500 trazos largos y sesión continua de diez minutos.
+
 ## 2.2.0
 
 - Brush Studio 4.0 con dinámicas independientes de tamaño, opacidad, flujo, velocidad e inclinación;

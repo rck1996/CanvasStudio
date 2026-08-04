@@ -9,3 +9,4 @@ local.properties
 keystore.properties
 .DS_Store
 graphify-out/
+test-logs/

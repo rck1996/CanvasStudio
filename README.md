@@ -511,7 +511,8 @@ Durante esta etapa, OpenRaster limita defensivamente la exportación a 24 millon
 
 ### PSD
 
-La importación y exportación PSD no están implementadas en esta versión.
+La importación y exportación PSD intercambian actualmente el compuesto RGBA del documento.
+No preservan capas, máscaras ni modos de fusión; para ese caso debe usarse OpenRaster.
 
 ---
 
@@ -581,6 +582,15 @@ Responsabilidades principales:
 - eliminación de tiles transparentes;
 - copia de directorios tiled;
 - migración desde imágenes raster completas.
+
+### Historial escalable de sesión
+
+`TileCommandIndex` relaciona cada comando con la capa o máscara y los tiles afectados. Undo y redo
+reconstruyen cada tile consultando esos IDs en orden histórico, sin recorrer todos los comandos de
+la sesión. `TileCheckpointStore` conserva snapshots inmutables recientes bajo un presupuesto LRU
+estricto; al reconstruir restaura el checkpoint anterior más cercano y reproduce sólo los comandos
+posteriores. El índice y los checkpoints son aceleradores en memoria: no cambian el formato del
+proyecto ni proporcionan historial persistente tras cerrar la aplicación.
 
 ### Persistencia de proyectos
 
@@ -992,6 +1002,14 @@ La suite determinista recomendada no depende de coordenadas ni de reconocimiento
 ```powershell
 .\scripts\test-raster-engine.ps1 -Iterations 20
 ```
+
+### Instrumentación del renderizador
+
+Las builds `debug` exponen contadores locales, sin persistencia ni telemetría externa, para
+medir eventos de lápiz, muestras aceptadas/descartadas, dabs, tiles, caché, replay regional,
+prefetch, guardado y tiempos de las etapas de entrada, pincel, raster y frame. El renderer de
+producción sigue siendo Canvas/Bitmap con tiles dispersos; la separación prepara backends futuros
+sin cambiar el resultado visual ni introducir Vulkan como dependencia.
 
 La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy Tab S8:
 560 ejecuciones y 16.140 verificaciones de retención de trazos. Incluye 11 familias de

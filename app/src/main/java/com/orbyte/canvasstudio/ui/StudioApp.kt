@@ -25,7 +25,7 @@ import com.orbyte.canvasstudio.model.defaultProjects
 import com.orbyte.canvasstudio.ui.screens.EditorScreen
 import com.orbyte.canvasstudio.ui.screens.GalleryScreen
 import com.orbyte.canvasstudio.ui.screens.NewCanvasDialog
-import com.orbyte.canvasstudio.ui.tutorial.ProfessionalBrushTutorialHost
+import com.orbyte.canvasstudio.ui.tutorial.StudioTutorialHost
 
 private enum class Destination { GALLERY, EDITOR, TUTORIAL }
 
@@ -157,7 +157,7 @@ fun StudioApp() {
                 },
             )
 
-            Destination.TUTORIAL -> ProfessionalBrushTutorialHost(
+            Destination.TUTORIAL -> StudioTutorialHost(
                 onFinish = {
                     preferences.edit().putBoolean("brush_tutorial_complete", true).apply()
                     destination = tutorialReturnDestination

@@ -110,7 +110,9 @@ dependencies {
     implementation("androidx.ink:ink-strokes:$inkVersion")
     implementation("androidx.ink:ink-storage:$inkVersion")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }

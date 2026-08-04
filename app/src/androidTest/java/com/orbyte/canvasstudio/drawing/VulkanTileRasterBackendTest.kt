@@ -79,7 +79,7 @@ class VulkanTileRasterBackendTest {
     }
 
     @Test fun graphiteIsDeterministicAndDocumentAnchored() {
-        val settings = premiumBrushes.single { it.id == "graphite-shader" }.toSettings()
+        val settings = allBuiltInBrushes.single { it.id == "graphite-shader" }.toSettings()
         val points = BrushFixture.points(BrushFixture.Scenario.TILT_SHADING)
         val dabs = BrushDabBatchBuilder.build(points, settings, DrawingTool.BRUSH)
         val bounds = RectF(0f, 0f, 1024f, 1024f)
@@ -96,7 +96,7 @@ class VulkanTileRasterBackendTest {
     }
 
     @Test fun tiltedGraphiteCanvasAndVulkanStayVisuallyComparable() {
-        val settings = premiumBrushes.single { it.id == "graphite-shader" }.toSettings()
+        val settings = allBuiltInBrushes.single { it.id == "graphite-shader" }.toSettings()
         val dabs = BrushDabBatchBuilder.build(
             BrushFixture.points(BrushFixture.Scenario.TILT_SHADING),
             settings,
@@ -159,7 +159,7 @@ class VulkanTileRasterBackendTest {
                 listOf(StrokePoint(100f, 100f, 1f, 0f, 0L), StrokePoint(700f, 700f, 1f, 0f, 20L)),
             )
             view.debugSimulateVulkanFailure(false)
-            view.brushSettings = premiumBrushes.single { it.id == "granulated-watercolor" }.toSettings().copy(sizePx = 44f)
+            view.brushSettings = allBuiltInBrushes.single { it.id == "granulated-watercolor" }.toSettings().copy(sizePx = 44f)
             view.debugDrawStrokeForTest(
                 listOf(StrokePoint(100f, 760f, .5f, .2f, 30L), StrokePoint(700f, 760f, .7f, .3f, 50L)),
             )
@@ -172,7 +172,7 @@ class VulkanTileRasterBackendTest {
     private fun surface(name: String) = SparseTileSurface(1024, 1024, File(root, name), 16L * 1024L * 1024L)
 
     private fun request(surface: SparseTileSurface, id: String, material: VulkanBrushMaterial): RasterDabRequest {
-        val settings = premiumBrushes.single { it.id == id }.toSettings()
+        val settings = allBuiltInBrushes.single { it.id == id }.toSettings()
         val points = BrushFixture.points(BrushFixture.Scenario.FOUR_TILES)
         return RasterDabRequest(
             surface = surface,

@@ -20,7 +20,7 @@ class BrushRetentionMatrixTest {
     fun everyBrushFamilyRetainsEarlierThickStrokes() {
         val view = DrawingView(context)
         val presets = BrushKind.values().map { kind ->
-            premiumBrushes.first { it.kind == kind }
+            allBuiltInBrushes.first { it.kind == kind }
         }
         val points = List(49) { index ->
             TestPoint(
@@ -133,7 +133,7 @@ class BrushRetentionMatrixTest {
             "bristle",
             "granulated-watercolor",
             "impasto-bristle",
-        ).map { id -> premiumBrushes.first { it.id == id } }
+        ).map { id -> requireNotNull(resolveBuiltInBrush(id)) }
         val sentinels = listOf(
             TestPoint(180f, 72f),
             TestPoint(700f, 72f),

@@ -12,7 +12,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class ProfessionalBrushFixtureTest {
-    private fun preset(id: String) = premiumBrushes.single { it.id == id }.toSettings()
+    private fun preset(id: String) = requireNotNull(resolveBuiltInBrush(id)).toSettings()
 
     @Test fun sameSeedAndTrajectoryAreDeterministic() {
         val settings = preset("pencil-hb")

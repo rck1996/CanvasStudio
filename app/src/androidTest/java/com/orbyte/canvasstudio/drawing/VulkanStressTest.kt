@@ -94,7 +94,8 @@ class VulkanStressTest {
     private fun configuredView(presetId: String, size: Float): DrawingView = DrawingView(context).apply {
         configureDocument(2048, 1024)
         setRendererMode(RendererMode.VULKAN_EXPERIMENTAL)
-        brushSettings = premiumBrushes.single { it.id == presetId }.toSettings().copy(sizePx = size)
+        // Vulkan remains frozen on its historical graphite/ink fixtures in this phase.
+        brushSettings = allBuiltInBrushes.single { it.id == presetId }.toSettings().copy(sizePx = size)
     }
 
     private fun line(x1: Float, y1: Float, x2: Float, y2: Float, pressure: Float, tilt: Float) = listOf(

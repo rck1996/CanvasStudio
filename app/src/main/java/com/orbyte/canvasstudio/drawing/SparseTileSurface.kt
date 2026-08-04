@@ -154,6 +154,31 @@ internal class SparseTileSurface(
     }
 
     /**
+     * Supplies one mutable ARGB buffer per affected tile to a non-Canvas raster backend.
+     * Pixel ownership never escapes this call and modified tiles retain normal cache/save semantics.
+     */
+    fun mutateTilePixels(
+        bounds: RectF,
+        createIfMissing: Boolean,
+        block: (TileStorage.Key, Rect, IntArray) -> Boolean,
+    ): Int = synchronized(lock) {
+        var changedTiles = 0
+        TileStorage.keysForBounds(bounds, width, height).forEach { key ->
+            val bitmap = obtainTile(key, createIfMissing) ?: return@forEach
+            val rect = TileStorage.tileRect(key, width, height)
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            if (block(key, rect, pixels)) {
+                bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                markModified(key)
+                changedTiles += 1
+            }
+        }
+        trimCache(emptySet())
+        changedTiles
+    }
+
+    /**
      * Draws only resident tiles. Disk decoding is intentionally excluded from the UI path; missing
      * tiles are requested by [prefetch] and appear on the following frame instead of stalling input.
      */

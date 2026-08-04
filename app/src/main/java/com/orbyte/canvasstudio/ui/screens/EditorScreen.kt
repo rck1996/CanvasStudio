@@ -148,6 +148,8 @@ import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.LayerGroupUiModel
 import com.orbyte.canvasstudio.drawing.LayerUiModel
 import com.orbyte.canvasstudio.drawing.premiumBrushes
+import com.orbyte.canvasstudio.drawing.raster.RendererMode
+import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.StudioPalette
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +187,49 @@ private fun decodeBitmapForImport(
 
 private enum class DockTab { BRUSHES, COLOR, LAYERS }
 
+@Composable
+private fun RendererDebugSelector(
+    mode: RendererMode,
+    onModeSelected: (RendererMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Surface(
+            modifier = Modifier
+                .semantics {
+                    contentDescription = "Selector de renderer de desarrollo"
+                    stateDescription = mode.label
+                }
+                .clickable(role = Role.Button) { expanded = true },
+            color = StudioPalette.Surface.copy(alpha = .94f),
+            shape = RoundedCornerShape(10.dp),
+            tonalElevation = 4.dp,
+        ) {
+            Text(
+                text = "Renderer · ${mode.label}",
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                color = StudioPalette.Text,
+                style = MaterialTheme.typography.labelMedium,
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            RendererMode.entries.forEach { candidate ->
+                DropdownMenuItem(
+                    text = { Text(candidate.label) },
+                    onClick = {
+                        expanded = false
+                        onModeSelected(candidate)
+                    },
+                    leadingIcon = {
+                        if (candidate == mode) Icon(Icons.Outlined.RadioButtonUnchecked, null)
+                    },
+                )
+            }
+        }
+    }
+}
+
 private data class ToolSpec(val tool: DrawingTool, val label: String, val icon: ImageVector)
 
 private val toolSpecs = listOf(
@@ -219,6 +264,7 @@ fun EditorScreen(
     var brushSettings by remember {
         mutableStateOf(
             BrushSettings(
+                presetId = selectedPreset.id,
                 sizePx = selectedPreset.sizePx,
                 opacity = selectedPreset.opacity,
                 hardness = selectedPreset.hardness,
@@ -264,6 +310,7 @@ fun EditorScreen(
     var perspectiveEditing by remember { mutableStateOf(false) }
     var selectionActive by remember { mutableStateOf(false) }
     var selectionFeatherPx by remember { mutableFloatStateOf(0f) }
+    var rendererMode by remember { mutableStateOf(RendererMode.CANVAS_BITMAP) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
@@ -283,6 +330,7 @@ fun EditorScreen(
         selectedPreset = preset
         recentBrushIds = BrushRepository.recordRecent(context, preset.id, recentBrushIds)
         brushSettings = brushSettings.copy(
+            presetId = preset.id,
             sizePx = preset.sizePx,
             opacity = preset.opacity,
             hardness = preset.hardness,
@@ -729,6 +777,7 @@ fun EditorScreen(
                                 selectionActive = it
                                 if (!it) selectionFeatherPx = 0f
                             }
+                            setRendererMode(rendererMode)
                             setGridVisible(gridVisible)
                             setRulersVisible(rulersVisible)
                             setDocumentDpi(document.dpi)
@@ -771,9 +820,28 @@ fun EditorScreen(
                         }
                         view.setGuideMode(guideMode)
                         view.setPerspectiveEditing(perspectiveEditing)
+                        view.setRendererMode(rendererMode)
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+
+                if (BuildConfig.DEBUG && !zenMode) {
+                    RendererDebugSelector(
+                        mode = rendererMode,
+                        onModeSelected = { selected ->
+                            rendererMode = selected
+                            val available = drawingView?.setRendererMode(selected) ?: true
+                            if (!available && selected == RendererMode.VULKAN_EXPERIMENTAL) {
+                                Toast.makeText(
+                                    context,
+                                    "Vulkan no disponible; los trazos usarán Canvas/Bitmap.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(14.dp),
+                    )
+                }
 
                 if (!zenMode) {
                     Column(
@@ -1181,7 +1249,7 @@ private fun EditorTopBar(
                         onClick = { menuExpanded = false; onShowHelp() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Tutorial de pinceles") },
+                        text = { Text("Tutorial interactivo") },
                         leadingIcon = { Icon(Icons.Outlined.Brush, null) },
                         onClick = { menuExpanded = false; onOpenTutorial() },
                     )

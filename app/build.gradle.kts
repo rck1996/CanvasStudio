@@ -11,13 +11,14 @@ plugins {
 android {
     namespace = "com.orbyte.canvasstudio"
     compileSdk = 36
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 29
-        versionName = "2.2.0"
+        versionCode = 30
+        versionName = "2.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
@@ -77,6 +78,13 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 

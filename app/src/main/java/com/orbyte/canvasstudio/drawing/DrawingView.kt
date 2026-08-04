@@ -23,11 +23,14 @@ import android.graphics.Region
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.os.SystemClock
 import android.view.View
 import com.orbyte.canvasstudio.BuildConfig
+import com.orbyte.canvasstudio.drawing.brush.BrushDabBatchBuilder
 import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
 import com.orbyte.canvasstudio.drawing.input.StrokeSampler
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
@@ -39,7 +42,12 @@ import com.orbyte.canvasstudio.drawing.history.TileCheckpointPolicy
 import com.orbyte.canvasstudio.drawing.history.TileCheckpointStore
 import com.orbyte.canvasstudio.drawing.performance.DrawingPerformanceMetrics
 import com.orbyte.canvasstudio.drawing.raster.BitmapCanvasTileRasterBackend
+import com.orbyte.canvasstudio.drawing.raster.RasterDabRequest
+import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.drawing.raster.TileRasterBackend
+import com.orbyte.canvasstudio.drawing.raster.VulkanBrushMaterial
+import com.orbyte.canvasstudio.drawing.raster.VulkanRasterStats
+import com.orbyte.canvasstudio.drawing.raster.VulkanTileRasterBackend
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -67,6 +75,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class DrawingView(context: Context) : View(context) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private data class LayerData(
         val id: String = UUID.randomUUID().toString(),
         var name: String,
@@ -286,7 +295,11 @@ class DrawingView(context: Context) : View(context) {
     private var lastEngineStatusUpdateUptime = 0L
     private val performanceMetrics = DrawingPerformanceMetrics(BuildConfig.DEBUG)
     private var activeStrokeInputStartedNanos = 0L
-    private val tileRasterBackend: TileRasterBackend = BitmapCanvasTileRasterBackend()
+    private val bitmapRasterBackend: TileRasterBackend = BitmapCanvasTileRasterBackend()
+    private var vulkanRasterBackend: VulkanTileRasterBackend? = null
+    private var requestedRendererMode: RendererMode = RendererMode.CANVAS_BITMAP
+    private var rendererFallbackCount = 0L
+    private var simulateVulkanFailure = false
     private val globalTileCacheBudgetBytes: Long =
         (Runtime.getRuntime().maxMemory() * 0.12)
             .toLong()
@@ -346,6 +359,39 @@ class DrawingView(context: Context) : View(context) {
     fun debugPerformanceMetrics(): DrawingPerformanceMetrics.Snapshot = performanceMetrics.snapshot()
 
     fun resetDebugPerformanceMetrics() = performanceMetrics.reset()
+
+    internal fun setRendererMode(mode: RendererMode): Boolean {
+        requestedRendererMode = if (BuildConfig.DEBUG) mode else RendererMode.CANVAS_BITMAP
+        val available = requestedRendererMode != RendererMode.VULKAN_EXPERIMENTAL ||
+            obtainVulkanBackend()?.isAvailable == true
+        updateEngineStatus()
+        return available
+    }
+
+    internal fun rendererMode(): RendererMode = requestedRendererMode
+
+    internal fun availableRendererModes(): List<RendererMode> = if (BuildConfig.DEBUG) {
+        RendererMode.entries
+    } else {
+        listOf(RendererMode.CANVAS_BITMAP)
+    }
+
+    internal fun debugVulkanStats(): VulkanRasterStats? = vulkanRasterBackend?.stats()
+    internal fun debugRendererFallbackCount(): Long = rendererFallbackCount
+    internal fun debugSimulateVulkanFailure(enabled: Boolean) { simulateVulkanFailure = enabled }
+    private fun obtainVulkanBackend(): VulkanTileRasterBackend? {
+        if (!BuildConfig.DEBUG) return null
+        vulkanRasterBackend?.let { return it }
+        return VulkanTileRasterBackend().also { vulkanRasterBackend = it }
+    }
+    internal fun debugDrawStrokeForTest(points: List<StrokePoint>, drawingTool: DrawingTool = DrawingTool.BRUSH) {
+        val layer = activeLayer() ?: return
+        val command = StrokeCommand(points = points, tool = drawingTool, settings = brushSettings)
+        drawCommand(surfaceFor(layer, activeHistoryTarget(layer)), command)
+        recordCommands(layer, listOf(command))
+    }
+    internal fun debugPixelForTest(x: Float, y: Float): Int =
+        activeLayer()?.let { surfaceFor(it, activeHistoryTarget(it)).samplePixel(x, y) } ?: 0
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
         tool == DrawingTool.BRUSH &&
@@ -828,7 +874,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
-        (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
+        requestedRendererMode == RendererMode.VULKAN_EXPERIMENTAL ||
+            (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
             requiresFinalStrokeRebuild(settings)
 
     private fun minimumInputDistance(settings: BrushSettings): Float {
@@ -885,7 +932,16 @@ class DrawingView(context: Context) : View(context) {
             storedTiles > 0 -> "$residentTiles residentes / $storedTiles en disco · ${cacheMegabytes} MB"
             else -> "superficie dispersa preparada"
         }
-        val status = "Tiles ${TileStorage.TILE_SIZE} · $detail"
+        val renderer = when (requestedRendererMode) {
+            RendererMode.VULKAN_EXPERIMENTAL -> if (vulkanRasterBackend?.isAvailable == true) {
+                "Vulkan exp."
+            } else {
+                "Canvas fallback"
+            }
+            RendererMode.AUTO -> "Auto/Canvas"
+            RendererMode.CANVAS_BITMAP -> "Canvas"
+        }
+        val status = "Tiles ${TileStorage.TILE_SIZE} · $renderer · $detail"
         if (status != lastEngineStatus) {
             lastEngineStatus = status
             onEngineStatusChanged?.invoke(status)
@@ -959,6 +1015,7 @@ class DrawingView(context: Context) : View(context) {
         prefetchGeneration.incrementAndGet()
         prefetchExecutor.shutdownNow()
         tileCheckpointStore.clear()
+        vulkanRasterBackend?.close()
         super.onDetachedFromWindow()
     }
 
@@ -2647,6 +2704,9 @@ class DrawingView(context: Context) : View(context) {
             RectF(commandBounds).apply { intersect(replayClipBounds) }
         }
         if (bounds.isEmpty) return
+        if (command is StrokeCommand && tryRasterizeVulkan(surface, layer, target, command, bounds)) {
+            return
+        }
         val pickupColors = (command as? StrokeCommand)
             ?.takeIf { it.settings.renderProfile.colorPickup > .001f && it.points.size > 1 }
             ?.let { stroke ->
@@ -2679,6 +2739,68 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
+    private fun tryRasterizeVulkan(
+        surface: SparseTileSurface,
+        layer: LayerData?,
+        target: HistoryTarget,
+        command: StrokeCommand,
+        bounds: RectF,
+    ): Boolean {
+        if (requestedRendererMode != RendererMode.VULKAN_EXPERIMENTAL) return false
+        // The experimental backend does not yet implement mask grayscale semantics or
+        // feathered selection coverage. Keep these operations pixel-compatible by
+        // routing the complete command through the production Canvas backend.
+        if (target == HistoryTarget.MASK || command.clipFeatherPx > 0.01f) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        val material = when (command.settings.presetId) {
+            "technical-ink" -> VulkanBrushMaterial.TECHNICAL_INK
+            "graphite-shader" -> VulkanBrushMaterial.TILTED_GRAPHITE
+            else -> {
+                rendererFallbackCount += 1L
+                performanceMetrics.recordRendererFallback()
+                return false
+            }
+        }
+        val backend = obtainVulkanBackend()
+        if (backend == null || !backend.isAvailable || simulateVulkanFailure) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        val dabs = BrushDabBatchBuilder.build(command.points, command.settings, command.tool)
+        performanceMetrics.recordDabs(dabs.size)
+        val selection = FloatArray(command.clipPoints.size * 2)
+        command.clipPoints.forEachIndexed { index, point ->
+            selection[index * 2] = point.x
+            selection[index * 2 + 1] = point.y
+        }
+        val started = if (performanceMetrics.isActive) System.nanoTime() else 0L
+        val result = backend.rasterizeDabs(
+            RasterDabRequest(
+                surface = surface,
+                bounds = bounds,
+                dabs = dabs,
+                material = material,
+                erase = command.tool == DrawingTool.ERASER,
+                preserveAlpha = target == HistoryTarget.CONTENT && layer?.alphaLocked == true,
+                selection = selection,
+                selectionInverted = command.clipInverted,
+                grainDepth = command.settings.grainProfile.depth,
+            ),
+        )
+        if (result == null) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        if (started != 0L) performanceMetrics.addTileRaster(System.nanoTime() - started)
+        performanceMetrics.recordTilesTouched(result.touchedTiles)
+        return true
+    }
+
     private fun drawOnLayer(layer: LayerData, bounds: RectF, block: (Canvas) -> Unit) {
         val target = activeHistoryTarget(layer)
         val surface = surfaceFor(layer, target)
@@ -2703,7 +2825,7 @@ class DrawingView(context: Context) : View(context) {
                 block(canvas)
             }
         }
-        val result = tileRasterBackend.rasterize(
+        val result = bitmapRasterBackend.rasterize(
             surface = surface,
             bounds = bounds,
             preserveAlpha = target == HistoryTarget.CONTENT && layer.alphaLocked,
@@ -4596,7 +4718,7 @@ class DrawingView(context: Context) : View(context) {
                     }
                 }.getOrElse {
                     previewBitmap?.recycle()
-                    post { onProjectSaved?.invoke(false) }
+                    mainHandler.post { onProjectSaved?.invoke(false) }
                     return@synchronized
                 }
 
@@ -4734,7 +4856,7 @@ class DrawingView(context: Context) : View(context) {
                     File(directory, "flattened.tmp").delete()
                     ProjectVersionStore.maybeSnapshot(context, projectId, directory)
 
-                    post {
+                    mainHandler.post {
                         layerSnapshots.forEach { snapshot ->
                             val currentLayer = layers.firstOrNull { it.id == snapshot.reference.id }
                                 ?: return@forEach
@@ -4749,7 +4871,7 @@ class DrawingView(context: Context) : View(context) {
                         onProjectSaved?.invoke(true)
                     }
                 } catch (error: Throwable) {
-                    post {
+                    mainHandler.post {
                         if (saveStartedNanos != 0L) {
                             performanceMetrics.addSave(System.nanoTime() - saveStartedNanos)
                         }

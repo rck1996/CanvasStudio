@@ -40,6 +40,11 @@ class DrawingPerformanceMetrics(
         val checkpointHits: Long, val checkpointMisses: Long, val checkpointCreates: Long,
         val checkpointEvictions: Long, val checkpointRestoreNanos: Long, val checkpointCreateNanos: Long,
         val checkpointBytes: Long, val checkpointBudgetBytes: Long, val commandsAfterCheckpoint: Long,
+        val frameTimeP50Nanos: Long,
+        val frameTimeP95Nanos: Long,
+        val frameTimeP99Nanos: Long,
+        val dabsPerSecond: Double,
+        val rendererFallbacks: Long,
     )
 
     var enabled: Boolean = false
@@ -76,6 +81,10 @@ class DrawingPerformanceMetrics(
     private var checkpointHits = 0L; private var checkpointMisses = 0L; private var checkpointCreates = 0L
     private var checkpointEvictions = 0L; private var checkpointRestoreNanos = 0L; private var checkpointCreateNanos = 0L
     private var checkpointBytes = 0L; private var checkpointBudgetBytes = 0L; private var commandsAfterCheckpoint = 0L
+    private val frameTimes = LongArray(240)
+    private var frameTimeCount = 0
+    private var frameTimeCursor = 0
+    private var rendererFallbacks = 0L
 
     fun reset() = guarded {
         motionEvents = 0L
@@ -107,6 +116,7 @@ class DrawingPerformanceMetrics(
         checkpointHits = 0L; checkpointMisses = 0L; checkpointCreates = 0L; checkpointEvictions = 0L
         checkpointRestoreNanos = 0L; checkpointCreateNanos = 0L; checkpointBytes = 0L
         checkpointBudgetBytes = 0L; commandsAfterCheckpoint = 0L
+        frameTimeCount = 0; frameTimeCursor = 0; rendererFallbacks = 0L
     }
 
     fun recordMotionEvent(historySize: Int) = guarded {
@@ -154,11 +164,18 @@ class DrawingPerformanceMetrics(
     fun addBrushEvaluation(nanos: Long) = guarded { brushEvaluationNanos += nanos.coerceAtLeast(0) }
     fun addTileRaster(nanos: Long) = guarded { tileRasterNanos += nanos.coerceAtLeast(0) }
     fun addHistoryReplay(nanos: Long) = guarded { historyReplayNanos += nanos.coerceAtLeast(0) }
-    fun addViewportFrame(nanos: Long) = guarded { viewportFrameNanos += nanos.coerceAtLeast(0) }
+    fun addViewportFrame(nanos: Long) = guarded {
+        val safe = nanos.coerceAtLeast(0)
+        viewportFrameNanos += safe
+        frameTimes[frameTimeCursor] = safe
+        frameTimeCursor = (frameTimeCursor + 1) % frameTimes.size
+        frameTimeCount = (frameTimeCount + 1).coerceAtMost(frameTimes.size)
+    }
     fun addTilePrefetch(nanos: Long) = guarded { tilePrefetchNanos += nanos.coerceAtLeast(0) }
     fun addSave(nanos: Long) = guarded { saveNanos += nanos.coerceAtLeast(0) }
     fun recordIndexQuery(examined: Int, entries: Int) = guarded { indexQueries++; commandsExamined += examined; indexEntryCount = entries.toLong() }
     fun recordIndexFallback() = guarded { indexFallbacks++ }
+    fun recordRendererFallback() = guarded { rendererFallbacks++ }
     fun recordCheckpoint(hit: Boolean, commands: Int, restoreNanos: Long) = guarded {
         if (hit) checkpointHits++ else checkpointMisses++
         commandsAfterCheckpoint += commands.coerceAtLeast(0)
@@ -169,7 +186,12 @@ class DrawingPerformanceMetrics(
         checkpointBytes = bytes; checkpointBudgetBytes = budget; checkpointEvictions = evictions
     }
 
-    fun snapshot(): Snapshot = Snapshot(
+    fun snapshot(): Snapshot {
+        val sortedFrames = frameTimes.copyOf(frameTimeCount).apply { sort() }
+        fun percentile(value: Float): Long = if (sortedFrames.isEmpty()) 0L else {
+            sortedFrames[((sortedFrames.lastIndex * value).toInt()).coerceIn(0, sortedFrames.lastIndex)]
+        }
+        return Snapshot(
         motionEvents, historicalSamples, acceptedSamples, discardedSamples, generatedDabs,
         tilesTouched, cacheHits, cacheMisses, residentTiles, residentBytes, dirtyTiles,
         evictions, diskLoads, commandsReplayed, tilesRebuilt, visibleTileMisses,
@@ -179,7 +201,11 @@ class DrawingPerformanceMetrics(
         checkpointHits, checkpointMisses, checkpointCreates, checkpointEvictions,
         checkpointRestoreNanos, checkpointCreateNanos, checkpointBytes, checkpointBudgetBytes,
         commandsAfterCheckpoint,
+        percentile(.5f), percentile(.95f), percentile(.99f),
+        if (tileRasterNanos > 0L) generatedDabs * 1_000_000_000.0 / tileRasterNanos else 0.0,
+        rendererFallbacks,
     )
+    }
 
     private inline fun guarded(block: () -> Unit) {
         if (isEnabled()) block()

@@ -14,10 +14,11 @@ class BrushPhase6Test {
     }
 
     @Test
-    fun phaseSixIncludesExpandedBrushLibrary() {
-        assertTrue(premiumBrushes.size >= 22)
-        assertTrue(premiumBrushes.any { it.name == "Acuarela granulada" })
-        assertTrue(premiumBrushes.any { it.name == "Plumilla G" })
+    fun productionLibraryIsSmallAndExperimentalMediaAreSeparated() {
+        assertTrue(premiumBrushes.size in 10..16)
+        assertTrue(premiumBrushes.none { it.kind == BrushKind.WATERCOLOR || it.kind == BrushKind.OIL })
+        assertTrue(experimentalBrushes.any { it.name == "Acuarela granulada" })
+        assertTrue(experimentalBrushes.all { it.category == "Experimental" })
     }
 
     @Test
@@ -37,7 +38,7 @@ class BrushPhase6Test {
             "Óleo espeso" to BrushKind.OIL,
         )
         expected.forEach { (name, kind) ->
-            assertEquals(kind, premiumBrushes.single { it.name == name }.kind)
+            assertEquals(kind, (premiumBrushes + experimentalBrushes).single { it.name == name }.kind)
         }
         assertEquals(expected.size, expected.values.distinct().size)
     }

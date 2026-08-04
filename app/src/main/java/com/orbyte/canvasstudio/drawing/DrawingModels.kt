@@ -53,6 +53,38 @@ enum class DrawingTool {
     HAND,
 }
 
+/** Observable, renderer-backed outcomes used by the in-editor guided tutorial. */
+sealed interface DrawingInteractionEvent {
+    data class ViewChanged(
+        val scale: Float,
+        val panDistancePx: Float,
+        val rotationDegrees: Float,
+    ) : DrawingInteractionEvent
+
+    data object ViewReset : DrawingInteractionEvent
+
+    data class StrokeCommitted(
+        val layerId: String,
+        val lengthPx: Float,
+        val minimumPressure: Float,
+        val maximumPressure: Float,
+        val maximumTiltRadians: Float,
+        val eraser: Boolean,
+        val editingMask: Boolean,
+        val symmetryCopies: Int,
+    ) : DrawingInteractionEvent
+
+    data class ShapeCommitted(val tool: DrawingTool, val widthPx: Float, val heightPx: Float) : DrawingInteractionEvent
+    data class GradientCommitted(val lengthPx: Float) : DrawingInteractionEvent
+    data class SelectionCreated(val areaPx: Float) : DrawingInteractionEvent
+    data class TransformPreviewChanged(val distancePx: Float, val scaleDelta: Float, val rotationDegrees: Float) : DrawingInteractionEvent
+    data object TransformCommitted : DrawingInteractionEvent
+    data class FillCommitted(val changedPixels: Int) : DrawingInteractionEvent
+    data class HistoryChanged(val action: Action) : DrawingInteractionEvent {
+        enum class Action { UNDO, REDO }
+    }
+}
+
 enum class GuideMode {
     NONE,
     PERSPECTIVE_ONE_POINT,
@@ -118,6 +150,8 @@ data class BrushPreset(
 )
 
 data class BrushSettings(
+    /** Runtime hint only; project compatibility never depends on this preset identifier. */
+    val presetId: String? = null,
     val sizePx: Float = 24f,
     val opacity: Float = 1f,
     val color: Int = Color.rgb(38, 42, 48),
@@ -142,6 +176,34 @@ data class BrushSettings(
     val renderProfile: BrushRenderProfile = defaultRenderProfile(kind),
     val dynamicsProfile: BrushDynamicsProfile = defaultDynamicsProfile(kind),
     val dualBrushProfile: DualBrushProfile = defaultDualBrushProfile(kind),
+)
+
+internal fun BrushPreset.toSettings(color: Int = Color.rgb(38, 42, 48)): BrushSettings = BrushSettings(
+    presetId = id,
+    sizePx = sizePx,
+    opacity = opacity,
+    color = color,
+    hardness = hardness,
+    spacing = spacing,
+    stabilization = stabilization,
+    flow = flow,
+    minSize = minSize,
+    pressureSize = pressureSize,
+    pressureOpacity = pressureOpacity,
+    pressureCurve = pressureCurve,
+    tiltResponse = tiltResponse,
+    taperStart = taperStart,
+    taperEnd = taperEnd,
+    scatter = scatter,
+    grain = grain,
+    velocitySize = velocitySize,
+    kind = kind,
+    tipAssetPath = tipAssetPath,
+    tipProfile = tipProfile,
+    grainProfile = grainProfile,
+    renderProfile = renderProfile,
+    dynamicsProfile = dynamicsProfile,
+    dualBrushProfile = dualBrushProfile,
 )
 
 data class StrokePoint(
@@ -245,24 +307,24 @@ data class LayerGroupUiModel(
     val depth: Int = 0,
 )
 
-val premiumBrushes = listOf(
+private val authoredBuiltInBrushes = listOf(
     BrushPreset(
         id = "pencil-hb",
         name = "Lápiz HB",
         category = "Lápices",
         kind = BrushKind.PENCIL,
         sizePx = 16f,
-        opacity = 0.82f,
-        hardness = 0.76f,
-        spacing = 0.08f,
+        opacity = 0.68f,
+        hardness = 0.7f,
+        spacing = 0.055f,
         stabilization = 0.2f,
-        flow = 0.72f,
-        minSize = 0.16f,
+        flow = 0.64f,
+        minSize = 0.2f,
         pressureOpacity = true,
-        tiltResponse = 0.42f,
+        tiltResponse = 0.52f,
         taperStart = 0.18f,
         taperEnd = 0.12f,
-        grain = 0.22f,
+        grain = 0.3f,
         velocitySize = 0.12f,
     ),
     BrushPreset(
@@ -271,18 +333,18 @@ val premiumBrushes = listOf(
         category = "Lápices",
         kind = BrushKind.PENCIL,
         sizePx = 30f,
-        opacity = 0.76f,
-        hardness = 0.5f,
-        spacing = 0.1f,
+        opacity = 0.86f,
+        hardness = 0.42f,
+        spacing = 0.065f,
         stabilization = 0.14f,
-        flow = 0.64f,
+        flow = 0.76f,
         minSize = 0.22f,
         pressureOpacity = true,
         tiltResponse = 0.72f,
         taperStart = 0.14f,
         taperEnd = 0.1f,
-        grain = 0.36f,
-        scatter = 0.05f,
+        grain = 0.46f,
+        scatter = 0.025f,
     ),
     BrushPreset(
         id = "mechanical-pencil",
@@ -311,13 +373,13 @@ val premiumBrushes = listOf(
         sizePx = 11f,
         opacity = 1f,
         hardness = 1f,
-        spacing = 0.04f,
+        spacing = 0.025f,
         stabilization = 0.48f,
         flow = 1f,
         minSize = 0.78f,
         pressureSize = false,
-        taperStart = 0f,
-        taperEnd = 0f,
+        taperStart = 0.045f,
+        taperEnd = 0.055f,
     ),
     BrushPreset(
         id = "pressure-ink",
@@ -343,7 +405,7 @@ val premiumBrushes = listOf(
         sizePx = 34f,
         opacity = 1f,
         hardness = 0.94f,
-        spacing = 0.04f,
+        spacing = 0.028f,
         stabilization = 0.3f,
         flow = 1f,
         minSize = 0.04f,
@@ -467,7 +529,7 @@ val premiumBrushes = listOf(
     BrushPreset("colored-pencil", "Lápiz de color", "Lápices", BrushKind.PENCIL, 22f, .74f, .56f, .09f, .16f, .64f, .2f, true, true, 1.12f, .55f, .12f, .1f, .05f, .34f, .08f),
     BrushPreset("manga-ink", "Entintado manga", "Tinta", BrushKind.INK, 20f, 1f, .98f, .035f, .48f, 1f, .04f, true, false, .78f, .08f, .3f, .28f, 0f, 0f, .18f),
     BrushPreset("g-nib", "Plumilla G", "Tinta", BrushKind.INK, 38f, 1f, .94f, .04f, .34f, 1f, .02f, true, false, .68f, .22f, .36f, .32f, 0f, 0f, .24f),
-    BrushPreset("flat-marker", "Rotulador plano", "Marcadores", BrushKind.MARKER, 64f, .46f, .9f, .065f, .1f, .78f, .74f, false, true, 1.1f, .3f, 0f, 0f, 0f, .08f, 0f),
+    BrushPreset("flat-marker", "Rotulador plano", "Marcadores", BrushKind.MARKER, 64f, .52f, .88f, .045f, .12f, .82f, .78f, false, true, 1.05f, .42f, .02f, .02f, 0f, .05f, 0f),
     BrushPreset("hard-airbrush", "Aerógrafo duro", "Aerógrafo", BrushKind.AIRBRUSH, 96f, .28f, .42f, .055f, .08f, .52f, .38f, true, true, 1.18f, 0f, 0f, 0f, .02f, .04f, 0f),
     BrushPreset("dry-brush", "Pincel seco", "Pintura", BrushKind.DRY_BRUSH, 74f, .68f, .5f, .1f, .1f, .58f, .18f, true, true, .92f, .58f, .04f, .05f, .18f, .7f, .08f),
     BrushPreset("bristle", "Pincel de cerdas", "Pintura", BrushKind.BRISTLE, 88f, .76f, .62f, .08f, .12f, .64f, .2f, true, true, .84f, .48f, .06f, .06f, .14f, .54f, .06f),
@@ -484,6 +546,118 @@ val premiumBrushes = listOf(
 ).map(::professionalizePreset)
 
 /**
+ * Production catalog intentionally stays small. Legacy presets remain resolvable so favorites,
+ * recents, duplicated custom brushes and old in-memory commands never depend on UI visibility.
+ */
+val builtInBrushAliases: Map<String, String> = mapOf(
+    "pressure-ink" to "comic-nib",
+    "soft-paint" to "airbrush",
+    "chalk" to "charcoal",
+    "blue-sketch" to "pencil-hb",
+    "colored-pencil" to "pencil-hb",
+    "manga-ink" to "comic-nib",
+    "g-nib" to "comic-nib",
+    "pencil-2h" to "mechanical-pencil",
+    "graphite-shader" to "pencil-6b",
+    "sumi-ink" to "calligraphy-flat",
+    "pastel-soft" to "charcoal",
+    "spray-grain" to "hard-airbrush",
+)
+
+private val professionalBrushIds = listOf(
+    "pencil-hb",
+    "pencil-6b",
+    "mechanical-pencil",
+    "technical-ink",
+    "comic-nib",
+    "calligraphy-flat",
+    "marker",
+    "flat-marker",
+    "gouache",
+    "dry-brush",
+    "bristle",
+    "charcoal",
+    "airbrush",
+    "hard-airbrush",
+)
+
+private val experimentalBrushIds = listOf(
+    "granulated-watercolor",
+    "wet-round",
+    "thick-oil",
+    "impasto-bristle",
+)
+
+val allBuiltInBrushes: List<BrushPreset> = authoredBuiltInBrushes
+
+val premiumBrushes: List<BrushPreset> = professionalBrushIds.map { id ->
+    checkNotNull(authoredBuiltInBrushes.firstOrNull { it.id == id }) { "Preset profesional ausente: $id" }
+}.map { preset ->
+    when (preset.id) {
+        "marker", "flat-marker" -> preset.copy(category = "Marcadores")
+        "airbrush", "hard-airbrush" -> preset.copy(category = "Aerógrafos")
+        else -> preset
+    }
+}
+
+val experimentalBrushes: List<BrushPreset> = experimentalBrushIds.map { id ->
+    checkNotNull(authoredBuiltInBrushes.firstOrNull { it.id == id }) { "Preset experimental ausente: $id" }
+}.map { it.copy(category = "Experimental") }
+
+fun migrateBuiltInBrushId(id: String): String = builtInBrushAliases[id] ?: id
+
+fun resolveBuiltInBrush(id: String): BrushPreset? {
+    val resolvedId = migrateBuiltInBrushId(id)
+    return authoredBuiltInBrushes.firstOrNull { it.id == resolvedId }
+}
+
+fun BrushSettings.sanitized(): BrushSettings = copy(
+    sizePx = sizePx.coerceIn(2f, 600f),
+    opacity = opacity.coerceIn(.02f, 1f),
+    hardness = hardness.coerceIn(0f, 1f),
+    spacing = spacing.coerceIn(.025f, .4f),
+    stabilization = stabilization.coerceIn(0f, .95f),
+    flow = flow.coerceIn(.02f, 1f),
+    minSize = minSize.coerceIn(.02f, 1f),
+    pressureCurve = pressureCurve.coerceIn(.25f, 4f),
+    tiltResponse = tiltResponse.coerceIn(0f, 1f),
+    taperStart = taperStart.coerceIn(0f, .48f),
+    taperEnd = taperEnd.coerceIn(0f, .48f),
+    scatter = scatter.coerceIn(0f, .5f),
+    grain = grain.coerceIn(0f, 1f),
+    velocitySize = velocitySize.coerceIn(0f, 1f),
+    tipProfile = tipProfile.copy(
+        roundness = tipProfile.roundness.coerceIn(.08f, 1f),
+        angleDegrees = tipProfile.angleDegrees.coerceIn(-180f, 180f),
+        rotationJitter = tipProfile.rotationJitter.coerceIn(0f, 1f),
+        count = tipProfile.count.coerceIn(1, 14),
+        countJitter = tipProfile.countJitter.coerceIn(0f, 1f),
+    ),
+    grainProfile = grainProfile.copy(
+        scale = grainProfile.scale.coerceIn(.15f, 4f),
+        depth = grainProfile.depth.coerceIn(0f, 1f),
+        contrast = grainProfile.contrast.coerceIn(0f, 1f),
+        movement = grainProfile.movement.coerceIn(0f, 1f),
+    ),
+    renderProfile = renderProfile.copy(
+        buildup = renderProfile.buildup.coerceIn(0f, 1f),
+        wetness = renderProfile.wetness.coerceIn(0f, 1f),
+        dilution = renderProfile.dilution.coerceIn(0f, 1f),
+        drag = renderProfile.drag.coerceIn(0f, 1f),
+        charge = renderProfile.charge.coerceIn(0f, 1f),
+        attack = renderProfile.attack.coerceIn(0f, 1f),
+        bleed = renderProfile.bleed.coerceIn(0f, 1f),
+        colorPickup = renderProfile.colorPickup.coerceIn(0f, 1f),
+    ),
+    dualBrushProfile = dualBrushProfile.copy(
+        sizeScale = dualBrushProfile.sizeScale.coerceIn(.1f, 2f),
+        opacity = dualBrushProfile.opacity.coerceIn(0f, 1f),
+        offset = dualBrushProfile.offset.coerceIn(-1f, 1f),
+        scatter = dualBrushProfile.scatter.coerceIn(0f, 1f),
+    ),
+)
+
+/**
  * Preset-level tuning is intentional: two brushes in the same family should not
  * merely differ by size and label.
  */
@@ -494,33 +668,217 @@ private fun professionalizePreset(preset: BrushPreset): BrushPreset {
         tiltSize = maxOf(preset.dynamicsProfile.tiltSize, preset.tiltResponse),
     )
     return when (preset.id) {
-        "pencil-2h", "mechanical-pencil" -> preset.copy(
-            dynamicsProfile = dynamics.copy(
-                opacityPressure = BrushInputCurve(gamma = 1.5f, minimum = .08f, maximum = .72f),
-                tiltSize = .18f,
+        "pencil-hb" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.OVAL,
+                roundness = .38f,
+                rotationMode = BrushRotationMode.STYLUS,
+                rotationJitter = .018f,
             ),
-            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .1f, sizeScale = .3f),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.PAPER_FINE,
+                scale = .86f,
+                depth = .42f,
+                contrast = .58f,
+                movement = 0f,
+            ),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = .92f, minimum = .2f, maximum = .78f),
+                opacityPressure = BrushInputCurve(gamma = 1.18f, minimum = .06f, maximum = .76f),
+                flowPressure = BrushInputCurve(gamma = 1.08f, minimum = .18f, maximum = .82f),
+                velocitySize = .1f,
+                velocityOpacity = .08f,
+                tiltSize = .58f,
+                tiltOpacity = .08f,
+                tiltThreshold = .1f,
+            ),
+            renderProfile = preset.renderProfile.copy(buildup = .64f),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .13f, scatter = .14f),
+        )
+        "pencil-2h", "mechanical-pencil" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.ROUND,
+                roundness = .92f,
+                rotationMode = BrushRotationMode.FIXED,
+                rotationJitter = 0f,
+            ),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.PAPER_FINE,
+                scale = .58f,
+                depth = .12f,
+                contrast = .42f,
+                movement = 0f,
+            ),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = 1.25f, minimum = .58f, maximum = 1f),
+                opacityPressure = BrushInputCurve(gamma = 1.5f, minimum = .08f, maximum = .72f),
+                flowPressure = BrushInputCurve(gamma = 1.2f, minimum = .56f, maximum = .92f),
+                velocitySize = .04f,
+                tiltSize = .08f,
+                tiltOpacity = 0f,
+            ),
+            renderProfile = preset.renderProfile.copy(buildup = .48f),
+            dualBrushProfile = DualBrushProfile(),
         )
         "pencil-6b", "graphite-shader" -> preset.copy(
-            dynamicsProfile = dynamics.copy(
-                opacityPressure = BrushInputCurve(gamma = .86f, minimum = .08f),
-                tiltSize = .96f,
-                tiltOpacity = .36f,
+            tipProfile = preset.tipProfile.copy(roundness = .3f, rotationMode = BrushRotationMode.STYLUS),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.PAPER_ROUGH,
+                scale = 1.08f,
+                depth = .62f,
+                contrast = .7f,
+                movement = 0f,
             ),
-            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .34f, scatter = .44f),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = .72f, minimum = .24f),
+                opacityPressure = BrushInputCurve(gamma = .78f, minimum = .16f, maximum = .94f),
+                flowPressure = BrushInputCurve(gamma = .82f, minimum = .24f),
+                tiltSize = .96f,
+                tiltOpacity = .12f,
+                tiltThreshold = .06f,
+            ),
+            renderProfile = preset.renderProfile.copy(buildup = .82f),
+            dualBrushProfile = preset.dualBrushProfile.copy(opacity = .28f, scatter = .32f),
         )
         "technical-ink" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(shape = BrushTipShape.ROUND, roundness = 1f),
+            grainProfile = BrushGrainProfile(),
+            dualBrushProfile = DualBrushProfile(),
             dynamicsProfile = dynamics.copy(
                 sizePressure = BrushInputCurve(minimum = 1f),
                 opacityPressure = BrushInputCurve(minimum = 1f),
+                flowPressure = BrushInputCurve(minimum = 1f),
                 velocitySize = 0f,
+                velocityOpacity = 0f,
+                tiltSize = 0f,
+                tiltOpacity = 0f,
+            ),
+        )
+        "marker" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.ROUND,
+                roundness = 1f,
+                rotationMode = BrushRotationMode.FIXED,
+                rotationJitter = 0f,
+            ),
+            grainProfile = BrushGrainProfile(),
+            dualBrushProfile = DualBrushProfile(),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(minimum = .86f, maximum = 1f),
+                opacityPressure = BrushInputCurve(gamma = .92f, minimum = .36f, maximum = .82f),
+                flowPressure = BrushInputCurve(gamma = .88f, minimum = .68f, maximum = .94f),
+                velocitySize = 0f,
+                velocityOpacity = .05f,
+                tiltSize = 0f,
+                tiltOpacity = 0f,
+            ),
+            renderProfile = preset.renderProfile.copy(
+                mode = BrushRenderMode.UNIFORM_GLAZE,
+                buildup = .58f,
+            ),
+        )
+        "gouache" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.OVAL,
+                roundness = .68f,
+                rotationMode = BrushRotationMode.FOLLOW_STROKE,
+                rotationJitter = .025f,
+            ),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.CANVAS,
+                scale = .82f,
+                depth = .2f,
+                contrast = .48f,
+                movement = 0f,
+            ),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = .86f, minimum = .34f),
+                opacityPressure = BrushInputCurve(gamma = .82f, minimum = .72f, maximum = 1f),
+                flowPressure = BrushInputCurve(gamma = .78f, minimum = .7f),
+                velocityOpacity = .04f,
+                tiltSize = .16f,
+            ),
+            renderProfile = preset.renderProfile.copy(
+                mode = BrushRenderMode.INTENSE_GLAZE,
+                buildup = .9f,
+                wetness = .08f,
+                drag = .12f,
+                charge = .96f,
+                attack = .78f,
+                colorPickup = .06f,
+            ),
+            dualBrushProfile = DualBrushProfile(),
+        )
+        "airbrush", "hard-airbrush" -> preset.copy(
+            tipProfile = BrushTipProfile(
+                shape = BrushTipShape.ROUND,
+                roundness = 1f,
+                rotationMode = BrushRotationMode.FIXED,
+            ),
+            grainProfile = BrushGrainProfile(),
+            dualBrushProfile = DualBrushProfile(),
+            scatter = 0f,
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(
+                    gamma = 1f,
+                    minimum = if (preset.id == "airbrush") .48f else .68f,
+                ),
+                opacityPressure = BrushInputCurve(
+                    gamma = 1.12f,
+                    minimum = if (preset.id == "airbrush") .025f else .12f,
+                    maximum = if (preset.id == "airbrush") .62f else .82f,
+                ),
+                flowPressure = BrushInputCurve(gamma = 1f, minimum = .18f, maximum = .72f),
+                velocitySize = 0f,
+                velocityOpacity = 0f,
+                tiltSize = 0f,
+                tiltOpacity = 0f,
+            ),
+            renderProfile = preset.renderProfile.copy(
+                mode = BrushRenderMode.LIGHT_GLAZE,
+                buildup = if (preset.id == "airbrush") .34f else .52f,
             ),
         )
         "g-nib", "comic-nib", "manga-ink" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.OVAL,
+                roundness = .68f,
+                rotationMode = BrushRotationMode.FOLLOW_STROKE,
+            ),
+            grainProfile = BrushGrainProfile(),
+            dualBrushProfile = DualBrushProfile(),
             dynamicsProfile = dynamics.copy(
                 sizePressure = BrushInputCurve(gamma = .58f, minimum = .015f),
+                opacityPressure = BrushInputCurve(minimum = 1f),
                 velocitySize = maxOf(.22f, dynamics.velocitySize),
             ),
+        )
+        "flat-marker" -> preset.copy(
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.CHISEL,
+                roundness = .2f,
+                angleDegrees = -22f,
+                rotationMode = BrushRotationMode.STYLUS,
+            ),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.PAPER_FINE,
+                depth = .12f,
+                movement = 0f,
+            ),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(minimum = .82f, maximum = 1f),
+                opacityPressure = BrushInputCurve(gamma = .9f, minimum = .48f, maximum = .9f),
+                flowPressure = BrushInputCurve(gamma = .86f, minimum = .72f),
+                tiltSize = .48f,
+                tiltOpacity = .04f,
+            ),
+            renderProfile = preset.renderProfile.copy(buildup = .58f),
+            dualBrushProfile = DualBrushProfile(),
         )
         "calligraphy-flat", "sumi-ink" -> preset.copy(
             tipProfile = preset.tipProfile.copy(
@@ -565,16 +923,65 @@ private fun professionalizePreset(preset: BrushPreset): BrushPreset {
             dualBrushProfile = preset.dualBrushProfile.copy(opacity = .42f, sizeScale = .9f),
         )
         "dry-brush", "bristle" -> preset.copy(
-            renderProfile = preset.renderProfile.copy(charge = .66f, attack = .14f),
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.BRISTLE,
+                rotationMode = BrushRotationMode.FOLLOW_STROKE,
+                count = if (preset.id == "dry-brush") 7 else 10,
+                countJitter = if (preset.id == "dry-brush") .42f else .16f,
+            ),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.MOVING,
+                source = BrushGrainSource.BRISTLE,
+                scale = if (preset.id == "dry-brush") .74f else .62f,
+                depth = if (preset.id == "dry-brush") .72f else .42f,
+                contrast = if (preset.id == "dry-brush") .82f else .58f,
+                movement = .86f,
+            ),
+            dynamicsProfile = dynamics.copy(
+                velocityOpacity = if (preset.id == "dry-brush") .34f else .12f,
+                tiltSize = if (preset.id == "dry-brush") .62f else .38f,
+            ),
+            renderProfile = preset.renderProfile.copy(
+                buildup = if (preset.id == "dry-brush") .38f else .7f,
+                charge = if (preset.id == "dry-brush") .48f else .78f,
+                attack = if (preset.id == "dry-brush") .08f else .26f,
+                drag = if (preset.id == "dry-brush") .72f else .46f,
+            ),
             dualBrushProfile = preset.dualBrushProfile.copy(
-                opacity = if (preset.id == "dry-brush") .24f else .38f,
-                scatter = if (preset.id == "dry-brush") .24f else .08f,
+                opacity = if (preset.id == "dry-brush") .18f else .3f,
+                scatter = if (preset.id == "dry-brush") .18f else .05f,
             ),
         )
         "charcoal", "pastel-soft", "chalk" -> preset.copy(
-            dynamicsProfile = dynamics.copy(tiltSize = .92f, tiltOpacity = .4f),
+            tipProfile = preset.tipProfile.copy(
+                shape = BrushTipShape.PARTICLE,
+                roundness = .42f,
+                rotationMode = BrushRotationMode.RANDOM,
+                rotationJitter = .48f,
+                count = 6,
+                countJitter = .26f,
+            ),
+            grainProfile = preset.grainProfile.copy(
+                mode = BrushGrainMode.TEXTURIZED,
+                source = BrushGrainSource.PAPER_ROUGH,
+                scale = 1.14f,
+                depth = .68f,
+                contrast = .74f,
+                movement = 0f,
+            ),
+            scatter = minOf(preset.scatter, .16f),
+            dynamicsProfile = dynamics.copy(
+                sizePressure = BrushInputCurve(gamma = .8f, minimum = .18f),
+                opacityPressure = BrushInputCurve(gamma = .92f, minimum = .08f, maximum = .92f),
+                flowPressure = BrushInputCurve(gamma = .9f, minimum = .12f),
+                tiltSize = .96f,
+                tiltOpacity = .28f,
+                tiltThreshold = .06f,
+            ),
+            renderProfile = preset.renderProfile.copy(buildup = .74f),
             dualBrushProfile = preset.dualBrushProfile.copy(
-                opacity = if (preset.id == "charcoal") .34f else .24f,
+                opacity = if (preset.id == "charcoal") .22f else .16f,
+                scatter = .34f,
             ),
         )
         else -> preset.copy(dynamicsProfile = dynamics)

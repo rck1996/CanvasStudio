@@ -382,10 +382,10 @@ private fun LibraryLesson(
     onAction: (BrushTutorialAction) -> Unit,
 ) {
     val brushes = listOf(
-        Triple("HB Natural", "Lápiz", 0.22f),
-        Triple("Tinta Técnica", "Entintado", 0.08f),
-        Triple("Marker Suave", "Marcadores", 0.48f),
-        Triple("Óleo Impasto", "Pintura", 0.78f),
+        Triple("Lápiz HB", "Grafito claro y gradual", 0.22f),
+        Triple("Lápiz 6B", "Grafito oscuro y blando", 0.38f),
+        Triple("Tinta técnica", "Línea uniforme", 0.08f),
+        Triple("Plumilla cómic", "Línea expresiva", 0.32f),
     )
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -399,6 +399,12 @@ private fun LibraryLesson(
                     onClick = { onAction(BrushTutorialAction.SelectBrush(name)) },
                 )
             }
+            Text(
+                "HB construye tono; 6B deposita más grafito. La tinta técnica mantiene el ancho; " +
+                    "la plumilla lo cambia con presión. Elige por tarea, no por cantidad.",
+                color = StudioPalette.TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         PreviewCard(state, Modifier.weight(1.15f).fillMaxHeight())
     }
@@ -433,7 +439,8 @@ private fun PressureTiltLesson(
             LessonCallout(
                 Icons.Outlined.Brush,
                 "Consejo de artista",
-                "Usa poca presión para construir tono y apoya el lateral para sombrear.",
+                "Presión controla depósito y tamaño. Inclina HB o 6B para sombrear con el lateral; " +
+                    "el portaminas se mantiene fino.",
             )
         }
         DynamicStrokeCard(state, Modifier.weight(1.1f).fillMaxHeight())
@@ -449,7 +456,8 @@ private fun PreviewLesson(
         PreviewCard(state, Modifier.weight(1.2f).fillMaxHeight())
         Column(Modifier.weight(0.8f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
             Text(
-                "El preview usa los mismos parámetros que el pincel. Prueba dos cambios.",
+                "El preview usa la misma punta, grano, presión, tilt y acumulación que el lienzo. " +
+                    "Prueba dos cambios.",
                 color = StudioPalette.TextMuted,
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -525,7 +533,8 @@ private fun PracticeLesson(
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Línea fina · línea expresiva · sombreado inclinado",
+                "Técnica para detalle · plumilla para lineart · marcador orientado para masas · " +
+                    "HB/6B inclinado para sombrear",
                 color = StudioPalette.TextMuted,
                 modifier = Modifier.weight(1f),
             )

@@ -25,7 +25,6 @@ import com.orbyte.canvasstudio.model.defaultProjects
 import com.orbyte.canvasstudio.ui.screens.EditorScreen
 import com.orbyte.canvasstudio.ui.screens.GalleryScreen
 import com.orbyte.canvasstudio.ui.screens.NewCanvasDialog
-import com.orbyte.canvasstudio.ui.tutorial.ProfessionalBrushTutorialHost
 
 private enum class Destination { GALLERY, EDITOR, TUTORIAL }
 
@@ -157,14 +156,24 @@ fun StudioApp() {
                 },
             )
 
-            Destination.TUTORIAL -> ProfessionalBrushTutorialHost(
-                onFinish = {
+            Destination.TUTORIAL -> EditorScreen(
+                document = EditorDocument(
+                    id = "tutorial-session",
+                    title = "Práctica guiada",
+                    width = 2048,
+                    height = 1536,
+                    dpi = 300,
+                    preview = PreviewStyle.SKETCH,
+                    isLocal = false,
+                ),
+                onBackToGallery = { destination = tutorialReturnDestination },
+                onOpenTutorial = {},
+                tutorialMode = true,
+                onTutorialFinish = {
                     preferences.edit().putBoolean("brush_tutorial_complete", true).apply()
                     destination = tutorialReturnDestination
                 },
-                onExit = {
-                    destination = tutorialReturnDestination
-                },
+                onTutorialExit = { destination = tutorialReturnDestination },
             )
         }
     }

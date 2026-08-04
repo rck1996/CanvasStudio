@@ -21,7 +21,7 @@ class ProfessionalBrushVisualMatrixTest {
     fun renderProfessionalFamilyComparisonSheet() {
         val view = DrawingView(context)
         val presets = BrushKind.values().map { kind ->
-            premiumBrushes.first { it.kind == kind }
+            allBuiltInBrushes.first { it.kind == kind }
         }
         try {
             instrumentation.runOnMainSync {

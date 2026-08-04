@@ -23,10 +23,31 @@ import android.graphics.Region
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.os.SystemClock
 import android.view.View
+import com.orbyte.canvasstudio.BuildConfig
+import com.orbyte.canvasstudio.drawing.brush.BrushDabBatchBuilder
+import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
+import com.orbyte.canvasstudio.drawing.input.StrokeSampler
+import com.orbyte.canvasstudio.drawing.input.StylusInputController
+import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
+import com.orbyte.canvasstudio.drawing.history.HistorySurfaceKey
+import com.orbyte.canvasstudio.drawing.history.TileCommandIndex
+import com.orbyte.canvasstudio.drawing.history.TileCheckpointKey
+import com.orbyte.canvasstudio.drawing.history.TileCheckpointPolicy
+import com.orbyte.canvasstudio.drawing.history.TileCheckpointStore
+import com.orbyte.canvasstudio.drawing.performance.DrawingPerformanceMetrics
+import com.orbyte.canvasstudio.drawing.raster.BitmapCanvasTileRasterBackend
+import com.orbyte.canvasstudio.drawing.raster.RasterDabRequest
+import com.orbyte.canvasstudio.drawing.raster.RendererMode
+import com.orbyte.canvasstudio.drawing.raster.TileRasterBackend
+import com.orbyte.canvasstudio.drawing.raster.VulkanBrushMaterial
+import com.orbyte.canvasstudio.drawing.raster.VulkanRasterStats
+import com.orbyte.canvasstudio.drawing.raster.VulkanTileRasterBackend
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -54,6 +75,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 class DrawingView(context: Context) : View(context) {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private data class LayerData(
         val id: String = UUID.randomUUID().toString(),
         var name: String,
@@ -219,6 +241,12 @@ class DrawingView(context: Context) : View(context) {
     private val selectedLayerIds = linkedSetOf<String>()
     private val undoStack = mutableListOf<HistoryEntry>()
     private val redoStack = mutableListOf<HistoryEntry>()
+    private val tileCommandIndex = TileCommandIndex()
+    private val commandRegistry = mutableMapOf<String, DrawCommand>()
+    private val checkpointBudgetBytes = (Runtime.getRuntime().maxMemory() * .035).toLong()
+        .coerceIn(4L * 1024L * 1024L, 32L * 1024L * 1024L)
+    private val tileCheckpointStore = TileCheckpointStore(checkpointBudgetBytes)
+    internal var tileCheckpointPolicy = TileCheckpointPolicy()
 
     private val transform = Matrix()
     private val inverse = Matrix()
@@ -229,6 +257,8 @@ class DrawingView(context: Context) : View(context) {
     private var navigationInitialized = false
     private var lastGestureCentroidX = 0f
     private var lastGestureCentroidY = 0f
+    private var navigationDistancePx = 0f
+    private var navigationScaleFactor = 1f
     private var lastGestureSpan = 0f
     private var lastGestureAngle = 0f
     private var hoverX = 0f
@@ -265,6 +295,13 @@ class DrawingView(context: Context) : View(context) {
     private var lastEngineStatus = ""
     private var engineStatusUpdatePosted = false
     private var lastEngineStatusUpdateUptime = 0L
+    private val performanceMetrics = DrawingPerformanceMetrics(BuildConfig.DEBUG)
+    private var activeStrokeInputStartedNanos = 0L
+    private val bitmapRasterBackend: TileRasterBackend = BitmapCanvasTileRasterBackend()
+    private var vulkanRasterBackend: VulkanTileRasterBackend? = null
+    private var requestedRendererMode: RendererMode = RendererMode.CANVAS_BITMAP
+    private var rendererFallbackCount = 0L
+    private var simulateVulkanFailure = false
     private val globalTileCacheBudgetBytes: Long =
         (Runtime.getRuntime().maxMemory() * 0.12)
             .toLong()
@@ -294,9 +331,15 @@ class DrawingView(context: Context) : View(context) {
     private var transformLastCentroidY = 0f
     private var transformLastSpan = 0f
     private var transformLastAngle = 0f
+    private var tutorialTransformDistancePx = 0f
+    private var tutorialTransformScaleDelta = 0f
+    private var tutorialTransformRotationDegrees = 0f
 
     var tool: DrawingTool = DrawingTool.BRUSH
     var brushSettings: BrushSettings = BrushSettings()
+        set(value) {
+            field = value.sanitized()
+        }
     var onLayersChanged: ((List<LayerUiModel>) -> Unit)? = null
     var onLayerGroupsChanged: ((List<LayerGroupUiModel>) -> Unit)? = null
     var onDocumentChanged: (() -> Unit)? = null
@@ -311,8 +354,53 @@ class DrawingView(context: Context) : View(context) {
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var onInteraction: ((DrawingInteractionEvent) -> Unit)? = null
     var onRasterFramePresented: (() -> Unit)? = null
     var usePlatformLowLatencyPreview: Boolean = false
+
+    /** Local debug instrumentation for profiling on real tablets. Never persisted or uploaded. */
+    var debugPerformanceMetricsEnabled: Boolean
+        get() = performanceMetrics.enabled
+        set(value) {
+            performanceMetrics.enabled = value
+        }
+
+    fun debugPerformanceMetrics(): DrawingPerformanceMetrics.Snapshot = performanceMetrics.snapshot()
+
+    fun resetDebugPerformanceMetrics() = performanceMetrics.reset()
+
+    internal fun setRendererMode(mode: RendererMode): Boolean {
+        requestedRendererMode = if (BuildConfig.DEBUG) mode else RendererMode.CANVAS_BITMAP
+        val available = requestedRendererMode != RendererMode.VULKAN_EXPERIMENTAL ||
+            obtainVulkanBackend()?.isAvailable == true
+        updateEngineStatus()
+        return available
+    }
+
+    internal fun rendererMode(): RendererMode = requestedRendererMode
+
+    internal fun availableRendererModes(): List<RendererMode> = if (BuildConfig.DEBUG) {
+        RendererMode.entries
+    } else {
+        listOf(RendererMode.CANVAS_BITMAP)
+    }
+
+    internal fun debugVulkanStats(): VulkanRasterStats? = vulkanRasterBackend?.stats()
+    internal fun debugRendererFallbackCount(): Long = rendererFallbackCount
+    internal fun debugSimulateVulkanFailure(enabled: Boolean) { simulateVulkanFailure = enabled }
+    private fun obtainVulkanBackend(): VulkanTileRasterBackend? {
+        if (!BuildConfig.DEBUG) return null
+        vulkanRasterBackend?.let { return it }
+        return VulkanTileRasterBackend().also { vulkanRasterBackend = it }
+    }
+    internal fun debugDrawStrokeForTest(points: List<StrokePoint>, drawingTool: DrawingTool = DrawingTool.BRUSH) {
+        val layer = activeLayer() ?: return
+        val command = StrokeCommand(points = points, tool = drawingTool, settings = brushSettings)
+        drawCommand(surfaceFor(layer, activeHistoryTarget(layer)), command)
+        recordCommands(layer, listOf(command))
+    }
+    internal fun debugPixelForTest(x: Float, y: Float): Int =
+        activeLayer()?.let { surfaceFor(it, activeHistoryTarget(it)).samplePixel(x, y) } ?: 0
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
         tool == DrawingTool.BRUSH &&
@@ -527,6 +615,9 @@ class DrawingView(context: Context) : View(context) {
         horizontalRulerGuides.clear()
         undoStack.clear()
         clearRedoHistory()
+        tileCommandIndex.clear()
+        commandRegistry.clear()
+        tileCheckpointStore.clear()
         documentWidth = width
         documentHeight = height
         documentBounds = RectF(0f, 0f, width.toFloat(), height.toFloat())
@@ -630,6 +721,34 @@ class DrawingView(context: Context) : View(context) {
         commandsFor(layer, target) += commands
         undoStack += HistoryEntry(layer.id, target, commands)
         clearRedoHistory()
+        registerHistoryEntry(undoStack.last(), undoStack.lastIndex)
+    }
+
+    private fun registerHistoryEntry(entry: HistoryEntry, position: Int) {
+        val surface = HistorySurfaceKey(entry.layerId, entry.target.toIndexTarget())
+        entry.commands.forEach { command ->
+            commandRegistry[command.id] = command
+            val tiles = TileStorage.keysForBounds(commandBounds(command), documentWidth, documentHeight)
+            tileCommandIndex.register(command.id, position, mapOf(surface to tiles), estimatedReplayCost(command))
+        }
+    }
+
+    /** Used only after destructive lifecycle edits; regional replay never rebuilds/scans this index. */
+    private fun rebuildHistoryIndex() {
+        tileCommandIndex.clear()
+        commandRegistry.clear()
+        val ordered = undoStack + redoStack.asReversed()
+        ordered.forEachIndexed { position, entry -> registerHistoryEntry(entry, position) }
+    }
+
+    private fun HistoryTarget.toIndexTarget(): HistoryRasterTarget = when (this) {
+        HistoryTarget.CONTENT -> HistoryRasterTarget.CONTENT
+        HistoryTarget.MASK -> HistoryRasterTarget.MASK
+    }
+
+    private fun estimatedReplayCost(command: DrawCommand): Int = when (command) {
+        is StrokeCommand -> command.points.size
+        else -> 1
     }
 
     private fun markLayerDirty(layer: LayerData, bounds: RectF, target: HistoryTarget = activeHistoryTarget(layer)) {
@@ -764,7 +883,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun shouldDeferActiveRaster(settings: BrushSettings): Boolean =
-        (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
+        requestedRendererMode == RendererMode.VULKAN_EXPERIMENTAL ||
+            (isStampBrush(settings.kind) && settings.sizePx >= 48f) ||
             requiresFinalStrokeRebuild(settings)
 
     private fun minimumInputDistance(settings: BrushSettings): Float {
@@ -811,6 +931,7 @@ class DrawingView(context: Context) : View(context) {
             add(layer.surface.stats())
             layer.maskSurface?.let { add(it.stats()) }
         } }
+        performanceMetrics.updateTileStats(stats)
         val residentTiles = stats.sumOf { it.residentTiles }
         val storedTiles = stats.sumOf { it.storedTiles }
         val dirtyTiles = stats.sumOf { it.dirtyTiles }
@@ -820,7 +941,16 @@ class DrawingView(context: Context) : View(context) {
             storedTiles > 0 -> "$residentTiles residentes / $storedTiles en disco · ${cacheMegabytes} MB"
             else -> "superficie dispersa preparada"
         }
-        val status = "Tiles ${TileStorage.TILE_SIZE} · $detail"
+        val renderer = when (requestedRendererMode) {
+            RendererMode.VULKAN_EXPERIMENTAL -> if (vulkanRasterBackend?.isAvailable == true) {
+                "Vulkan exp."
+            } else {
+                "Canvas fallback"
+            }
+            RendererMode.AUTO -> "Auto/Canvas"
+            RendererMode.CANVAS_BITMAP -> "Canvas"
+        }
+        val status = "Tiles ${TileStorage.TILE_SIZE} · $renderer · $detail"
         if (status != lastEngineStatus) {
             lastEngineStatus = status
             onEngineStatusChanged?.invoke(status)
@@ -880,7 +1010,7 @@ class DrawingView(context: Context) : View(context) {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_0) {
-            resetView()
+            resetView(notifyInteraction = false)
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
@@ -893,6 +1023,8 @@ class DrawingView(context: Context) : View(context) {
     override fun onDetachedFromWindow() {
         prefetchGeneration.incrementAndGet()
         prefetchExecutor.shutdownNow()
+        tileCheckpointStore.clear()
+        vulkanRasterBackend?.close()
         super.onDetachedFromWindow()
     }
 
@@ -900,12 +1032,13 @@ class DrawingView(context: Context) : View(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         deferredStrokeOverlay.setBounds(0, 0, w, h)
         if (w > 0 && h > 0 && !fittedOnce) {
-            resetView()
+            resetView(notifyInteraction = false)
             fittedOnce = true
         }
     }
 
     override fun onDraw(canvas: Canvas) {
+        val frameStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         super.onDraw(canvas)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), workspacePaint)
         canvas.save()
@@ -932,9 +1065,14 @@ class DrawingView(context: Context) : View(context) {
         canvas.drawRect(documentBounds, borderPaint)
         canvas.restore()
         drawBrushCursor(canvas)
-        scheduleTilePrefetch(prefetchedBounds, force = hasMissingVisibleTiles(prefetchedBounds))
+        val hasMissingTiles = hasMissingVisibleTiles(prefetchedBounds)
+        if (hasMissingTiles) performanceMetrics.recordVisibleMiss()
+        scheduleTilePrefetch(prefetchedBounds, force = hasMissingTiles)
         scheduleEngineStatusUpdate()
         onRasterFramePresented?.invoke()
+        if (frameStartedNanos != 0L) {
+            performanceMetrics.addViewportFrame(System.nanoTime() - frameStartedNanos)
+        }
     }
 
     private fun hasMissingVisibleTiles(bounds: RectF): Boolean = layers
@@ -1038,10 +1176,16 @@ class DrawingView(context: Context) : View(context) {
             } }
         val requestedBounds = RectF(bounds)
         prefetchExecutor.execute {
+            val prefetchStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
             try {
+                var loadedTiles = 0
                 snapshot.forEach { surface ->
                     if (generation != prefetchGeneration.get()) return@execute
-                    surface.prefetch(requestedBounds)
+                    loadedTiles += surface.prefetch(requestedBounds)
+                }
+                performanceMetrics.recordPrefetch(loadedTiles)
+                if (prefetchStartedNanos != 0L) {
+                    performanceMetrics.addTilePrefetch(System.nanoTime() - prefetchStartedNanos)
                 }
                 if (generation == prefetchGeneration.get()) {
                     post {
@@ -1464,6 +1608,7 @@ class DrawingView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        performanceMetrics.recordMotionEvent(event.historySize)
         val canceledPalmPointer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
             event.flags and MotionEvent.FLAG_CANCELED == MotionEvent.FLAG_CANCELED
@@ -1481,7 +1626,7 @@ class DrawingView(context: Context) : View(context) {
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                onEngineMessage?.invoke("La máscara se edita con Pincel o Borrador.")
+                onEngineMessage?.invoke("Activa Editar ocultación para usar Pincel o Borrador.")
             }
             return true
         }
@@ -1490,10 +1635,7 @@ class DrawingView(context: Context) : View(context) {
             handleSelectionTransformGesture(event)
             return true
         }
-        val stylusIndex = (0 until event.pointerCount).firstOrNull { index ->
-            val pointerTool = event.getToolType(index)
-            pointerTool == MotionEvent.TOOL_TYPE_STYLUS || pointerTool == MotionEvent.TOOL_TYPE_ERASER
-        }
+        val stylusIndex = StylusInputController.stylusPointerIndex(event)
         val stylusPresent = stylusIndex != null
         val activePointerIndex = stylusIndex ?: 0
 
@@ -1523,13 +1665,12 @@ class DrawingView(context: Context) : View(context) {
 
         if (event.actionMasked == MotionEvent.ACTION_DOWN) requestFocus()
         transform.invert(inverse)
-        val current = mapToDocument(event.getX(activePointerIndex), event.getY(activePointerIndex))
-        val pressure = event.getPressure(activePointerIndex).coerceIn(0f, 1f)
-        val tilt = normalizedStylusTilt(
-            event.getAxisValue(MotionEvent.AXIS_TILT, activePointerIndex),
-        )
-        val orientation = event.getAxisValue(MotionEvent.AXIS_ORIENTATION, activePointerIndex)
-        val eventTool = if (event.getToolType(activePointerIndex) == MotionEvent.TOOL_TYPE_ERASER) {
+        val currentSample = StylusInputController.currentSample(event, activePointerIndex)
+        val current = mapToDocument(currentSample.x, currentSample.y)
+        val pressure = currentSample.pressure
+        val tilt = currentSample.tilt
+        val orientation = currentSample.orientation
+        val eventTool = if (StylusInputController.isEraser(event, activePointerIndex)) {
             DrawingTool.ERASER
         } else {
             tool
@@ -1593,31 +1734,20 @@ class DrawingView(context: Context) : View(context) {
                     DrawingTool.BRUSH, DrawingTool.ERASER -> {
                         val points = activeStrokePoints ?: return true
                         for (historyIndex in 0 until event.historySize) {
-                            val mapped = mapToDocument(
-                                event.getHistoricalX(activePointerIndex, historyIndex),
-                                event.getHistoricalY(activePointerIndex, historyIndex),
+                            val sample = StylusInputController.historicalSample(
+                                event,
+                                activePointerIndex,
+                                historyIndex,
                             )
+                            val mapped = mapToDocument(sample.x, sample.y)
                             appendStrokePoint(
                                 points,
                                 mapped[0],
                                 mapped[1],
-                                event.getHistoricalPressure(
-                                    activePointerIndex,
-                                    historyIndex,
-                                ).coerceIn(0f, 1f),
-                                normalizedStylusTilt(
-                                    event.getHistoricalAxisValue(
-                                        MotionEvent.AXIS_TILT,
-                                        activePointerIndex,
-                                        historyIndex,
-                                    ),
-                                ),
-                                event.getHistoricalAxisValue(
-                                    MotionEvent.AXIS_ORIENTATION,
-                                    activePointerIndex,
-                                    historyIndex,
-                                ),
-                                event.getHistoricalEventTime(historyIndex),
+                                sample.pressure,
+                                sample.tilt,
+                                sample.orientation,
+                                sample.eventTimeMillis,
                             )
                         }
                         appendStrokePoint(
@@ -1766,6 +1896,7 @@ class DrawingView(context: Context) : View(context) {
         time: Long,
         deferUntilCommit: Boolean = false,
     ) {
+        activeStrokeInputStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         val settings = brushSettings
         val points = mutableListOf(
             StrokePoint(x, y, pressure, tilt, time, orientation),
@@ -1823,12 +1954,23 @@ class DrawingView(context: Context) : View(context) {
     ) {
         val previous = points.lastOrNull() ?: return
         val settings = activeStrokeSettings ?: brushSettings
-        val response = (1f - settings.stabilization.coerceIn(0f, 0.92f)) * 0.86f + 0.08f
-        val x = previous.x + (rawX - previous.x) * response
-        val y = previous.y + (rawY - previous.y) * response
-        val distance = hypot(x - previous.x, y - previous.y)
-        if (distance < minimumInputDistance(settings)) return
-        points += StrokePoint(x, y, pressure, tilt, time, orientation)
+        val sampled = StrokeSampler.sample(
+            previous = previous,
+            rawX = rawX,
+            rawY = rawY,
+            pressure = pressure,
+            tilt = tilt,
+            orientation = orientation,
+            time = time,
+            settings = settings,
+            stampBased = isStampBrush(settings.kind),
+        )
+        if (sampled == null) {
+            performanceMetrics.recordSample(accepted = false)
+            return
+        }
+        performanceMetrics.recordSample(accepted = true)
+        points += sampled
         if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
             if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
                 deferredStrokeOverlay.invalidateSelf()
@@ -1891,6 +2033,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun renderActiveStrokePending(maxSegments: Int) {
+        val rasterStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         val points = activeStrokePoints ?: return
         val layer = activeLayer() ?: return
         val settings = activeStrokeSettings ?: brushSettings
@@ -1951,6 +2094,13 @@ class DrawingView(context: Context) : View(context) {
             }
         }
         activeRenderedPointCount = endExclusive
+        performanceMetrics.recordDabs((endExclusive - firstEndPointIndex) * matrices.size)
+        if (activeStrokeInputStartedNanos != 0L) {
+            performanceMetrics.addInputToPreview(System.nanoTime() - activeStrokeInputStartedNanos)
+        }
+        if (rasterStartedNanos != 0L) {
+            performanceMetrics.addTileRaster(System.nanoTime() - rasterStartedNanos)
+        }
         invalidate()
     }
 
@@ -1980,8 +2130,26 @@ class DrawingView(context: Context) : View(context) {
             } else if (requiresFinalStrokeRebuild(command.settings)) {
                 rebuildLayerRegion(layer, combinedBounds(commands))
             }
+            val length = completedPoints.zipWithNext().sumOf { (first, second) ->
+                hypot(second.x - first.x, second.y - first.y).toDouble()
+            }.toFloat()
+            onInteraction?.invoke(
+                DrawingInteractionEvent.StrokeCommitted(
+                    layerId = layer.id,
+                    lengthPx = length,
+                    minimumPressure = completedPoints.minOf(StrokePoint::pressure),
+                    maximumPressure = completedPoints.maxOf(StrokePoint::pressure),
+                    maximumTiltRadians = completedPoints.maxOf { abs(it.tilt) },
+                    eraser = completedTool == DrawingTool.ERASER,
+                    editingMask = layer.editingMask,
+                    symmetryCopies = commands.size,
+                ),
+            )
         }
         commitDocumentChange()
+        if (activeStrokeInputStartedNanos != 0L) {
+            performanceMetrics.addInputToCommit(System.nanoTime() - activeStrokeInputStartedNanos)
+        }
     }
 
     private fun finishShape() {
@@ -2007,6 +2175,9 @@ class DrawingView(context: Context) : View(context) {
             commands.forEach { drawCommand(layer.surface, it) }
             recordCommands(layer, commands)
         }
+        onInteraction?.invoke(
+            DrawingInteractionEvent.ShapeCommitted(tool, abs(end.x - start.x), abs(end.y - start.y)),
+        )
         commitDocumentChange()
     }
 
@@ -2035,6 +2206,7 @@ class DrawingView(context: Context) : View(context) {
             recordCommands(layer, listOf(command))
             markLayerDirty(layer, commandBounds(command))
         }
+        onInteraction?.invoke(DrawingInteractionEvent.GradientCommitted(hypot(end.x - start.x, end.y - start.y)))
         commitDocumentChange()
     }
 
@@ -2060,6 +2232,7 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2080,6 +2253,7 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2111,6 +2285,8 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        val bounds = RectF().also { selectionPath?.computeBounds(it, true) }
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2216,7 +2392,14 @@ class DrawingView(context: Context) : View(context) {
         }
 
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> resetBaseline()
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    tutorialTransformDistancePx = 0f
+                    tutorialTransformScaleDelta = 0f
+                    tutorialTransformRotationDegrees = 0f
+                }
+                resetBaseline()
+            }
             MotionEvent.ACTION_MOVE -> {
                 val values = gestureValues()
                 if (!transformGestureInitialized) {
@@ -2225,13 +2408,28 @@ class DrawingView(context: Context) : View(context) {
                 }
                 val cx = values[0]
                 val cy = values[1]
+                val translated = hypot(cx - transformLastCentroidX, cy - transformLastCentroidY)
+                var scaleDelta = 0f
+                var rotationDelta = 0f
                 selectionTransform.postTranslate(cx - transformLastCentroidX, cy - transformLastCentroidY)
                 if (event.pointerCount >= 2 && transformLastSpan > 0.5f && values[2] > 0.5f) {
                     val factor = (values[2] / transformLastSpan).coerceIn(0.65f, 1.55f)
+                    scaleDelta = factor - 1f
                     selectionTransform.postScale(factor, factor, cx, cy)
                     val rotation = normalizeDegrees(values[3] - transformLastAngle).coerceIn(-28f, 28f)
+                    rotationDelta = rotation
                     selectionTransform.postRotate(rotation, cx, cy)
                 }
+                tutorialTransformDistancePx += translated
+                tutorialTransformScaleDelta += abs(scaleDelta)
+                tutorialTransformRotationDegrees += abs(rotationDelta)
+                onInteraction?.invoke(
+                    DrawingInteractionEvent.TransformPreviewChanged(
+                        tutorialTransformDistancePx,
+                        tutorialTransformScaleDelta,
+                        tutorialTransformRotationDegrees,
+                    ),
+                )
                 transformLastCentroidX = cx
                 transformLastCentroidY = cy
                 transformLastSpan = values[2]
@@ -2283,6 +2481,7 @@ class DrawingView(context: Context) : View(context) {
         selectionTransform.reset()
         transformGestureInitialized = false
         onSelectionChanged?.invoke(selectionPath != null)
+        onInteraction?.invoke(DrawingInteractionEvent.TransformCommitted)
         commitDocumentChange()
     }
 
@@ -2532,6 +2731,7 @@ class DrawingView(context: Context) : View(context) {
                     drawCommand(currentLayer.surface, command)
                     recordCommands(currentLayer, listOf(command))
                     markLayerDirty(currentLayer, commandBounds(command))
+                    onInteraction?.invoke(DrawingInteractionEvent.FillCommitted(filled.cardinality()))
                     commitDocumentChange()
                 }
             } finally {
@@ -2560,6 +2760,9 @@ class DrawingView(context: Context) : View(context) {
             RectF(commandBounds).apply { intersect(replayClipBounds) }
         }
         if (bounds.isEmpty) return
+        if (command is StrokeCommand && tryRasterizeVulkan(surface, layer, target, command, bounds)) {
+            return
+        }
         val pickupColors = (command as? StrokeCommand)
             ?.takeIf { it.settings.renderProfile.colorPickup > .001f && it.points.size > 1 }
             ?.let { stroke ->
@@ -2592,6 +2795,68 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
+    private fun tryRasterizeVulkan(
+        surface: SparseTileSurface,
+        layer: LayerData?,
+        target: HistoryTarget,
+        command: StrokeCommand,
+        bounds: RectF,
+    ): Boolean {
+        if (requestedRendererMode != RendererMode.VULKAN_EXPERIMENTAL) return false
+        // The experimental backend does not yet implement mask grayscale semantics or
+        // feathered selection coverage. Keep these operations pixel-compatible by
+        // routing the complete command through the production Canvas backend.
+        if (target == HistoryTarget.MASK || command.clipFeatherPx > 0.01f) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        val material = when (command.settings.presetId) {
+            "technical-ink" -> VulkanBrushMaterial.TECHNICAL_INK
+            "graphite-shader" -> VulkanBrushMaterial.TILTED_GRAPHITE
+            else -> {
+                rendererFallbackCount += 1L
+                performanceMetrics.recordRendererFallback()
+                return false
+            }
+        }
+        val backend = obtainVulkanBackend()
+        if (backend == null || !backend.isAvailable || simulateVulkanFailure) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        val dabs = BrushDabBatchBuilder.build(command.points, command.settings, command.tool)
+        performanceMetrics.recordDabs(dabs.size)
+        val selection = FloatArray(command.clipPoints.size * 2)
+        command.clipPoints.forEachIndexed { index, point ->
+            selection[index * 2] = point.x
+            selection[index * 2 + 1] = point.y
+        }
+        val started = if (performanceMetrics.isActive) System.nanoTime() else 0L
+        val result = backend.rasterizeDabs(
+            RasterDabRequest(
+                surface = surface,
+                bounds = bounds,
+                dabs = dabs,
+                material = material,
+                erase = command.tool == DrawingTool.ERASER,
+                preserveAlpha = target == HistoryTarget.CONTENT && layer?.alphaLocked == true,
+                selection = selection,
+                selectionInverted = command.clipInverted,
+                grainDepth = command.settings.grainProfile.depth,
+            ),
+        )
+        if (result == null) {
+            rendererFallbackCount += 1L
+            performanceMetrics.recordRendererFallback()
+            return false
+        }
+        if (started != 0L) performanceMetrics.addTileRaster(System.nanoTime() - started)
+        performanceMetrics.recordTilesTouched(result.touchedTiles)
+        return true
+    }
+
     private fun drawOnLayer(layer: LayerData, bounds: RectF, block: (Canvas) -> Unit) {
         val target = activeHistoryTarget(layer)
         val surface = surfaceFor(layer, target)
@@ -2616,11 +2881,13 @@ class DrawingView(context: Context) : View(context) {
                 block(canvas)
             }
         }
-        if (target == HistoryTarget.CONTENT && layer.alphaLocked) {
-            surface.drawPreservingAlpha(bounds, clippedBlock)
-        } else {
-            surface.draw(bounds, clippedBlock)
-        }
+        val result = bitmapRasterBackend.rasterize(
+            surface = surface,
+            bounds = bounds,
+            preserveAlpha = target == HistoryTarget.CONTENT && layer.alphaLocked,
+            draw = clippedBlock,
+        )
+        performanceMetrics.recordTilesTouched(result.touchedTiles)
     }
 
     private fun drawCommand(
@@ -3551,53 +3818,28 @@ class DrawingView(context: Context) : View(context) {
         speedFactor: Float = 0f,
         resolvedColor: Int = settings.color,
     ) {
-        val dynamics = settings.dynamicsProfile
-        val legacyPressure = calibratedPressure(pressure, settings.pressureCurve)
-        val sizePressure = applyInputCurve(legacyPressure, dynamics.sizePressure)
-        val opacityPressureValue = applyInputCurve(legacyPressure, dynamics.opacityPressure)
-        val flowPressureValue = applyInputCurve(legacyPressure, dynamics.flowPressure)
-        val minimum = settings.minSize.coerceIn(0.02f, 1f)
-        val pressureFactor = if (settings.pressureSize) {
-            minimum + sizePressure * (1f - minimum)
-        } else {
-            1f
+        val evaluationStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
+        val dab = performanceMetrics.trace("BrushEvaluation") {
+            BrushEvaluator.evaluate(
+                x = 0f,
+                y = 0f,
+                pressure = pressure,
+                tilt = tilt,
+                orientation = 0f,
+                speedFactor = speedFactor,
+                progress = 0f,
+                stampIndex = 0,
+                settings = settings,
+                drawingTool = drawingTool,
+                color = resolvedColor,
+            )
         }
-        val resolvedTilt = (
-            (tilt.coerceIn(0f, 1f) - dynamics.tiltThreshold.coerceIn(0f, .95f)) /
-                (1f - dynamics.tiltThreshold.coerceIn(0f, .95f))
-            ).coerceIn(0f, 1f)
-        val tiltExpansion = 1f + resolvedTilt *
-            max(settings.tiltResponse, dynamics.tiltSize).coerceIn(0f, 1f) * .9f
-        val velocityWidth = 1f -
-            max(settings.velocitySize, dynamics.velocitySize).coerceIn(0f, 1f) *
-            speedFactor.coerceIn(0f, 1f) * .62f
-        paint.strokeWidth = settings.sizePx * pressureFactor * tiltExpansion * velocityWidth
-        val pressureOpacity = if (settings.pressureOpacity) {
-            .08f + opacityPressureValue * .92f
-        } else {
-            1f
-        }
-        val velocityOpacity = 1f -
-            dynamics.velocityOpacity.coerceIn(0f, 1f) * speedFactor.coerceIn(0f, 1f) * .72f
-        val tiltOpacity = 1f -
-            dynamics.tiltOpacity.coerceIn(0f, 1f) * resolvedTilt * .45f
-        val dynamicFlow = if (settings.pressureOpacity) {
-            .18f + flowPressureValue * .82f
-        } else {
-            1f
+        if (evaluationStartedNanos != 0L) {
+            performanceMetrics.addBrushEvaluation(System.nanoTime() - evaluationStartedNanos)
         }
         val previewFactor = if (isPreview) 0.72f else 1f
-        val renderMultiplier = if (drawingTool == DrawingTool.ERASER) {
-            1f
-        } else {
-            renderAlphaMultiplier(settings.renderProfile) *
-                (1f - settings.renderProfile.dilution.coerceIn(0f, 1f) * .48f)
-        }
-        paint.alpha = (
-            settings.opacity * settings.flow * pressureOpacity * dynamicFlow * previewFactor *
-                velocityOpacity * tiltOpacity * renderMultiplier * 255f
-            )
-            .toInt().coerceIn(1, 255)
+        paint.strokeWidth = dab.radiusX * 2f
+        paint.alpha = (dab.opacity * previewFactor * 255f).toInt().coerceIn(1, 255)
         paint.color = resolvedColor
         paint.style = Paint.Style.STROKE
         paint.strokeCap = if (settings.kind == BrushKind.MARKER) Paint.Cap.SQUARE else Paint.Cap.ROUND
@@ -3686,7 +3928,12 @@ class DrawingView(context: Context) : View(context) {
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val startsNavigation = !navigationActive
                 navigationActive = true
+                if (startsNavigation) {
+                    navigationDistancePx = 0f
+                    navigationScaleFactor = 1f
+                }
                 resetBaseline()
             }
 
@@ -3697,13 +3944,16 @@ class DrawingView(context: Context) : View(context) {
                     return
                 }
 
-                transform.postTranslate(
+                val panDelta = hypot(
                     centroidX - lastGestureCentroidX,
                     centroidY - lastGestureCentroidY,
                 )
+                navigationDistancePx += panDelta
+                transform.postTranslate(centroidX - lastGestureCentroidX, centroidY - lastGestureCentroidY)
 
                 if (hasPair && lastGestureSpan > 0.001f && span > 0.001f) {
                     val requestedFactor = span / lastGestureSpan
+                    navigationScaleFactor *= requestedFactor
                     val desiredScale = (currentScale * requestedFactor).coerceIn(0.08f, 10f)
                     val appliedScale = desiredScale / currentScale
                     transform.postScale(appliedScale, appliedScale, centroidX, centroidY)
@@ -3717,6 +3967,14 @@ class DrawingView(context: Context) : View(context) {
                     onZoomChanged?.invoke(zoomPercent())
                     onRotationChanged?.invoke(rotationDegrees())
                 }
+
+                onInteraction?.invoke(
+                    DrawingInteractionEvent.ViewChanged(
+                        scale = navigationScaleFactor,
+                        panDistancePx = navigationDistancePx,
+                        rotationDegrees = currentRotationDegrees,
+                    ),
+                )
 
                 resetBaseline()
                 invalidate()
@@ -3780,6 +4038,7 @@ class DrawingView(context: Context) : View(context) {
         rebuildLayerRegion(layer, affectedBounds, entry.target)
         markLayerDirty(layer, affectedBounds, entry.target)
         commitDocumentChange()
+        onInteraction?.invoke(DrawingInteractionEvent.HistoryChanged(DrawingInteractionEvent.HistoryChanged.Action.UNDO))
     }
 
     fun redo() {
@@ -3791,6 +4050,7 @@ class DrawingView(context: Context) : View(context) {
         rebuildLayerRegion(layer, affectedBounds, entry.target)
         markLayerDirty(layer, affectedBounds, entry.target)
         commitDocumentChange()
+        onInteraction?.invoke(DrawingInteractionEvent.HistoryChanged(DrawingInteractionEvent.HistoryChanged.Action.REDO))
     }
 
     fun refreshLayerState() = notifyLayers()
@@ -3857,6 +4117,7 @@ class DrawingView(context: Context) : View(context) {
         val removedIds = removable.mapTo(mutableSetOf()) { it.id }
         layers.removeAll { layer -> layer.id in removedIds }
         removable.forEach { removed ->
+            (removed.commands + removed.maskCommands).forEach { commandRegistry.remove(it.id) }
             (removed.commands + removed.maskCommands).distinctBy { it.id }.forEach(::recycleCommand)
             removed.surface.recycle()
             removed.maskSurface?.recycle()
@@ -3865,6 +4126,14 @@ class DrawingView(context: Context) : View(context) {
         }
         undoStack.removeAll { it.layerId in removedIds }
         redoStack.removeAll { it.layerId in removedIds }
+        removedIds.forEach { id ->
+            tileCommandIndex.removeSurface(HistorySurfaceKey(id, HistoryRasterTarget.CONTENT))
+            tileCommandIndex.removeSurface(HistorySurfaceKey(id, HistoryRasterTarget.MASK))
+            tileCheckpointStore.removeSurface(HistorySurfaceKey(id, HistoryRasterTarget.CONTENT))
+            tileCheckpointStore.removeSurface(HistorySurfaceKey(id, HistoryRasterTarget.MASK))
+        }
+        rebuildHistoryIndex()
+        tileCheckpointStore.clear()
         pruneEmptyGroups()
         selectOnly(layers[min(firstIndex, layers.lastIndex)].id)
         updateCacheBudgets()
@@ -3999,7 +4268,7 @@ class DrawingView(context: Context) : View(context) {
         layer.editingMask = true
         updateCacheBudgets()
         notifyLayers()
-        onEngineMessage?.invoke("Máscara activa: Pincel oculta y Borrador revela.")
+        onEngineMessage?.invoke("Ocultación lista: Pincel oculta y Borrador recupera; la capa original no cambia.")
         onDocumentChanged?.invoke()
     }
 
@@ -4020,7 +4289,10 @@ class DrawingView(context: Context) : View(context) {
     fun deleteActiveLayerMask() {
         val layer = activeLayer() ?: return
         val mask = layer.maskSurface ?: return
-        layer.maskCommands.distinctBy { it.id }.forEach(::recycleCommand)
+        layer.maskCommands.distinctBy { it.id }.forEach { command ->
+            commandRegistry.remove(command.id)
+            recycleCommand(command)
+        }
         layer.maskCommands.clear()
         mask.recycle()
         layer.maskSurface = null
@@ -4030,6 +4302,10 @@ class DrawingView(context: Context) : View(context) {
         layer.maskEnabled = true
         undoStack.removeAll { it.layerId == layer.id && it.target == HistoryTarget.MASK }
         redoStack.removeAll { it.layerId == layer.id && it.target == HistoryTarget.MASK }
+        tileCommandIndex.removeSurface(HistorySurfaceKey(layer.id, HistoryRasterTarget.MASK))
+        tileCheckpointStore.removeSurface(HistorySurfaceKey(layer.id, HistoryRasterTarget.MASK))
+        rebuildHistoryIndex()
+        tileCheckpointStore.clear()
         updateCacheBudgets()
         notifyLayers()
         onDocumentChanged?.invoke()
@@ -4058,7 +4334,10 @@ class DrawingView(context: Context) : View(context) {
     fun clearActiveLayer() {
         val layer = activeLayer() ?: return
         val target = activeHistoryTarget(layer)
-        commandsFor(layer, target).distinctBy { it.id }.forEach(::recycleCommand)
+        commandsFor(layer, target).distinctBy { it.id }.forEach { command ->
+            commandRegistry.remove(command.id)
+            recycleCommand(command)
+        }
         commandsFor(layer, target).clear()
         val base = baseDirectoryFor(layer, target)
         base.deleteRecursively()
@@ -4066,6 +4345,11 @@ class DrawingView(context: Context) : View(context) {
         surfaceFor(layer, target).clearAll()
         undoStack.removeAll { it.layerId == layer.id && it.target == target }
         redoStack.removeAll { it.layerId == layer.id && it.target == target }
+        val surfaceKey = HistorySurfaceKey(layer.id, target.toIndexTarget())
+        tileCommandIndex.removeSurface(surfaceKey)
+        tileCheckpointStore.removeSurface(surfaceKey)
+        rebuildHistoryIndex()
+        tileCheckpointStore.clear()
         updateEngineStatus()
         commitDocumentChange()
     }
@@ -4164,7 +4448,7 @@ class DrawingView(context: Context) : View(context) {
         onDocumentChanged?.invoke()
     }
 
-    fun resetView() {
+    fun resetView(notifyInteraction: Boolean = true) {
         if (width <= 0 || height <= 0) return
         val margin = 64f
         val scale = min(
@@ -4181,6 +4465,7 @@ class DrawingView(context: Context) : View(context) {
         )
         onZoomChanged?.invoke(zoomPercent())
         onRotationChanged?.invoke(rotationDegrees())
+        if (notifyInteraction) onInteraction?.invoke(DrawingInteractionEvent.ViewReset)
         invalidate()
     }
 
@@ -4191,6 +4476,7 @@ class DrawingView(context: Context) : View(context) {
         transform.postRotate(degrees, focusX, focusY)
         currentRotationDegrees = normalizeDegrees(currentRotationDegrees + degrees)
         onRotationChanged?.invoke(rotationDegrees())
+        onInteraction?.invoke(DrawingInteractionEvent.ViewChanged(currentScale, 0f, currentRotationDegrees))
         invalidate()
     }
 
@@ -4204,6 +4490,7 @@ class DrawingView(context: Context) : View(context) {
         transform.postScale(applied, applied, focusX, focusY)
         currentScale = desired
         onZoomChanged?.invoke(zoomPercent())
+        onInteraction?.invoke(DrawingInteractionEvent.ViewChanged(currentScale, 0f, currentRotationDegrees))
         invalidate()
     }
 
@@ -4424,6 +4711,7 @@ class DrawingView(context: Context) : View(context) {
         dpi: Int,
         includePreview: Boolean = true,
     ) {
+        val saveStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         if (transformBitmap != null) commitSelectionTransform()
 
         data class LayerReference(
@@ -4507,7 +4795,7 @@ class DrawingView(context: Context) : View(context) {
                     }
                 }.getOrElse {
                     previewBitmap?.recycle()
-                    post { onProjectSaved?.invoke(false) }
+                    mainHandler.post { onProjectSaved?.invoke(false) }
                     return@synchronized
                 }
 
@@ -4645,7 +4933,7 @@ class DrawingView(context: Context) : View(context) {
                     File(directory, "flattened.tmp").delete()
                     ProjectVersionStore.maybeSnapshot(context, projectId, directory)
 
-                    post {
+                    mainHandler.post {
                         layerSnapshots.forEach { snapshot ->
                             val currentLayer = layers.firstOrNull { it.id == snapshot.reference.id }
                                 ?: return@forEach
@@ -4654,10 +4942,16 @@ class DrawingView(context: Context) : View(context) {
                             if (maskSnapshot != null) currentLayer.maskSurface?.acknowledgeSave(maskSnapshot)
                         }
                         updateEngineStatus()
+                        if (saveStartedNanos != 0L) {
+                            performanceMetrics.addSave(System.nanoTime() - saveStartedNanos)
+                        }
                         onProjectSaved?.invoke(true)
                     }
                 } catch (error: Throwable) {
-                    post {
+                    mainHandler.post {
+                        if (saveStartedNanos != 0L) {
+                            performanceMetrics.addSave(System.nanoTime() - saveStartedNanos)
+                        }
                         onProjectSaved?.invoke(false)
                         onEngineMessage?.invoke(
                             error.message?.let { "No se pudo guardar el proyecto: $it" }
@@ -4834,12 +5128,15 @@ class DrawingView(context: Context) : View(context) {
             selectOnly(layers.last().id)
             undoStack.clear()
             clearRedoHistory()
+            tileCommandIndex.clear()
+            commandRegistry.clear()
+            tileCheckpointStore.clear()
             updateCacheBudgets()
             notifyLayers()
             updateEngineStatus()
             fittedOnce = false
             if (width > 0 && height > 0) {
-                resetView()
+                resetView(notifyInteraction = false)
                 fittedOnce = true
             }
             invalidate()
@@ -4901,17 +5198,75 @@ class DrawingView(context: Context) : View(context) {
         bounds: RectF,
         target: HistoryTarget = activeHistoryTarget(layer),
     ) {
+        val replayStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         if (bounds.isEmpty) return
         val safeBounds = RectF(bounds).apply { intersect(documentBounds) }
         if (safeBounds.isEmpty) return
         val tileBounds = TileStorage.tileAlignedBounds(safeBounds, documentWidth, documentHeight)
         if (tileBounds.isEmpty) return
         val surface = surfaceFor(layer, target)
-        surface.resetRegionFrom(baseDirectoryFor(layer, target), tileBounds)
-        commandsFor(layer, target).forEach { command ->
-            if (RectF.intersects(commandBounds(command), tileBounds)) {
-                drawCommand(surface, command, replayClipBounds = tileBounds)
+        var replayedCommands = 0
+        val keys = TileStorage.keysForBounds(tileBounds, documentWidth, documentHeight)
+        val surfaceKey = HistorySurfaceKey(layer.id, target.toIndexTarget())
+        val targetPosition = undoStack.lastIndex
+        keys.forEach { key ->
+            val tileReplayStarted = if (performanceMetrics.isActive) System.nanoTime() else 0L
+            val keyBounds = RectF(TileStorage.tileRect(key, documentWidth, documentHeight))
+            val restoreStarted = if (performanceMetrics.isActive) System.nanoTime() else 0L
+            val checkpoint = tileCheckpointStore.findNearest(surfaceKey, key, targetPosition)
+            if (checkpoint != null) {
+                surface.restoreTile(key, checkpoint.bitmap)
+                checkpoint.bitmap?.recycle()
+            } else {
+                surface.resetRegionFrom(baseDirectoryFor(layer, target), keyBounds)
             }
+            val fromPosition = checkpoint?.key?.historyPosition ?: -1
+            val indexedIds = tileCommandIndex.commandIdsFor(
+                surfaceKey, setOf(key), fromExclusive = fromPosition, toInclusive = targetPosition,
+            )
+            performanceMetrics.recordIndexQuery(indexedIds.size, tileCommandIndex.entryCount())
+            performanceMetrics.recordCheckpoint(
+                checkpoint != null,
+                indexedIds.size,
+                if (restoreStarted == 0L) 0L else System.nanoTime() - restoreStarted,
+            )
+            indexedIds.forEach { id ->
+                val command = commandRegistry[id] ?: run {
+                    performanceMetrics.recordIndexFallback()
+                    commandsFor(layer, target).firstOrNull { it.id == id }
+                        ?.also { recovered -> commandRegistry[id] = recovered }
+                }
+                if (command == null) {
+                    return@forEach
+                }
+                replayedCommands++
+                drawCommand(surface, command, replayClipBounds = keyBounds)
+            }
+            val localReplayNanos = if (tileReplayStarted == 0L) 0L else System.nanoTime() - tileReplayStarted
+            if (tileCheckpointPolicy.shouldCreate(
+                    indexedIds.size,
+                    tileCommandIndex.replayCostFor(indexedIds),
+                    localReplayNanos,
+                ) && targetPosition >= 0
+            ) {
+                val createStarted = if (performanceMetrics.isActive) System.nanoTime() else 0L
+                val snapshot = surface.snapshotTile(key)
+                tileCheckpointStore.put(TileCheckpointKey(surfaceKey, key, targetPosition), snapshot)
+                snapshot?.recycle()
+                performanceMetrics.recordCheckpointCreate(
+                    if (createStarted == 0L) 0L else System.nanoTime() - createStarted,
+                )
+            }
+        }
+        tileCheckpointStore.stats().also {
+            performanceMetrics.updateCheckpointStats(it.bytes, it.budgetBytes, it.evictions)
+        }
+        performanceMetrics.recordReplay(
+            commandCount = replayedCommands,
+            tileCount = keys.size,
+        )
+        if (replayStartedNanos != 0L) {
+            performanceMetrics.addHistoryReplay(System.nanoTime() - replayStartedNanos)
         }
         scheduleEngineStatusUpdate()
         invalidate()
@@ -4995,7 +5350,11 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun clearRedoHistory() {
-        redoStack.flatMap { it.commands }.distinctBy { it.id }.forEach(::recycleCommand)
+        val staleCommands = redoStack.flatMap { it.commands }.distinctBy { it.id }
+        tileCommandIndex.removeCommands(staleCommands.mapTo(mutableSetOf()) { it.id })
+        staleCommands.forEach { commandRegistry.remove(it.id) }
+        tileCheckpointStore.invalidateAfter(undoStack.lastIndex)
+        staleCommands.forEach(::recycleCommand)
         redoStack.clear()
     }
 

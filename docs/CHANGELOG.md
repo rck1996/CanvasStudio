@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.4.0
+
+- tutorial de 14 lecciones integrado en el editor real mediante un documento temporal que nunca se guarda;
+- foco contextual reposicionable, tarjeta minimizable y reinicio limpio desde la primera lección;
+- experiencia de máscaras simplificada como Ocultar sin borrar, con acciones directas Ocultar y Recuperar;
+- nueve regresiones específicas del tutorial y certificación completa de 116 pruebas en Galaxy Tab S8;
+- biblioteca principal reducida de 30 presets históricos a 14 herramientas diferenciadas;
+- doce presets redundantes migrados mediante alias y cuatro medios complejos ocultos como experimentales;
+- HB, 6B, portaminas, tintas, marcadores, gouache, pinceles secos, carboncillo y aerógrafos refinados;
+- previews conectadas al mismo evaluador, dabs, semilla, punta, grano y curvas que el lienzo;
+- controles incompatibles ocultos en Brush Studio y parámetros importados limitados a rangos seguros;
+- favoritos, recientes y pinceles personalizados compatibles con los identificadores históricos;
+- fixtures deterministas de once escenarios, comparación ciega y estrés de 200/500 trazos;
+- expansión avanzada de Vulkan congelada; el backend experimental existente no cambia de alcance.
+
+## 2.3.0
+
+- backend Vulkan 1.1 compute experimental para tinta técnica y grafito inclinado;
+- selector debug Auto / Canvas/Bitmap / Vulkan con fallback transaccional seguro;
+- lotes de dabs por tile, buffers reutilizables, timestamps GPU y trazas Perfetto;
+- refinamiento material de HB, 6B, tinta técnica, plumilla cómic, rotulador plano y acuarela granulada;
+- fixtures deterministas de presión, velocidad, curva, tilt, acumulación y cruce de tiles;
+- tutorial modular de catorce lecciones con validación por eventos, práctica temporal y progreso local;
+- pruebas A/B Canvas/Vulkan, 200 trazos gruesos, 500 trazos largos y sesión continua de diez minutos.
+
 ## 2.2.0
 
 - Brush Studio 4.0 con dinámicas independientes de tamaño, opacidad, flujo, velocidad e inclinación;

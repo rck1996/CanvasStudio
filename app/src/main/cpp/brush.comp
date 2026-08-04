@@ -1,0 +1,108 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+struct Dab {
+    vec4 geometry; // x, y, radiusX, radiusY in document coordinates
+    vec4 material; // rotation, opacity, flow, seed
+    vec4 color;    // linear-enough normalized RGBA for deterministic A/B use
+};
+
+layout(std430, binding = 0) buffer PixelBuffer { uint pixels[]; };
+layout(std430, binding = 1) readonly buffer DabBuffer { Dab dabs[]; };
+layout(std430, binding = 2) readonly buffer SelectionBuffer { vec2 selection[]; };
+
+layout(push_constant) uniform Parameters {
+    int width;
+    int height;
+    int tileLeft;
+    int tileTop;
+    int dabCount;
+    int selectionCount;
+    int flags;
+    float grainDepth;
+    int dabIndex;
+    int dispatchLeft;
+    int dispatchTop;
+    int reserved;
+} params;
+
+const int FLAG_ERASER = 1;
+const int FLAG_PRESERVE_ALPHA = 2;
+const int FLAG_GRAPHITE = 4;
+const int FLAG_SELECTION_INVERTED = 8;
+
+float hashNoise(vec2 p, float seed) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031 + seed * 0.000013);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+bool selected(vec2 point) {
+    if (params.selectionCount < 3) return true;
+    bool inside = false;
+    int previous = params.selectionCount - 1;
+    for (int current = 0; current < params.selectionCount; ++current) {
+        vec2 a = selection[current];
+        vec2 b = selection[previous];
+        bool crosses = ((a.y > point.y) != (b.y > point.y)) &&
+            (point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x);
+        if (crosses) inside = !inside;
+        previous = current;
+    }
+    return ((params.flags & FLAG_SELECTION_INVERTED) != 0) ? !inside : inside;
+}
+
+vec4 unpackArgb(uint value) {
+    return vec4(
+        float((value >> 16) & 255u), float((value >> 8) & 255u), float(value & 255u),
+        float((value >> 24) & 255u)
+    ) / 255.0;
+}
+
+uint packArgb(vec4 value) {
+    uvec4 bytes = uvec4(round(clamp(value, 0.0, 1.0) * 255.0));
+    return (bytes.a << 24) | (bytes.r << 16) | (bytes.g << 8) | bytes.b;
+}
+
+void main() {
+    ivec2 local = ivec2(gl_GlobalInvocationID.xy) + ivec2(params.dispatchLeft, params.dispatchTop);
+    if (local.x >= params.width || local.y >= params.height) return;
+    vec2 documentPoint = vec2(local + ivec2(params.tileLeft, params.tileTop)) + vec2(0.5);
+    if (!selected(documentPoint)) return;
+
+    int offset = local.y * params.width + local.x;
+    vec4 destination = unpackArgb(pixels[offset]);
+    float originalAlpha = destination.a;
+
+    {
+        Dab dab = dabs[params.dabIndex];
+        vec2 delta = documentPoint - dab.geometry.xy;
+        float sine = sin(-dab.material.x);
+        float cosine = cos(-dab.material.x);
+        vec2 rotated = vec2(delta.x * cosine - delta.y * sine, delta.x * sine + delta.y * cosine);
+        vec2 radii = max(dab.geometry.zw, vec2(0.1));
+        float distanceToTip = length(rotated / radii);
+        float edge = ((params.flags & FLAG_GRAPHITE) != 0) ? 0.72 : 0.9;
+        float coverage = 1.0 - smoothstep(edge, 1.0, distanceToTip);
+        if (coverage > 0.0) {
+          if ((params.flags & FLAG_GRAPHITE) != 0) {
+            float tooth = hashNoise(documentPoint * 0.37, dab.material.w);
+            float grain = mix(1.0, smoothstep(0.08, 0.92, tooth), clamp(params.grainDepth, 0.0, 0.82));
+            coverage *= mix(0.38, 1.0, grain);
+          }
+          float sourceAlpha = clamp(dab.material.y * dab.material.z * coverage, 0.0, 1.0);
+          if ((params.flags & FLAG_ERASER) != 0) {
+            destination *= (1.0 - sourceAlpha);
+          } else {
+            vec3 source = dab.color.rgb;
+            float outputAlpha = sourceAlpha + destination.a * (1.0 - sourceAlpha);
+            vec3 outputRgb = outputAlpha <= 0.00001 ? vec3(0.0) :
+                (source * sourceAlpha + destination.rgb * destination.a * (1.0 - sourceAlpha)) / outputAlpha;
+            destination = vec4(outputRgb, outputAlpha);
+          }
+        }
+    }
+    if ((params.flags & FLAG_PRESERVE_ALPHA) != 0) destination.a = originalAlpha;
+    pixels[offset] = packArgb(destination);
+}

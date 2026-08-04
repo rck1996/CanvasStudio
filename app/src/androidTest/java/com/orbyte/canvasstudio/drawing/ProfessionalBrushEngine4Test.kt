@@ -46,14 +46,15 @@ class ProfessionalBrushEngine4Test {
 
     @Test
     fun professionalPresetsHaveDistinctAuthoredProfiles() {
-        val twoH = premiumBrushes.first { it.id == "pencil-2h" }
+        val twoH = requireNotNull(resolveBuiltInBrush("pencil-2h"))
         val sixB = premiumBrushes.first { it.id == "pencil-6b" }
-        val wetRound = premiumBrushes.first { it.id == "wet-round" }
-        val granulated = premiumBrushes.first { it.id == "granulated-watercolor" }
+        val wetRound = requireNotNull(resolveBuiltInBrush("wet-round"))
+        val granulated = requireNotNull(resolveBuiltInBrush("granulated-watercolor"))
         val technicalInk = premiumBrushes.first { it.id == "technical-ink" }
 
         assertTrue(twoH.dynamicsProfile.tiltSize < sixB.dynamicsProfile.tiltSize)
-        assertTrue(twoH.dualBrushProfile.opacity < sixB.dualBrushProfile.opacity)
+        assertTrue(!twoH.dualBrushProfile.enabled)
+        assertTrue(sixB.dualBrushProfile.enabled)
         assertNotEquals(wetRound.grainProfile, granulated.grainProfile)
         assertTrue(granulated.renderProfile.colorPickup > 0f)
         assertEquals(1f, technicalInk.dynamicsProfile.sizePressure.minimum, .001f)

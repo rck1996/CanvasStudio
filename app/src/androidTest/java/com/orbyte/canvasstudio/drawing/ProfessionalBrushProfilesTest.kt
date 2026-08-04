@@ -12,9 +12,9 @@ class ProfessionalBrushProfilesTest {
     @Test
     fun professionalFamiliesHaveDistinctTipGrainAndRenderingProfiles() {
         val pencil = premiumBrushes.first { it.kind == BrushKind.PENCIL }
-        val marker = premiumBrushes.first { it.kind == BrushKind.MARKER }
-        val watercolor = premiumBrushes.first { it.kind == BrushKind.WATERCOLOR }
-        val oil = premiumBrushes.first { it.kind == BrushKind.OIL }
+        val marker = premiumBrushes.single { it.id == "flat-marker" }
+        val watercolor = allBuiltInBrushes.first { it.kind == BrushKind.WATERCOLOR }
+        val oil = allBuiltInBrushes.first { it.kind == BrushKind.OIL }
 
         assertEquals(BrushTipShape.OVAL, pencil.tipProfile.shape)
         assertEquals(BrushRotationMode.STYLUS, pencil.tipProfile.rotationMode)

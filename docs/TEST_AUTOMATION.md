@@ -1,5 +1,16 @@
 # Automatización de pruebas en tablet
 
+## Certificación de Vulkan, pinceles y tutorial
+
+La Fase 3 tiene un runner reproducible que compila, reinstala ambos APK, ejecuta las suites rápidas,
+la suite completa sin duplicar la sesión larga y los escenarios Vulkan de 200/500 trazos:
+
+```powershell
+.\scripts\test-phase3.ps1 -Serial R52W404GGPK -IncludeTenMinute
+```
+
+Todos los comandos, horas, conteos y códigos ADB se guardan en `test-logs/`.
+
 ## Suite determinista
 
 `scripts/test-raster-engine.ps1` es el oráculo principal. Compila, instala y ejecuta la
@@ -37,6 +48,9 @@ Cada ciclo rápido ejecuta al menos 40 pruebas. La suite cubre:
 - curvas independientes, Dual Brush, mezcla húmeda y rango físico del S Pen;
 - tutorial interactivo y persistencia de su progreso;
 - opcionalmente, 500 trazos largos de 180 px alternando cinco medios profesionales.
+- renderer Vulkan real, comparación A/B de tinta/grafito y fallback simulado;
+- tutorial modular con validación ordenada de acciones, pausa, reinicio y progreso local;
+- cargas Vulkan aisladas de 200 y 500 trazos y sesión continua de diez minutos.
 
 El script detecta dinámicamente el total de tests, exige un mínimo configurable y genera
 `build/reports/phase8-certification/latest.json`.

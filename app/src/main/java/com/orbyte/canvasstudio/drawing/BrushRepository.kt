@@ -16,6 +16,7 @@ object BrushRepository {
     private const val KEY_CUSTOM_BRUSHES = "custom_brushes_v1"
     private const val KEY_FAVORITES = "favorite_brushes_v1"
     private const val KEY_RECENTS = "recent_brushes_v1"
+    private const val KEY_SHOW_EXPERIMENTAL = "show_experimental_brushes_v1"
     private const val EXPORT_VERSION = 1
     const val MAX_CUSTOM_BRUSHES = 80
     const val MAX_RECENT_BRUSHES = 12
@@ -45,16 +46,22 @@ object BrushRepository {
             .apply()
     }
 
-    fun loadFavorites(context: Context): Set<String> =
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    fun loadFavorites(context: Context): Set<String> {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val stored = preferences
             .getStringSet(KEY_FAVORITES, emptySet())
             ?.toSet()
             .orEmpty()
+        val migrated = stored.mapTo(linkedSetOf(), ::migrateStoredBrushId)
+        if (migrated != stored) preferences.edit().putStringSet(KEY_FAVORITES, migrated).apply()
+        return migrated
+    }
 
     fun saveFavorites(context: Context, ids: Set<String>) {
+        val migrated = ids.mapTo(linkedSetOf(), ::migrateStoredBrushId)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
-            .putStringSet(KEY_FAVORITES, ids)
+            .putStringSet(KEY_FAVORITES, migrated)
             .apply()
     }
 
@@ -62,27 +69,51 @@ object BrushRepository {
         val raw = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .getString(KEY_RECENTS, null)
             ?: return emptyList()
-        return runCatching {
+        val decoded = runCatching {
             val array = JSONArray(raw)
             buildList {
                 repeat(array.length()) { index ->
-                    array.optString(index).takeIf(String::isNotBlank)?.let(::add)
+                    array.optString(index).takeIf(String::isNotBlank)?.let {
+                        add(migrateStoredBrushId(it))
+                    }
                 }
             }.distinct().take(MAX_RECENT_BRUSHES)
         }.getOrDefault(emptyList())
+        if (decoded.isNotEmpty()) saveRecents(context, decoded)
+        return decoded
     }
 
     fun recordRecent(context: Context, brushId: String, previous: List<String>): List<String> {
-        val updated = (listOf(brushId) + previous.filterNot { it == brushId })
+        val migratedId = migrateStoredBrushId(brushId)
+        val updated = (listOf(migratedId) + previous.map(::migrateStoredBrushId).filterNot { it == migratedId })
+            .distinct()
             .take(MAX_RECENT_BRUSHES)
+        saveRecents(context, updated)
+        return updated
+    }
+
+    fun loadExperimentalVisibility(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(KEY_SHOW_EXPERIMENTAL, false)
+
+    fun saveExperimentalVisibility(context: Context, visible: Boolean) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SHOW_EXPERIMENTAL, visible)
+            .apply()
+    }
+
+    private fun saveRecents(context: Context, ids: List<String>) {
         val array = JSONArray()
-        updated.forEach(array::put)
+        ids.take(MAX_RECENT_BRUSHES).forEach(array::put)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_RECENTS, array.toString())
             .apply()
-        return updated
     }
+
+    private fun migrateStoredBrushId(id: String): String =
+        if (id.startsWith("custom-")) id else migrateBuiltInBrushId(id)
 
     fun exportJson(brushes: List<BrushPreset>): String = exportJsonInternal(brushes, embedAssets = false)
 

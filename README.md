@@ -1227,6 +1227,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md) | Estado funcional por área |
 | [`docs/PHASE_3B_SPARSE_RENDERER.md`](docs/PHASE_3B_SPARSE_RENDERER.md) | Renderer disperso y tiles |
 | [`docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md`](docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md) | Vulkan experimental, materiales y tutorial modular |
+| [`docs/TUTORIAL_INTERACTIVE_CERTIFICATION.md`](docs/TUTORIAL_INTERACTIVE_CERTIFICATION.md) | Auditoria de 14 modulos, ejercicios visibles, validacion y certificacion en Tab S8 |
 | [`docs/PHASE_4_TEST_BUILD.md`](docs/PHASE_4_TEST_BUILD.md) | Alcance de la primera build de fase 4 |
 | [`docs/PHASE_4_1.md`](docs/PHASE_4_1.md) | Grupos, máscaras y perspectiva editable |
 | [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |

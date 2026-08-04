@@ -67,7 +67,13 @@ class VulkanTileRasterBackendTest {
             val vulkanCount = nonTransparent(vulkanPixels)
             val ratio = vulkanCount.toDouble() / canvasCount.coerceAtLeast(1)
             assertTrue("Cobertura A/B fuera de tolerancia: $ratio", ratio in .72..1.28)
-            Log.i("CanvasStudioRendererAB", "INK canvasNs=$canvasNanos vulkanWallNs=$wall pixelsCanvas=$canvasCount pixelsVulkan=$vulkanCount stats=${backend.stats()}")
+            Log.i(
+                "CanvasStudioRendererAB",
+                "INK dabs=${canvasRequest.dabs.size} tiles=4 canvasNs=$canvasNanos " +
+                    "vulkanWallNs=$wall canvasDabsPerSecond=${canvasRequest.dabs.size * 1e9 / canvasNanos} " +
+                    "vulkanDabsPerSecond=${canvasRequest.dabs.size * 1e9 / wall} pixelsCanvas=$canvasCount " +
+                    "pixelsVulkan=$vulkanCount coverageRatio=$ratio stats=${backend.stats()}",
+            )
             canvasPixels.recycle(); vulkanPixels.recycle()
         }
     }
@@ -114,7 +120,12 @@ class VulkanTileRasterBackendTest {
             val vulkanBitmap = render(vulkanSurface)
             val ratio = nonTransparent(vulkanBitmap).toDouble() / nonTransparent(canvasBitmap).coerceAtLeast(1)
             assertTrue("Cobertura de grafito A/B fuera de tolerancia: $ratio", ratio in .55..1.2)
-            Log.i("CanvasStudioRendererAB", "GRAPHITE canvasNs=$canvasNanos vulkanWallNs=$vulkanWall coverageRatio=$ratio stats=${backend.stats()}")
+            Log.i(
+                "CanvasStudioRendererAB",
+                "GRAPHITE dabs=${dabs.size} tiles=4 canvasNs=$canvasNanos vulkanWallNs=$vulkanWall " +
+                    "canvasDabsPerSecond=${dabs.size * 1e9 / canvasNanos} " +
+                    "vulkanDabsPerSecond=${dabs.size * 1e9 / vulkanWall} coverageRatio=$ratio stats=${backend.stats()}",
+            )
             canvasBitmap.recycle(); vulkanBitmap.recycle()
         }
     }

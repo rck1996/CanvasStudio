@@ -77,3 +77,26 @@ se adapta a horizontal y vertical y todos los controles de acción tienen semán
 Los comandos y resultados medidos finales se guardan en `test-logs/` y no se versionan. La suite
 incluye A/B de tinta y grafito, fallback simulado, selección, alpha lock, borrador, 200 trazos
 gruesos, 500 trazos largos, cambio seguro de backend y una sesión continua de diez minutos.
+
+Certificación final del 4 de agosto de 2026 en Galaxy Tab S8 SM-X700, Android 16, Adreno 730:
+
+| Escenario | Resultado |
+|---|---|
+| `check assembleDebug assembleDebugAndroidTest` | correcto, 107 tareas, 59 s |
+| Suite sin los tres stress Vulkan | 84/84, 118,390 s |
+| 200 trazos gruesos Vulkan | 1/1, 7,186 s |
+| 500 trazos largos de grafito + undo/redo | 1/1, 22,597 s; 0 fallos y 0 fallbacks |
+| Sesión continua | 4.280 trazos, 631,595 s; cambio de backend, pan/zoom/rotación, undo/redo, guardado y reapertura correctos |
+
+La comparación A/B usa cuatro tiles y exactamente los mismos dabs. En tinta técnica, Canvas
+procesó 385 dabs en 19,713 ms y Vulkan en 16,357 ms de pared (GPU 2,566 ms, readback 3,148 ms),
+con razón de cobertura 0,833. En grafito, Canvas procesó 169 dabs en 3,874 ms y Vulkan en
+14,651 ms (GPU 1,871 ms, readback 2,864 ms), con razón de cobertura 0,947. Por ello Vulkan no
+se habilita automáticamente: tinta ya es competitiva en este fixture, pero grafito continúa
+dominado por sincronización y readback.
+
+Durante diez minutos Vulkan procesó 142.624 lotes sin fallo, sostuvo 57.668 dabs/s y mantuvo
+1.069.056 bytes de buffers nativos. Las muestras de memoria fueron 227.378–229.447 KiB PSS y
+311.844–314.832 KiB RSS. El benchmark headless no produce frames ni eventos táctiles reales, por
+lo que `inputToPreview`, `inputToCommit` y percentiles de frame quedan en cero en esa prueba y no
+se presentan como mediciones de UI.

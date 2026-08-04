@@ -7,7 +7,7 @@
 - lotes de dabs por tile, buffers reutilizables, timestamps GPU y trazas Perfetto;
 - refinamiento material de HB, 6B, tinta técnica, plumilla cómic, rotulador plano y acuarela granulada;
 - fixtures deterministas de presión, velocidad, curva, tilt, acumulación y cruce de tiles;
-- tutorial modular de trece lecciones con validación por eventos, práctica temporal y progreso local;
+- tutorial modular de catorce lecciones con validación por eventos, práctica temporal y progreso local;
 - pruebas A/B Canvas/Vulkan, 200 trazos gruesos, 500 trazos largos y sesión continua de diez minutos.
 
 ## 2.2.0

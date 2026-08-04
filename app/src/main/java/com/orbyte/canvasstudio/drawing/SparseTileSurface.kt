@@ -507,6 +507,28 @@ internal class SparseTileSurface(
 
     fun fileFor(key: TileStorage.Key): File = File(workingDirectory, key.fileName)
 
+    /** Returns a detached immutable tile snapshot. Null represents a transparent tile. */
+    fun snapshotTile(key: TileStorage.Key): Bitmap? = synchronized(lock) {
+        obtainTile(key, createIfMissing = false)?.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    /** Replaces exactly one tile from a detached checkpoint copy. */
+    fun restoreTile(key: TileStorage.Key, snapshot: Bitmap?) = synchronized(lock) {
+        cache.remove(key)?.let { residentBytes = (residentBytes - bitmapBytes(it)).coerceAtLeast(0L); it.recycle() }
+        pendingWriteKeys.remove(key)
+        val destination = fileFor(key)
+        if (snapshot == null) {
+            destination.delete(); knownKeys.remove(key)
+        } else {
+            val mutable = snapshot.copy(Bitmap.Config.ARGB_8888, true)
+            cache[key] = mutable; residentBytes += bitmapBytes(mutable); knownKeys += key
+        }
+        pendingWriteKeys += key
+        revision += 1L; dirtyVersions[key] = revision
+        if (snapshot == null) deletedVersions[key] = revision else deletedVersions.remove(key)
+        trimCache(setOf(key))
+    }
+
     fun stats(): Stats = synchronized(lock) {
         Stats(
             residentTiles = cache.size,

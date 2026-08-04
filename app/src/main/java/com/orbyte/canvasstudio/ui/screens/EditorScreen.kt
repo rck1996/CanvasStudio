@@ -113,6 +113,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -139,6 +140,7 @@ import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
 import com.orbyte.canvasstudio.drawing.BrushRenderMode
 import com.orbyte.canvasstudio.drawing.BrushTipShape
+import com.orbyte.canvasstudio.drawing.brush.BrushPreviewModel
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
@@ -147,7 +149,9 @@ import com.orbyte.canvasstudio.drawing.InkDrawingContainer
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.LayerGroupUiModel
 import com.orbyte.canvasstudio.drawing.LayerUiModel
+import com.orbyte.canvasstudio.drawing.experimentalBrushes
 import com.orbyte.canvasstudio.drawing.premiumBrushes
+import com.orbyte.canvasstudio.drawing.sanitized
 import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
@@ -318,7 +322,12 @@ fun EditorScreen(
     var brushDockResetTick by remember { mutableIntStateOf(0) }
     var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
     var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
-    val availableBrushes = remember(customBrushes) { premiumBrushes + customBrushes }
+    var showExperimentalBrushes by remember {
+        mutableStateOf(BrushRepository.loadExperimentalVisibility(context))
+    }
+    val availableBrushes = remember(customBrushes, showExperimentalBrushes) {
+        premiumBrushes + (if (showExperimentalBrushes) experimentalBrushes else emptyList()) + customBrushes
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val updateCustomBrushes: (List<BrushPreset>) -> Unit = { brushes ->
         val normalized = brushes.takeLast(BrushRepository.MAX_CUSTOM_BRUSHES)
@@ -354,7 +363,7 @@ fun EditorScreen(
             dynamicsProfile = preset.dynamicsProfile,
             dualBrushProfile = preset.dualBrushProfile,
             kind = preset.kind,
-        )
+        ).sanitized()
         selectedTool = DrawingTool.BRUSH
     }
 
@@ -1008,8 +1017,13 @@ fun EditorScreen(
             recentBrushIds = recentBrushIds,
             selectedPreset = selectedPreset,
             settings = brushSettings,
+            showExperimental = showExperimentalBrushes,
+            onShowExperimentalChanged = { visible ->
+                showExperimentalBrushes = visible
+                BrushRepository.saveExperimentalVisibility(context, visible)
+            },
             onPresetSelected = applyBrushPreset,
-            onSettingsChanged = { brushSettings = it },
+            onSettingsChanged = { brushSettings = it.sanitized() },
             onToggleFavorite = { preset ->
                 favoriteBrushIds = if (preset.id in favoriteBrushIds) {
                     favoriteBrushIds - preset.id
@@ -1671,6 +1685,8 @@ private fun ExpandedBrushLibraryDialog(
     recentBrushIds: List<String>,
     selectedPreset: BrushPreset,
     settings: BrushSettings,
+    showExperimental: Boolean,
+    onShowExperimentalChanged: (Boolean) -> Unit,
     onPresetSelected: (BrushPreset) -> Unit,
     onSettingsChanged: (BrushSettings) -> Unit,
     onToggleFavorite: (BrushPreset) -> Unit,
@@ -1687,7 +1703,32 @@ private fun ExpandedBrushLibraryDialog(
     var renameTarget by remember { mutableStateOf<BrushPreset?>(null) }
     var renameText by remember { mutableStateOf("") }
     var settingsSection by remember { mutableStateOf("General") }
-    val categories = listOf("Todos", "Favoritos", "Recientes") + brushes.map(BrushPreset::category).distinct()
+    val supportsGrain = settings.grainProfile.source != com.orbyte.canvasstudio.drawing.BrushGrainSource.NONE ||
+        settings.kind in setOf(
+            BrushKind.PENCIL, BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.PAINT,
+            BrushKind.DRY_BRUSH, BrushKind.BRISTLE, BrushKind.WATERCOLOR, BrushKind.OIL,
+        )
+    val supportsDualBrush = settings.dualBrushProfile.enabled || settings.kind in setOf(
+        BrushKind.PENCIL, BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH,
+        BrushKind.BRISTLE, BrushKind.WATERCOLOR, BrushKind.OIL,
+    )
+    val supportsTilt = settings.tiltResponse > .001f || settings.dynamicsProfile.tiltSize > .001f ||
+        settings.kind in setOf(
+            BrushKind.PENCIL, BrushKind.MARKER, BrushKind.CHARCOAL, BrushKind.CHALK,
+            BrushKind.DRY_BRUSH, BrushKind.BRISTLE,
+        )
+    val supportsTaper = settings.kind in setOf(BrushKind.PENCIL, BrushKind.INK, BrushKind.DRY_BRUSH)
+    val supportsScatter = settings.kind in setOf(
+        BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH, BrushKind.BRISTLE,
+        BrushKind.WATERCOLOR, BrushKind.OIL,
+    )
+    val categoryOrder = listOf(
+        "Lápices", "Tinta", "Marcadores", "Pintura", "Textura", "Aerógrafos",
+        "Experimental", "Personalizados",
+    )
+    val presentCategories = brushes.mapTo(linkedSetOf(), BrushPreset::category)
+    val categories = listOf("Todos", "Favoritos", "Recientes") +
+        categoryOrder.filter { it in presentCategories } + presentCategories.filterNot { it in categoryOrder }
     val recentOrder = recentBrushIds.withIndex().associate { it.value to it.index }
     val visible = brushes.filter { preset ->
         when (category) {
@@ -1742,6 +1783,19 @@ private fun ExpandedBrushLibraryDialog(
                         Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(5.dp))
                         Text("Exportar")
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.semantics(mergeDescendants = true) {
+                            contentDescription = "Mostrar pinceles experimentales"
+                            stateDescription = if (showExperimental) "Activado" else "Desactivado"
+                        },
+                    ) {
+                        Text("Experimentales", color = StudioPalette.TextMuted, fontSize = 12.sp)
+                        Switch(
+                            checked = showExperimental,
+                            onCheckedChange = onShowExperimentalChanged,
+                        )
                     }
                     TextButton(onClick = onDismiss) { Text("Listo") }
                 }
@@ -1878,13 +1932,15 @@ private fun ExpandedBrushLibraryDialog(
                             SettingSlider("Espaciado", settings.spacing, .025f..0.4f, "${(settings.spacing * 100).toInt()}%") {
                                 onSettingsChanged(settings.copy(spacing = it))
                             }
-                            SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
-                                onSettingsChanged(
-                                    settings.copy(
-                                        grain = it,
-                                        grainProfile = settings.grainProfile.copy(depth = it),
-                                    ),
-                                )
+                            if (supportsGrain) {
+                                SettingSlider("Textura", settings.grain, 0f..1f, "${(settings.grain * 100).toInt()}%") {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            grain = it,
+                                            grainProfile = settings.grainProfile.copy(depth = it),
+                                        ),
+                                    )
+                                }
                             }
                             SettingSlider("Estabilización", settings.stabilization, 0f..0.9f, "${(settings.stabilization * 100).toInt()}%") {
                                 onSettingsChanged(settings.copy(stabilization = it))
@@ -1933,8 +1989,9 @@ private fun ExpandedBrushLibraryDialog(
                                     )
                                 }
                             }
-                            Text("Grano", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
-                            SettingSlider(
+                            if (supportsGrain) {
+                                Text("Grano", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+                                SettingSlider(
                                 "Profundidad",
                                 settings.grainProfile.depth,
                                 0f..1f,
@@ -1947,7 +2004,7 @@ private fun ExpandedBrushLibraryDialog(
                                     ),
                                 )
                             }
-                            SettingSlider(
+                                SettingSlider(
                                 "Escala",
                                 settings.grainProfile.scale,
                                 .15f..4f,
@@ -1959,7 +2016,7 @@ private fun ExpandedBrushLibraryDialog(
                                     ),
                                 )
                             }
-                            SettingSlider(
+                                SettingSlider(
                                 "Contraste",
                                 settings.grainProfile.contrast,
                                 0f..1f,
@@ -1971,19 +2028,22 @@ private fun ExpandedBrushLibraryDialog(
                                     ),
                                 )
                             }
-                            Text(
-                                "Pincel dual",
-                                color = StudioPalette.Text,
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            BrushToggle("Segunda punta", settings.dualBrushProfile.enabled) {
-                                onSettingsChanged(
-                                    settings.copy(
-                                        dualBrushProfile = settings.dualBrushProfile.copy(enabled = it),
-                                    ),
-                                )
                             }
-                            if (settings.dualBrushProfile.enabled) {
+                            if (supportsDualBrush) {
+                                Text(
+                                    "Pincel dual",
+                                    color = StudioPalette.Text,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                BrushToggle("Segunda punta", settings.dualBrushProfile.enabled) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dualBrushProfile = settings.dualBrushProfile.copy(enabled = it),
+                                        ),
+                                    )
+                                }
+                            }
+                            if (supportsDualBrush && settings.dualBrushProfile.enabled) {
                                 SettingSlider(
                                     "Escala secundaria",
                                     settings.dualBrushProfile.sizeScale,
@@ -2180,17 +2240,23 @@ private fun ExpandedBrushLibraryDialog(
                                     ),
                                 )
                             }
-                            SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(tiltResponse = it))
+                            if (supportsTilt) {
+                                SettingSlider("Inclinación", settings.tiltResponse, 0f..1f, "${(settings.tiltResponse * 100).toInt()}%") {
+                                    onSettingsChanged(settings.copy(tiltResponse = it))
+                                }
                             }
-                            SettingSlider("Taper inicial", settings.taperStart, 0f..0.48f, "${(settings.taperStart * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(taperStart = it))
+                            if (supportsTaper) {
+                                SettingSlider("Taper inicial", settings.taperStart, 0f..0.48f, "${(settings.taperStart * 100).toInt()}%") {
+                                    onSettingsChanged(settings.copy(taperStart = it))
+                                }
+                                SettingSlider("Taper final", settings.taperEnd, 0f..0.48f, "${(settings.taperEnd * 100).toInt()}%") {
+                                    onSettingsChanged(settings.copy(taperEnd = it))
+                                }
                             }
-                            SettingSlider("Taper final", settings.taperEnd, 0f..0.48f, "${(settings.taperEnd * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(taperEnd = it))
-                            }
-                            SettingSlider("Dispersión", settings.scatter, 0f..0.5f, "${(settings.scatter * 100).toInt()}%") {
-                                onSettingsChanged(settings.copy(scatter = it))
+                            if (supportsScatter) {
+                                SettingSlider("Dispersión", settings.scatter, 0f..0.5f, "${(settings.scatter * 100).toInt()}%") {
+                                    onSettingsChanged(settings.copy(scatter = it))
+                                }
                             }
                             SettingSlider("Respuesta a velocidad", settings.velocitySize, 0f..1f, "${(settings.velocitySize * 100).toInt()}%") {
                                 onSettingsChanged(
@@ -2212,29 +2278,31 @@ private fun ExpandedBrushLibraryDialog(
                                     ),
                                 )
                             }
-                            SettingSlider(
-                                "Umbral de inclinación",
-                                settings.dynamicsProfile.tiltThreshold,
-                                0f..0.9f,
-                                "${(settings.dynamicsProfile.tiltThreshold * 90f).toInt()}°",
-                            ) {
-                                onSettingsChanged(
-                                    settings.copy(
-                                        dynamicsProfile = settings.dynamicsProfile.copy(tiltThreshold = it),
-                                    ),
-                                )
-                            }
-                            SettingSlider(
-                                "Inclinación → opacidad",
-                                settings.dynamicsProfile.tiltOpacity,
-                                0f..1f,
-                                "${(settings.dynamicsProfile.tiltOpacity * 100).toInt()}%",
-                            ) {
-                                onSettingsChanged(
-                                    settings.copy(
-                                        dynamicsProfile = settings.dynamicsProfile.copy(tiltOpacity = it),
-                                    ),
-                                )
+                            if (supportsTilt) {
+                                SettingSlider(
+                                    "Umbral de inclinación",
+                                    settings.dynamicsProfile.tiltThreshold,
+                                    0f..0.9f,
+                                    "${(settings.dynamicsProfile.tiltThreshold * 90f).toInt()}°",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dynamicsProfile = settings.dynamicsProfile.copy(tiltThreshold = it),
+                                        ),
+                                    )
+                                }
+                                SettingSlider(
+                                    "Inclinación → opacidad",
+                                    settings.dynamicsProfile.tiltOpacity,
+                                    0f..1f,
+                                    "${(settings.dynamicsProfile.tiltOpacity * 100).toInt()}%",
+                                ) {
+                                    onSettingsChanged(
+                                        settings.copy(
+                                            dynamicsProfile = settings.dynamicsProfile.copy(tiltOpacity = it),
+                                        ),
+                                    )
+                                }
                             }
                             BrushToggle("Presión controla tamaño", settings.pressureSize) {
                                 onSettingsChanged(settings.copy(pressureSize = it))
@@ -2547,7 +2615,11 @@ private fun BrushPresetRow(
         Row(Modifier.padding(11.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.width(95.dp)) {
                 Text(preset.name, color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
-                Text(preset.category, color = StudioPalette.TextMuted, fontSize = 10.sp)
+                Text(
+                    if (preset.category == "Experimental") "Experimental · en desarrollo" else preset.category,
+                    color = if (preset.category == "Experimental") StudioPalette.Accent else StudioPalette.TextMuted,
+                    fontSize = 10.sp,
+                )
             }
             BrushStrokePreview(preset, Modifier.weight(1f).height(34.dp))
             onToggleFavorite?.let { toggle ->
@@ -2620,138 +2692,66 @@ private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = cop
 
 @Composable
 private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifier) {
+    val dabs = remember(preset) {
+        BrushPreviewModel.dabs(preset)
+    }
     Canvas(modifier) {
         drawRoundRect(
             color = Color(0xFF1A1D22),
             cornerRadius = androidx.compose.ui.geometry.CornerRadius(9f, 9f),
         )
-        val usableWidth = (size.width - 16f).coerceAtLeast(1f)
-        val centerY = size.height * .56f
-        val baseWidth = (1.2f + preset.sizePx / 8.5f).coerceAtMost(size.height * .7f)
-        val renderStrength = when (preset.renderProfile.mode) {
-            BrushRenderMode.LIGHT_GLAZE -> .28f + preset.renderProfile.buildup * .34f
-            BrushRenderMode.UNIFORM_GLAZE -> .56f + preset.renderProfile.buildup * .36f
-            BrushRenderMode.INTENSE_GLAZE -> .82f + preset.renderProfile.buildup * .18f
-            BrushRenderMode.BLENDING -> .68f + preset.renderProfile.buildup * .28f
-        }
-        val strength = (preset.opacity * preset.flow * renderStrength).coerceIn(.03f, 1f)
-        val texture = preset.grainProfile.depth.coerceIn(0f, 1f)
-        val softness = 1f - preset.hardness.coerceIn(0f, 1f)
-        val dynamics = preset.dynamicsProfile
-        val strands = when (preset.kind) {
-            BrushKind.BRISTLE, BrushKind.DRY_BRUSH, BrushKind.OIL ->
-                preset.tipProfile.count.coerceIn(2, 10)
-            BrushKind.CHARCOAL, BrushKind.CHALK ->
-                preset.tipProfile.count.coerceIn(2, 8)
-            else -> 1
-        }
-        repeat(72) { index ->
-            val t = index / 71f
-            val nextT = ((index + 1) / 71f).coerceAtMost(1f)
-            val rawPressure = kotlin.math.sin(Math.PI * t).coerceAtLeast(.02).toFloat()
-            val pressure = Math.pow(rawPressure.toDouble(), preset.pressureCurve.toDouble()).toFloat()
-            val sizePressure = Math.pow(
-                pressure.toDouble(),
-                dynamics.sizePressure.gamma.coerceIn(.25f, 4f).toDouble(),
-            ).toFloat()
-            val opacityPressureValue = Math.pow(
-                pressure.toDouble(),
-                dynamics.opacityPressure.gamma.coerceIn(.25f, 4f).toDouble(),
-            ).toFloat()
-            val flowPressureValue = Math.pow(
-                pressure.toDouble(),
-                dynamics.flowPressure.gamma.coerceIn(.25f, 4f).toDouble(),
-            ).toFloat()
-            val response = if (preset.pressureSize) {
-                preset.minSize + (1f - preset.minSize) * sizePressure
-            } else {
-                1f
+        if (dabs.isEmpty()) return@Canvas
+        val scaleX = (size.width - 12f) / 820f
+        val scaleY = (size.height - 12f) / 220f
+        val radiusScale = minOf(scaleX, scaleY).coerceAtLeast(.08f)
+        dabs.forEach { dab ->
+            val center = Offset(
+                6f + (dab.x - 60f) * scaleX,
+                size.height / 2f + (dab.y - 160f) * scaleY,
+            )
+            val grainUnit = ((dab.randomSeed ushr 8) and 0xff) / 255f
+            val grainCoverage = 1f - preset.grainProfile.depth * (.12f + grainUnit * .42f)
+            val materialCoverage = when (preset.renderProfile.mode) {
+                BrushRenderMode.LIGHT_GLAZE -> .58f
+                BrushRenderMode.UNIFORM_GLAZE -> .78f
+                BrushRenderMode.INTENSE_GLAZE -> .96f
+                BrushRenderMode.BLENDING -> .72f
             }
-            val startTaper = if (preset.taperStart > 0f) (t / preset.taperStart).coerceIn(.08f, 1f) else 1f
-            val endTaper = if (preset.taperEnd > 0f) ((1f - t) / preset.taperEnd).coerceIn(.08f, 1f) else 1f
-            val speedSignal = kotlin.math.abs(kotlin.math.cos(t * Math.PI * 2)).toFloat()
-            val speed = 1f -
-                maxOf(preset.velocitySize, dynamics.velocitySize) * speedSignal * .38f
-            val tiltSignal = ((kotlin.math.sin(t * Math.PI * 1.45) + 1.0) * .5).toFloat()
-            val tiltAmount = (
-                (tiltSignal - dynamics.tiltThreshold) /
-                    (1f - dynamics.tiltThreshold.coerceAtMost(.95f))
-                ).coerceIn(0f, 1f)
-            val tipRoundness = preset.tipProfile.roundness.coerceIn(.08f, 1f)
-            val width = (
-                baseWidth * response * minOf(startTaper, endTaper) * speed *
-                    (1f + tiltAmount * maxOf(preset.tiltResponse, dynamics.tiltSize) * .55f) *
-                    (.72f + tipRoundness * .28f)
-                ).coerceAtLeast(.7f)
-            val wave = kotlin.math.sin(t * Math.PI * 2.2).toFloat() * size.height * .11f
-            val nextWave = kotlin.math.sin(nextT * Math.PI * 2.2).toFloat() * size.height * .11f
-            val scatter = preset.scatter * width * kotlin.math.sin(index * 12.9898f)
-            val alphaPressure = if (preset.pressureOpacity) {
-                .08f + opacityPressureValue * .92f
-            } else {
-                1f
+            val alpha = (dab.opacity * dab.flow * grainCoverage * materialCoverage)
+                .coerceIn(.012f, 1f)
+            val radiusX = (dab.radiusX * radiusScale).coerceAtLeast(.45f)
+            val radiusY = (dab.radiusY * radiusScale).coerceAtLeast(.45f)
+            val strandCount = when (preset.tipProfile.shape) {
+                BrushTipShape.BRISTLE -> preset.tipProfile.count.coerceIn(2, 10)
+                BrushTipShape.PARTICLE -> preset.tipProfile.count.coerceIn(2, 7)
+                else -> 1
             }
-            val dynamicFlow = if (preset.pressureOpacity) .18f + flowPressureValue * .82f else 1f
-            val velocityAlpha = 1f - dynamics.velocityOpacity * speedSignal * .72f
-            val tiltAlpha = 1f - dynamics.tiltOpacity * tiltAmount * .45f
-            val wetLoad = if (preset.renderProfile.wetness > .001f) {
-                preset.renderProfile.charge * (
-                    1f - t * (1f - preset.renderProfile.attack) * .72f
+            rotate(
+                degrees = Math.toDegrees(dab.rotationRadians.toDouble()).toFloat(),
+                pivot = center,
+            ) {
+                repeat(strandCount) { strand ->
+                    val unit = if (strandCount == 1) .5f else strand / (strandCount - 1f)
+                    val offset = (unit - .5f) * radiusY * 1.18f
+                    val strandAlpha = if (strandCount == 1) alpha else alpha / kotlin.math.sqrt(strandCount.toFloat())
+                    drawOval(
+                        color = Color.White.copy(alpha = strandAlpha.coerceIn(.01f, 1f)),
+                        topLeft = Offset(
+                            center.x - radiusX,
+                            center.y - radiusY / strandCount.coerceAtLeast(1) + offset,
+                        ),
+                        size = androidx.compose.ui.geometry.Size(
+                            radiusX * 2f,
+                            (radiusY * 2f / strandCount.coerceAtLeast(1)).coerceAtLeast(.65f),
+                        ),
                     )
-            } else {
-                1f
-            }
-            val grainPulse = 1f - texture * .48f * kotlin.math.abs(kotlin.math.sin(index * 5.73f))
-            val familyAlpha = when (preset.kind) {
-                BrushKind.AIRBRUSH, BrushKind.WATERCOLOR -> .48f
-                BrushKind.MARKER -> .72f
-                else -> .92f
-            }
-            repeat(strands) { strand ->
-                val offset = (strand - (strands - 1) / 2f) * width * .16f
-                drawLine(
-                    color = Color.White.copy(
-                        alpha = (
-                            strength * alphaPressure * dynamicFlow * velocityAlpha * tiltAlpha *
-                                wetLoad * grainPulse * familyAlpha /
-                                kotlin.math.sqrt(strands.toFloat())
-                            ).coerceIn(.03f, 1f),
-                    ),
-                    start = Offset(8f + t * usableWidth, centerY + wave + scatter + offset),
-                    end = Offset(8f + nextT * usableWidth, centerY + nextWave + scatter + offset),
-                    strokeWidth = if (strands == 1) width * (1f + softness * .35f) else (width / strands * 1.45f).coerceAtLeast(.8f),
-                    cap = if (preset.kind == BrushKind.MARKER || preset.kind == BrushKind.OIL) StrokeCap.Square else StrokeCap.Round,
-                )
-            }
-            if (preset.dualBrushProfile.enabled && index % 2 == 0) {
-                val dual = preset.dualBrushProfile
-                val dualOffset = width * (dual.offset + dual.scatter * kotlin.math.sin(index * 4.71f))
-                drawLine(
-                    color = Color.White.copy(
-                        alpha = (strength * dual.opacity * grainPulse * .5f).coerceIn(.01f, .72f),
-                    ),
-                    start = Offset(8f + t * usableWidth, centerY + wave + dualOffset),
-                    end = Offset(8f + nextT * usableWidth, centerY + nextWave + dualOffset),
-                    strokeWidth = (width * dual.sizeScale).coerceAtLeast(.5f),
-                    cap = StrokeCap.Round,
-                )
+                }
             }
             if (preset.kind == BrushKind.AIRBRUSH) {
                 drawCircle(
-                    Color.White.copy(alpha = strength * (.035f + softness * .04f)),
-                    radius = width * (1.2f + softness),
-                    center = Offset(8f + t * usableWidth, centerY + wave),
-                )
-            }
-            if (preset.renderProfile.wetness > .1f && index % 3 == 0) {
-                drawCircle(
-                    Color.White.copy(
-                        alpha = (
-                            strength * preset.renderProfile.wetness * .045f
-                            ).coerceIn(.005f, .08f),
-                    ),
-                    radius = width * (1.08f + preset.renderProfile.wetness * .35f),
-                    center = Offset(8f + t * usableWidth, centerY + wave),
+                    color = Color.White.copy(alpha = (alpha * .035f).coerceAtLeast(.004f)),
+                    radius = radiusX * (1.5f + (1f - preset.hardness)),
+                    center = center,
                 )
             }
         }

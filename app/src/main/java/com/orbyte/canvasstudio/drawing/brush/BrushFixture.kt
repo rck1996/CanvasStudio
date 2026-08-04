@@ -11,19 +11,33 @@ import kotlin.math.sin
 /** Deterministic material-response fixtures shared by instrumentation and renderer A/B tests. */
 internal object BrushFixture {
     enum class Scenario {
+        SLOW_LINE,
+        PRESSURE_INCREASING,
+        PRESSURE_DECREASING,
         SLOW_PRESSURE,
         FAST_LINE,
         CURVE,
         ZIGZAG,
+        CIRCLES,
+        TILT_PROGRESSIVE,
         TILT_SHADING,
         OVERLAPPING_PASSES,
         FOUR_TILES,
+        PREVIEW,
     }
 
     fun points(scenario: Scenario): List<StrokePoint> = when (scenario) {
-        Scenario.SLOW_PRESSURE -> List(33) { index ->
+        Scenario.SLOW_LINE -> List(33) { index ->
+            val t = index / 32f
+            StrokePoint(80f + t * 720f, 110f, .58f, .08f, index * 18L, 0f)
+        }
+        Scenario.SLOW_PRESSURE, Scenario.PRESSURE_INCREASING -> List(33) { index ->
             val t = index / 32f
             StrokePoint(80f + t * 720f, 180f, .05f + t * .95f, .08f, index * 18L, 0f)
+        }
+        Scenario.PRESSURE_DECREASING -> List(33) { index ->
+            val t = index / 32f
+            StrokePoint(80f + t * 720f, 210f, 1f - t * .95f, .08f, index * 18L, 0f)
         }
         Scenario.FAST_LINE -> List(17) { index ->
             val t = index / 16f
@@ -43,7 +57,18 @@ internal object BrushFixture {
         Scenario.ZIGZAG -> List(25) { index ->
             StrokePoint(80f + index * 30f, if (index % 2 == 0) 500f else 610f, .72f, .15f, index * 9L, 0f)
         }
-        Scenario.TILT_SHADING -> List(29) { index ->
+        Scenario.CIRCLES -> List(49) { index ->
+            val angle = index / 48f * PI.toFloat() * 2f
+            StrokePoint(
+                440f + cos(angle) * 170f,
+                570f + sin(angle) * 120f,
+                .58f,
+                .16f,
+                index * 11L,
+                angle + PI.toFloat() / 2f,
+            )
+        }
+        Scenario.TILT_PROGRESSIVE, Scenario.TILT_SHADING -> List(29) { index ->
             val t = index / 28f
             StrokePoint(100f + t * 680f, 720f, .58f, t, index * 14L, (t * PI * .75).toFloat())
         }
@@ -61,6 +86,18 @@ internal object BrushFixture {
             StrokePoint(604f, 604f, .72f, .55f, 24L, .7f),
             StrokePoint(420f, 604f, 1f, .82f, 36L, 1.1f),
         )
+        Scenario.PREVIEW -> List(45) { index ->
+            val t = index / 44f
+            val pressure = (.06f + sin(t * PI).toFloat().coerceAtLeast(0f) * .94f)
+            StrokePoint(
+                x = 60f + t * 820f,
+                y = 160f + sin(t * PI * 2.2).toFloat() * 54f,
+                pressure = pressure,
+                tilt = (.08f + t * .84f).coerceAtMost(1f),
+                timestampMillis = index * if (index < 22) 15L else 5L,
+                orientation = (t * PI * .9).toFloat(),
+            )
+        }
     }
 
     fun evaluate(

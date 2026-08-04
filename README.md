@@ -4,16 +4,22 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Release candidate para tablets / biblioteca profesional 2.4
+> **Estado del proyecto:** Release 2.4.0 certificada para tablets
 > **Versión incluida en este repositorio:** `2.4.0`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
+
+Descarga verificable: [Canvas Studio 2.4.0](https://github.com/rck1996/CanvasStudio/releases/tag/v2.4.0).
 
 ![Identidad visual de Canvas Studio](docs/canvas-studio-logo.png)
 
 ## Capturas en dispositivo real
 
 Las siguientes capturas fueron obtenidas directamente de una Samsung Galaxy Tab S8 (`SM-X700`). Muestran la interfaz de tablet y el lienzo con trazos reales; no son renders promocionales.
+
+![Galería local de Canvas Studio 2.4.0 en Galaxy Tab S8](docs/images/canvasstudio-gallery-2.4-tab-s8.png)
+
+![Flujo simplificado para ocultar sin borrar en Canvas Studio 2.4.0](docs/images/canvasstudio-mask-ux-2.4-tab-s8.png)
 
 ![Academia interactiva de pinceles de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-tutorial-2.2.0.png)
 
@@ -240,7 +246,7 @@ Desplaza el lienzo sin modificar el contenido.
 
 ## Motor de pinceles
 
-Canvas Studio incluye un motor configurable con 22 presets, agrupados por material y comportamiento.
+Canvas Studio incluye 14 pinceles profesionales de producción y 4 medios experimentales opcionales, agrupados por material y comportamiento. Los identificadores históricos se migran a su sustituto canónico para conservar favoritos, recientes y documentos existentes.
 
 ### Presets incluidos
 
@@ -356,6 +362,11 @@ Operaciones disponibles:
 - Añadir
 - Oscurecer
 - Aclarar
+- Luz suave
+- Luz fuerte
+- Diferencia
+- Sobreexponer color
+- Subexponer color
 
 La suite de modos todavía no pretende reproducir toda la precisión o variedad de aplicaciones de escritorio especializadas.
 
@@ -369,7 +380,7 @@ Recorta la capa usando el alfa de la capa inferior. La composición también con
 
 ### Grupos
 
-Los grupos actuales son de un solo nivel y permiten:
+Los grupos pueden anidarse y permiten:
 
 - agrupar la capa activa;
 - hacer que capas nuevas o duplicadas hereden el grupo activo;
@@ -379,11 +390,11 @@ Los grupos actuales son de un solo nivel y permiten:
 - sacar una capa del grupo;
 - persistir la estructura al guardar.
 
-La opacidad se aplica a los miembros del grupo. Todavía no existe composición aislada ni grupos anidados.
+La opacidad se aplica a los miembros del grupo. Todavía no existe composición aislada de grupos.
 
-### Máscaras raster
+### Ocultar sin borrar (máscaras raster)
 
-Cada capa puede tener una máscara independiente.
+El panel presenta esta función por su resultado: **Ocultar sin borrar**. La capa original permanece intacta y puede recuperarse visualmente en cualquier momento. Técnicamente, cada capa puede tener una máscara raster independiente.
 
 - La máscara vacía deja visible toda la capa.
 - Dibujar con **Pincel** en modo máscara oculta contenido.
@@ -394,6 +405,17 @@ Cada capa puede tener una máscara independiente.
 - Se guarda como una superficie tiled dispersa.
 
 No se incluyen todavía feather configurable, inversión, niveles, máscaras vectoriales ni máscaras de grupo.
+
+### Tutorial interactivo sobre el editor real
+
+El tutorial abre un documento temporal `2048 × 1536` dentro del editor principal y comienza siempre en la lección 1. Las acciones se realizan con las herramientas, paneles, capas y motor raster reales; el documento de práctica no se carga ni se guarda como proyecto.
+
+- 14 lecciones guiadas por evidencia de dominio, no por simples pulsaciones;
+- foco calculado desde los límites reales de cada control;
+- tarjeta que cambia de posición para no tapar el objetivo y que puede minimizarse;
+- pistas y repetición de la lección actual;
+- exportación simulada mediante preview segura, sin crear archivos durante el tutorial;
+- máscaras explicadas como **Ocultar** con Pincel y **Recuperar** con Borrador.
 
 ---
 
@@ -1019,6 +1041,8 @@ La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy
 pincel, HB modificado con trazos largos, transición a navegación con dos dedos y
 exportación de un lienzo 8K.
 
+La certificación final de `2.4.0` ejecutó 116 pruebas instrumentadas en la misma Tab S8. Incluyó 500 trazos largos, 200 trazos gruesos, cruce de cuatro tiles, máscaras, historial indexado, Vulkan experimental y una sesión continua de diez minutos. El tutorial integrado añadió 9 regresiones específicas de foco, inicio limpio, eventos reales y lenguaje reversible de máscaras.
+
 ### Prueba de documentos
 
 - Abrir un documento de una versión anterior.
@@ -1055,7 +1079,7 @@ El checklist detallado está en [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.m
 
 ## Limitaciones actuales
 
-Canvas Studio `2.4.0` es una release candidate para distribución controlada en tablets.
+Canvas Studio `2.4.0` es una release para distribución directa y evaluación en tablets Android compatibles. La publicación en Play Store continúa fuera de este repositorio.
 
 ### Motor y rendimiento
 
@@ -1078,7 +1102,7 @@ Canvas Studio `2.4.0` es una release candidate para distribución controlada en 
 
 - Sin composición aislada de grupo.
 - Sin máscaras vectoriales.
-- Sin niveles de máscara ni máscaras vectoriales.
+- Sin niveles, feather configurable ni inversión de máscara.
 - Sin clipping avanzado encadenado.
 
 ### Selección y transformación
@@ -1202,6 +1226,14 @@ Comprueba:
 - tutorial interactivo de catorce módulos, accesible desde **Más opciones → Tutorial interactivo**;
 - 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
 
+### Integración final 2.4 — completada
+
+- tutorial ejecutado dentro del editor principal con documento temporal no persistente;
+- foco contextual reposicionable y tarjeta minimizable que no bloquea controles laterales;
+- máscaras presentadas como **Ocultar sin borrar**, con acciones directas para ocultar y recuperar;
+- catálogo curado de 14 pinceles profesionales y 4 experimentales opcionales;
+- suite completa de 116 pruebas aprobada en Galaxy Tab S8, incluida una sesión continua de diez minutos.
+
 La arquitectura busca una experiencia profesional comparable en tablet Android. No afirma
 compatibilidad binaria ni identidad exacta con el motor propietario o los recursos de Procreate.
 
@@ -1233,6 +1265,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/PHASE_8.md`](docs/PHASE_8.md) | Certificación, memoria y artefactos de publicación |
 | [`docs/PHASE_9_PROFESSIONAL_BRUSHES.md`](docs/PHASE_9_PROFESSIONAL_BRUSHES.md) | Motor 3.0, investigación, materiales y validación visual |
 | [`docs/PHASE_9_1_BRUSH_STUDIO_4.md`](docs/PHASE_9_1_BRUSH_STUDIO_4.md) | Dual Brush, dinámicas independientes, mezcla húmeda, tutorial y pruebas masivas |
+| [`docs/RELEASE_2.4.0.md`](docs/RELEASE_2.4.0.md) | Notas, artefactos, checksums y certificación de la release 2.4.0 |
 | [`docs/PERFORMANCE_HOTFIX_1.5.1.md`](docs/PERFORMANCE_HOTFIX_1.5.1.md) | Primer hotfix de rendimiento |
 | [`docs/PERFORMANCE_HOTFIX_1.5.2.md`](docs/PERFORMANCE_HOTFIX_1.5.2.md) | Procesamiento de pinceles texturizados |
 | [`docs/CRASH_HOTFIX_1.5.3.md`](docs/CRASH_HOTFIX_1.5.3.md) | Corrección del cierre por desbordamiento |

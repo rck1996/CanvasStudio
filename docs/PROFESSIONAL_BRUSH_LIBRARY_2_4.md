@@ -71,7 +71,7 @@ Las 14 láminas individuales se conservan en [`docs/images/brush-certification`]
 ### Resultado verificado — Galaxy Tab S8
 
 - Dispositivo: Samsung `SM-X700`, Android 16, ADB USB.
-- APK: `2.4.0-debug` (`versionCode 31`), SHA-256 `3813EB77CDD2AF91D45C4E728A109440AE6859F3B2664558DBC7E9C14B380C86`.
+- APK debug final: `2.4.0-debug` (`versionCode 31`), SHA-256 `F3A3089C492F2D13C6E9A51AC17756314F552EB58E8102715A8FBBC73FF8D5A2`.
 - Instrumentación: SHA-256 `6EDC529BE5720FD80397F5B797C141456E334AB3C5ACA47E3D5E4EFF292E0C43`.
 - Catálogo, migración, previews, fixtures y tutorial: 37/37 en 17,787 s.
 - Estrés específico: 500 trazos largos de lápiz con undo, guardado y reapertura; 200 trazos costosos; 2/2 en 36,756 s.

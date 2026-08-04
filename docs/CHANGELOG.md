@@ -2,6 +2,10 @@
 
 ## 2.4.0
 
+- tutorial de 14 lecciones integrado en el editor real mediante un documento temporal que nunca se guarda;
+- foco contextual reposicionable, tarjeta minimizable y reinicio limpio desde la primera lección;
+- experiencia de máscaras simplificada como Ocultar sin borrar, con acciones directas Ocultar y Recuperar;
+- nueve regresiones específicas del tutorial y certificación completa de 116 pruebas en Galaxy Tab S8;
 - biblioteca principal reducida de 30 presets históricos a 14 herramientas diferenciadas;
 - doce presets redundantes migrados mediante alias y cuatro medios complejos ocultos como experimentales;
 - HB, 6B, portaminas, tintas, marcadores, gouache, pinceles secos, carboncillo y aerógrafos refinados;

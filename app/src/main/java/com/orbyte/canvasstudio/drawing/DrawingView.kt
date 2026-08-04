@@ -332,6 +332,9 @@ class DrawingView(context: Context) : View(context) {
 
     var tool: DrawingTool = DrawingTool.BRUSH
     var brushSettings: BrushSettings = BrushSettings()
+        set(value) {
+            field = value.sanitized()
+        }
     var onLayersChanged: ((List<LayerUiModel>) -> Unit)? = null
     var onLayerGroupsChanged: ((List<LayerGroupUiModel>) -> Unit)? = null
     var onDocumentChanged: (() -> Unit)? = null

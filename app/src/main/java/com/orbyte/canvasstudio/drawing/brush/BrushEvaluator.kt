@@ -32,10 +32,26 @@ internal object BrushEvaluator {
         val pressureFactor = if (settings.pressureSize) minimum + sizePressure * (1f - minimum) else 1f
         val threshold = dynamics.tiltThreshold.coerceIn(0f, .95f)
         val resolvedTilt = ((tilt.coerceIn(0f, 1f) - threshold) / (1f - threshold)).coerceIn(0f, 1f)
-        val tiltExpansion = 1f + resolvedTilt * max(settings.tiltResponse, dynamics.tiltSize).coerceIn(0f, 1f) * .9f
+        val tiltStrength = max(settings.tiltResponse, dynamics.tiltSize).coerceIn(0f, 1f)
+        val tiltExpansion = 1f + resolvedTilt * tiltStrength * when (settings.kind) {
+            com.orbyte.canvasstudio.drawing.BrushKind.PENCIL -> 1.45f
+            com.orbyte.canvasstudio.drawing.BrushKind.MARKER -> .72f
+            else -> .9f
+        }
         val velocityWidth = 1f - max(settings.velocitySize, dynamics.velocitySize)
             .coerceIn(0f, 1f) * speedFactor.coerceIn(0f, 1f) * .62f
-        val radius = settings.sizePx * pressureFactor * tiltExpansion * velocityWidth * .5f
+        val baseRadius = settings.sizePx * pressureFactor * velocityWidth * .5f
+        val radiusX = baseRadius * tiltExpansion
+        val tipRoundness = settings.tipProfile.roundness.coerceIn(.08f, 1f)
+        val radiusY = baseRadius * when (settings.tipProfile.shape) {
+            com.orbyte.canvasstudio.drawing.BrushTipShape.ROUND -> 1f
+            com.orbyte.canvasstudio.drawing.BrushTipShape.OVAL,
+            com.orbyte.canvasstudio.drawing.BrushTipShape.CHISEL,
+            -> tipRoundness * (1f - resolvedTilt * tiltStrength * .22f)
+            com.orbyte.canvasstudio.drawing.BrushTipShape.BRISTLE,
+            com.orbyte.canvasstudio.drawing.BrushTipShape.PARTICLE,
+            -> tipRoundness
+        }
         val pressureOpacity = if (settings.pressureOpacity) .08f + opacityPressure * .92f else 1f
         val velocityOpacity = 1f - dynamics.velocityOpacity.coerceIn(0f, 1f) * speedFactor.coerceIn(0f, 1f) * .72f
         val tiltOpacity = 1f - dynamics.tiltOpacity.coerceIn(0f, 1f) * resolvedTilt * .45f
@@ -49,8 +65,8 @@ internal object BrushEvaluator {
         return BrushDab(
             x = x,
             y = y,
-            radiusX = radius,
-            radiusY = radius,
+            radiusX = radiusX.coerceAtLeast(.1f),
+            radiusY = radiusY.coerceAtLeast(.1f),
             rotationRadians = orientation,
             opacity = opacity,
             flow = flow,

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.4.0
+
+- biblioteca principal reducida de 30 presets históricos a 14 herramientas diferenciadas;
+- doce presets redundantes migrados mediante alias y cuatro medios complejos ocultos como experimentales;
+- HB, 6B, portaminas, tintas, marcadores, gouache, pinceles secos, carboncillo y aerógrafos refinados;
+- previews conectadas al mismo evaluador, dabs, semilla, punta, grano y curvas que el lienzo;
+- controles incompatibles ocultos en Brush Studio y parámetros importados limitados a rangos seguros;
+- favoritos, recientes y pinceles personalizados compatibles con los identificadores históricos;
+- fixtures deterministas de once escenarios, comparación ciega y estrés de 200/500 trazos;
+- expansión avanzada de Vulkan congelada; el backend experimental existente no cambia de alcance.
+
 ## 2.3.0
 
 - backend Vulkan 1.1 compute experimental para tinta técnica y grafito inclinado;

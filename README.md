@@ -4,8 +4,8 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Release candidate para tablets / fase 9.1
-> **Versión incluida en este repositorio:** `2.2.0`
+> **Estado del proyecto:** Release candidate para tablets / biblioteca profesional 2.4
+> **Versión incluida en este repositorio:** `2.4.0`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
@@ -26,6 +26,8 @@ Las siguientes capturas fueron obtenidas directamente de una Samsung Galaxy Tab 
 ![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
 
 ![Biblioteca de pinceles 2.1 con preview reactivo a 135 px en una Galaxy Tab S8](docs/canvasstudio-library-reactive.png)
+
+![Comparación ciega de los 14 pinceles de producción 2.4 renderizada en una Galaxy Tab S8](docs/images/brush-certification/blind-comparison.png)
 
 ![Dinámicas y curva gráfica de presión en una Galaxy Tab S8](docs/canvasstudio-library-dynamics.png)
 
@@ -122,7 +124,7 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 | Creación de lienzo | Presets, medidas personalizadas, orientación, DPI y límites defensivos |
 | Navegación | Zoom, desplazamiento, rotación, restablecimiento y modo zen |
 | Dibujo | Pincel, borrador, línea, rectángulo, elipse, relleno, degradado y cuentagotas |
-| Pinceles | 22 presets, favoritos, recientes, búsqueda, duplicado, administración e intercambio JSON |
+| Pinceles | 14 presets profesionales, 4 experimentales ocultables, favoritos, recientes, búsqueda, duplicado, administración e intercambio JSON |
 | Capas | Crear, duplicar, borrar, limpiar, renombrar, reordenar, ocultar y cambiar opacidad |
 | Composición | Siete modos de fusión, bloqueo alfa y clipping |
 | Grupos | Grupos de un nivel con visibilidad, opacidad y colapso |
@@ -1053,7 +1055,7 @@ El checklist detallado está en [`docs/TEST_CHECKLIST.md`](docs/TEST_CHECKLIST.m
 
 ## Limitaciones actuales
 
-Canvas Studio `2.3.0` es una release candidate para distribución controlada en tablets.
+Canvas Studio `2.4.0` es una release candidate para distribución controlada en tablets.
 
 ### Motor y rendimiento
 
@@ -1167,7 +1169,7 @@ Comprueba:
 ### Fases 6 y 7 — completadas
 
 - precisión, selección avanzada, guías, reglas y perspectiva;
-- biblioteca profesional, 30 pinceles, preview reactivo y puntas bitmap;
+- biblioteca principal de 14 pinceles diferenciados, 4 experimentales ocultables, preview honesta y puntas bitmap;
 - selección múltiple, grupos anidados, 12 modos de fusión y PSD compuesto;
 - menús colapsables, atajos, accesibilidad y diseño alineado al mockup.
 

@@ -53,6 +53,38 @@ enum class DrawingTool {
     HAND,
 }
 
+/** Observable, renderer-backed outcomes used by the in-editor guided tutorial. */
+sealed interface DrawingInteractionEvent {
+    data class ViewChanged(
+        val scale: Float,
+        val panDistancePx: Float,
+        val rotationDegrees: Float,
+    ) : DrawingInteractionEvent
+
+    data object ViewReset : DrawingInteractionEvent
+
+    data class StrokeCommitted(
+        val layerId: String,
+        val lengthPx: Float,
+        val minimumPressure: Float,
+        val maximumPressure: Float,
+        val maximumTiltRadians: Float,
+        val eraser: Boolean,
+        val editingMask: Boolean,
+        val symmetryCopies: Int,
+    ) : DrawingInteractionEvent
+
+    data class ShapeCommitted(val tool: DrawingTool, val widthPx: Float, val heightPx: Float) : DrawingInteractionEvent
+    data class GradientCommitted(val lengthPx: Float) : DrawingInteractionEvent
+    data class SelectionCreated(val areaPx: Float) : DrawingInteractionEvent
+    data class TransformPreviewChanged(val distancePx: Float, val scaleDelta: Float, val rotationDegrees: Float) : DrawingInteractionEvent
+    data object TransformCommitted : DrawingInteractionEvent
+    data class FillCommitted(val changedPixels: Int) : DrawingInteractionEvent
+    data class HistoryChanged(val action: Action) : DrawingInteractionEvent {
+        enum class Action { UNDO, REDO }
+    }
+}
+
 enum class GuideMode {
     NONE,
     PERSPECTIVE_ONE_POINT,

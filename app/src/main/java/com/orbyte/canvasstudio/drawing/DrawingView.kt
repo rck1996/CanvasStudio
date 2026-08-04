@@ -257,6 +257,8 @@ class DrawingView(context: Context) : View(context) {
     private var navigationInitialized = false
     private var lastGestureCentroidX = 0f
     private var lastGestureCentroidY = 0f
+    private var navigationDistancePx = 0f
+    private var navigationScaleFactor = 1f
     private var lastGestureSpan = 0f
     private var lastGestureAngle = 0f
     private var hoverX = 0f
@@ -329,6 +331,9 @@ class DrawingView(context: Context) : View(context) {
     private var transformLastCentroidY = 0f
     private var transformLastSpan = 0f
     private var transformLastAngle = 0f
+    private var tutorialTransformDistancePx = 0f
+    private var tutorialTransformScaleDelta = 0f
+    private var tutorialTransformRotationDegrees = 0f
 
     var tool: DrawingTool = DrawingTool.BRUSH
     var brushSettings: BrushSettings = BrushSettings()
@@ -349,6 +354,7 @@ class DrawingView(context: Context) : View(context) {
     var onEngineStatusChanged: ((String) -> Unit)? = null
     var onEngineMessage: ((String) -> Unit)? = null
     var onSelectionChanged: ((Boolean) -> Unit)? = null
+    var onInteraction: ((DrawingInteractionEvent) -> Unit)? = null
     var onRasterFramePresented: (() -> Unit)? = null
     var usePlatformLowLatencyPreview: Boolean = false
 
@@ -1004,7 +1010,7 @@ class DrawingView(context: Context) : View(context) {
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_0) {
-            resetView()
+            resetView(notifyInteraction = false)
             return true
         }
         if (keyCode == KeyEvent.KEYCODE_DEL || keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
@@ -1026,7 +1032,7 @@ class DrawingView(context: Context) : View(context) {
         super.onSizeChanged(w, h, oldw, oldh)
         deferredStrokeOverlay.setBounds(0, 0, w, h)
         if (w > 0 && h > 0 && !fittedOnce) {
-            resetView()
+            resetView(notifyInteraction = false)
             fittedOnce = true
         }
     }
@@ -1620,7 +1626,7 @@ class DrawingView(context: Context) : View(context) {
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                onEngineMessage?.invoke("La máscara se edita con Pincel o Borrador.")
+                onEngineMessage?.invoke("Activa Editar ocultación para usar Pincel o Borrador.")
             }
             return true
         }
@@ -2124,6 +2130,21 @@ class DrawingView(context: Context) : View(context) {
             } else if (requiresFinalStrokeRebuild(command.settings)) {
                 rebuildLayerRegion(layer, combinedBounds(commands))
             }
+            val length = completedPoints.zipWithNext().sumOf { (first, second) ->
+                hypot(second.x - first.x, second.y - first.y).toDouble()
+            }.toFloat()
+            onInteraction?.invoke(
+                DrawingInteractionEvent.StrokeCommitted(
+                    layerId = layer.id,
+                    lengthPx = length,
+                    minimumPressure = completedPoints.minOf(StrokePoint::pressure),
+                    maximumPressure = completedPoints.maxOf(StrokePoint::pressure),
+                    maximumTiltRadians = completedPoints.maxOf { abs(it.tilt) },
+                    eraser = completedTool == DrawingTool.ERASER,
+                    editingMask = layer.editingMask,
+                    symmetryCopies = commands.size,
+                ),
+            )
         }
         commitDocumentChange()
         if (activeStrokeInputStartedNanos != 0L) {
@@ -2154,6 +2175,9 @@ class DrawingView(context: Context) : View(context) {
             commands.forEach { drawCommand(layer.surface, it) }
             recordCommands(layer, commands)
         }
+        onInteraction?.invoke(
+            DrawingInteractionEvent.ShapeCommitted(tool, abs(end.x - start.x), abs(end.y - start.y)),
+        )
         commitDocumentChange()
     }
 
@@ -2182,6 +2206,7 @@ class DrawingView(context: Context) : View(context) {
             recordCommands(layer, listOf(command))
             markLayerDirty(layer, commandBounds(command))
         }
+        onInteraction?.invoke(DrawingInteractionEvent.GradientCommitted(hypot(end.x - start.x, end.y - start.y)))
         commitDocumentChange()
     }
 
@@ -2207,6 +2232,7 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2227,6 +2253,7 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2258,6 +2285,8 @@ class DrawingView(context: Context) : View(context) {
         selectionInverted = false
         selectionFeatherPx = 0f
         onSelectionChanged?.invoke(true)
+        val bounds = RectF().also { selectionPath?.computeBounds(it, true) }
+        onInteraction?.invoke(DrawingInteractionEvent.SelectionCreated(bounds.width() * bounds.height()))
         invalidate()
     }
 
@@ -2363,7 +2392,14 @@ class DrawingView(context: Context) : View(context) {
         }
 
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> resetBaseline()
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    tutorialTransformDistancePx = 0f
+                    tutorialTransformScaleDelta = 0f
+                    tutorialTransformRotationDegrees = 0f
+                }
+                resetBaseline()
+            }
             MotionEvent.ACTION_MOVE -> {
                 val values = gestureValues()
                 if (!transformGestureInitialized) {
@@ -2372,13 +2408,28 @@ class DrawingView(context: Context) : View(context) {
                 }
                 val cx = values[0]
                 val cy = values[1]
+                val translated = hypot(cx - transformLastCentroidX, cy - transformLastCentroidY)
+                var scaleDelta = 0f
+                var rotationDelta = 0f
                 selectionTransform.postTranslate(cx - transformLastCentroidX, cy - transformLastCentroidY)
                 if (event.pointerCount >= 2 && transformLastSpan > 0.5f && values[2] > 0.5f) {
                     val factor = (values[2] / transformLastSpan).coerceIn(0.65f, 1.55f)
+                    scaleDelta = factor - 1f
                     selectionTransform.postScale(factor, factor, cx, cy)
                     val rotation = normalizeDegrees(values[3] - transformLastAngle).coerceIn(-28f, 28f)
+                    rotationDelta = rotation
                     selectionTransform.postRotate(rotation, cx, cy)
                 }
+                tutorialTransformDistancePx += translated
+                tutorialTransformScaleDelta += abs(scaleDelta)
+                tutorialTransformRotationDegrees += abs(rotationDelta)
+                onInteraction?.invoke(
+                    DrawingInteractionEvent.TransformPreviewChanged(
+                        tutorialTransformDistancePx,
+                        tutorialTransformScaleDelta,
+                        tutorialTransformRotationDegrees,
+                    ),
+                )
                 transformLastCentroidX = cx
                 transformLastCentroidY = cy
                 transformLastSpan = values[2]
@@ -2430,6 +2481,7 @@ class DrawingView(context: Context) : View(context) {
         selectionTransform.reset()
         transformGestureInitialized = false
         onSelectionChanged?.invoke(selectionPath != null)
+        onInteraction?.invoke(DrawingInteractionEvent.TransformCommitted)
         commitDocumentChange()
     }
 
@@ -2679,6 +2731,7 @@ class DrawingView(context: Context) : View(context) {
                     drawCommand(currentLayer.surface, command)
                     recordCommands(currentLayer, listOf(command))
                     markLayerDirty(currentLayer, commandBounds(command))
+                    onInteraction?.invoke(DrawingInteractionEvent.FillCommitted(filled.cardinality()))
                     commitDocumentChange()
                 }
             } finally {
@@ -3875,7 +3928,12 @@ class DrawingView(context: Context) : View(context) {
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val startsNavigation = !navigationActive
                 navigationActive = true
+                if (startsNavigation) {
+                    navigationDistancePx = 0f
+                    navigationScaleFactor = 1f
+                }
                 resetBaseline()
             }
 
@@ -3886,13 +3944,16 @@ class DrawingView(context: Context) : View(context) {
                     return
                 }
 
-                transform.postTranslate(
+                val panDelta = hypot(
                     centroidX - lastGestureCentroidX,
                     centroidY - lastGestureCentroidY,
                 )
+                navigationDistancePx += panDelta
+                transform.postTranslate(centroidX - lastGestureCentroidX, centroidY - lastGestureCentroidY)
 
                 if (hasPair && lastGestureSpan > 0.001f && span > 0.001f) {
                     val requestedFactor = span / lastGestureSpan
+                    navigationScaleFactor *= requestedFactor
                     val desiredScale = (currentScale * requestedFactor).coerceIn(0.08f, 10f)
                     val appliedScale = desiredScale / currentScale
                     transform.postScale(appliedScale, appliedScale, centroidX, centroidY)
@@ -3906,6 +3967,14 @@ class DrawingView(context: Context) : View(context) {
                     onZoomChanged?.invoke(zoomPercent())
                     onRotationChanged?.invoke(rotationDegrees())
                 }
+
+                onInteraction?.invoke(
+                    DrawingInteractionEvent.ViewChanged(
+                        scale = navigationScaleFactor,
+                        panDistancePx = navigationDistancePx,
+                        rotationDegrees = currentRotationDegrees,
+                    ),
+                )
 
                 resetBaseline()
                 invalidate()
@@ -3969,6 +4038,7 @@ class DrawingView(context: Context) : View(context) {
         rebuildLayerRegion(layer, affectedBounds, entry.target)
         markLayerDirty(layer, affectedBounds, entry.target)
         commitDocumentChange()
+        onInteraction?.invoke(DrawingInteractionEvent.HistoryChanged(DrawingInteractionEvent.HistoryChanged.Action.UNDO))
     }
 
     fun redo() {
@@ -3980,6 +4050,7 @@ class DrawingView(context: Context) : View(context) {
         rebuildLayerRegion(layer, affectedBounds, entry.target)
         markLayerDirty(layer, affectedBounds, entry.target)
         commitDocumentChange()
+        onInteraction?.invoke(DrawingInteractionEvent.HistoryChanged(DrawingInteractionEvent.HistoryChanged.Action.REDO))
     }
 
     fun refreshLayerState() = notifyLayers()
@@ -4197,7 +4268,7 @@ class DrawingView(context: Context) : View(context) {
         layer.editingMask = true
         updateCacheBudgets()
         notifyLayers()
-        onEngineMessage?.invoke("Máscara activa: Pincel oculta y Borrador revela.")
+        onEngineMessage?.invoke("Ocultación lista: Pincel oculta y Borrador recupera; la capa original no cambia.")
         onDocumentChanged?.invoke()
     }
 
@@ -4377,7 +4448,7 @@ class DrawingView(context: Context) : View(context) {
         onDocumentChanged?.invoke()
     }
 
-    fun resetView() {
+    fun resetView(notifyInteraction: Boolean = true) {
         if (width <= 0 || height <= 0) return
         val margin = 64f
         val scale = min(
@@ -4394,6 +4465,7 @@ class DrawingView(context: Context) : View(context) {
         )
         onZoomChanged?.invoke(zoomPercent())
         onRotationChanged?.invoke(rotationDegrees())
+        if (notifyInteraction) onInteraction?.invoke(DrawingInteractionEvent.ViewReset)
         invalidate()
     }
 
@@ -4404,6 +4476,7 @@ class DrawingView(context: Context) : View(context) {
         transform.postRotate(degrees, focusX, focusY)
         currentRotationDegrees = normalizeDegrees(currentRotationDegrees + degrees)
         onRotationChanged?.invoke(rotationDegrees())
+        onInteraction?.invoke(DrawingInteractionEvent.ViewChanged(currentScale, 0f, currentRotationDegrees))
         invalidate()
     }
 
@@ -4417,6 +4490,7 @@ class DrawingView(context: Context) : View(context) {
         transform.postScale(applied, applied, focusX, focusY)
         currentScale = desired
         onZoomChanged?.invoke(zoomPercent())
+        onInteraction?.invoke(DrawingInteractionEvent.ViewChanged(currentScale, 0f, currentRotationDegrees))
         invalidate()
     }
 
@@ -5062,7 +5136,7 @@ class DrawingView(context: Context) : View(context) {
             updateEngineStatus()
             fittedOnce = false
             if (width > 0 && height > 0) {
-                resetView()
+                resetView(notifyInteraction = false)
                 fittedOnce = true
             }
             invalidate()

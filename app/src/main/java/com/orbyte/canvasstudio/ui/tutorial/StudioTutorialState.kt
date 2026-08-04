@@ -15,7 +15,7 @@ enum class StudioTutorialModule(
     ERASER("Borrador", "Borra una parte visible de la figura y recuperala."),
     COLOR_PICKER("Color y cuentagotas", "Muestrea un color y usalo en un trazo."),
     LAYERS("Capas", "Crea, dibuja, oculta, muestra y ordena una capa temporal."),
-    MASKS("Mascaras", "Oculta y recupera una figura sin destruir sus pixeles."),
+    MASKS("Ocultar sin borrar", "Esconde y recupera partes de una figura manteniendo intacta la capa original."),
     SELECTION("Seleccion", "Crea una seleccion con area suficiente y observa su contorno."),
     TRANSFORMATION("Transformacion", "Previsualiza y confirma un cambio geometrico real."),
     SHAPES_FILL("Formas, linea y relleno", "Crea una figura y rellena su region interior."),
@@ -320,7 +320,7 @@ fun completionMessage(module: StudioTutorialModule): String = when (module) {
     StudioTutorialModule.ERASER -> "Zona borrada y recuperada"
     StudioTutorialModule.COLOR_PICKER -> "Color muestreado y usado en un trazo"
     StudioTutorialModule.LAYERS -> "Capa creada, dibujada, reordenada y comprobada"
-    StudioTutorialModule.MASKS -> "Mascara aplicada sin destruir la figura"
+    StudioTutorialModule.MASKS -> "Ocultación aplicada sin modificar la figura original"
     StudioTutorialModule.SELECTION -> "Seleccion valida creada"
     StudioTutorialModule.TRANSFORMATION -> "Transformacion previsualizada y confirmada"
     StudioTutorialModule.SHAPES_FILL -> "Figura creada y rellenada"

@@ -304,13 +304,13 @@ private fun HintPanel(module: StudioTutorialModule, level: Int) {
     }
 }
 
-private fun nextHint(module: StudioTutorialModule): String = when (module) {
+internal fun nextHint(module: StudioTutorialModule): String = when (module) {
     StudioTutorialModule.NAVIGATION -> "usa dos dedos y luego pulsa Restablecer vista."
     StudioTutorialModule.BRUSH_PEN -> "haz un trazo largo cambiando la presion."
     StudioTutorialModule.ERASER -> "arrastra sobre la figura y despues recupera la zona."
     StudioTutorialModule.COLOR_PICKER -> "elige una muestra distinta y dibuja con ella."
     StudioTutorialModule.LAYERS -> "sigue las acciones del panel; cada una cambia el lienzo."
-    StudioTutorialModule.MASKS -> "crea la mascara, oculta y recupera parte de la figura."
+    StudioTutorialModule.MASKS -> "oculta y recupera parte de la figura sin modificar la original."
     StudioTutorialModule.SELECTION -> "arrastra un rectangulo grande sobre el objeto."
     StudioTutorialModule.TRANSFORMATION -> "mueve el control y confirma el preview."
     StudioTutorialModule.SHAPES_FILL -> "crea el contorno antes de rellenar."
@@ -321,7 +321,7 @@ private fun nextHint(module: StudioTutorialModule): String = when (module) {
     StudioTutorialModule.BRUSH_CUSTOMIZATION -> "cambia bastante el tamano y compara los trazos."
 }
 
-private fun recoveryHint(module: StudioTutorialModule): String = "Reinicia solo esta leccion si el ejercicio quedo confuso. " + nextHint(module)
+internal fun recoveryHint(module: StudioTutorialModule): String = "Reinicia solo esta leccion si el ejercicio quedo confuso. " + nextHint(module)
 
 @Composable
 private fun DemoOverlay(module: StudioTutorialModule, onClose: () -> Unit) {
@@ -458,14 +458,14 @@ private fun MaskPractice(onAction: (StudioTutorialAction) -> Unit) {
     var mask by remember { mutableStateOf(false) }; var hidden by remember { mutableStateOf(false) }; var restored by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = { mask = true; onAction(StudioTutorialAction.Observe(StudioTutorialEvent.MaskCreated("practice-layer"))) }) { Text("Anadir mascara") }
+            Button(onClick = { mask = true; onAction(StudioTutorialAction.Observe(StudioTutorialEvent.MaskCreated("practice-layer"))) }) { Text("Ocultar sin borrar") }
             OutlinedButton(onClick = { restored = true; hidden = false; onAction(StudioTutorialAction.Observe(StudioTutorialEvent.MaskContentRestored(512f))) }, enabled = hidden) { Text("Pintar blanco: recuperar") }
         }
         Canvas(Modifier.fillMaxWidth().weight(1f).pointerInput(mask) { detectDragGestures(onDragEnd = { if (mask) { hidden = true; restored = false; onAction(StudioTutorialAction.Observe(StudioTutorialEvent.MaskContentChanged(700f))) } }, onDrag = { _, _ -> }) }) {
             drawCircle(Coral, size.minDimension * .28f, center)
             if (hidden && !restored) drawRect(PracticeBackground, Offset(center.x, center.y - size.minDimension * .3f), androidx.compose.ui.geometry.Size(size.width * .35f, size.minDimension * .6f))
         }
-        Text(if (!mask) "Figura original intacta" else "Miniatura de mascara ${if (hidden) "con zona negra" else "blanca"}", color = Cyan)
+        Text(if (!mask) "Figura original intacta" else if (hidden) "Una parte está oculta; puedes recuperarla" else "Toda la figura está visible", color = Cyan)
     }
 }
 

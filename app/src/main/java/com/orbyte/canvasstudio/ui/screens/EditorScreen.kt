@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.outlined.RotateRight
 import androidx.compose.material.icons.automirrored.outlined.ShowChart
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AutoFixNormal
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.Brush
@@ -156,12 +157,21 @@ import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.StudioPalette
+import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialFocusProvider
+import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialOverlay
+import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialSession
+import com.orbyte.canvasstudio.ui.tutorial.StudioTutorialEvent
+import com.orbyte.canvasstudio.ui.tutorial.StudioTutorialProgressStore
+import com.orbyte.canvasstudio.ui.tutorial.editorTutorialAnchor
+import com.orbyte.canvasstudio.ui.tutorial.freshEditorTutorialState
+import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -257,12 +267,26 @@ fun EditorScreen(
     document: EditorDocument,
     onBackToGallery: () -> Unit,
     onOpenTutorial: () -> Unit,
+    tutorialMode: Boolean = false,
+    onTutorialFinish: () -> Unit = {},
+    onTutorialExit: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var drawingView by remember { mutableStateOf<DrawingView?>(null) }
     var selectedTool by remember { mutableStateOf(DrawingTool.BRUSH) }
     var selectedDock by remember { mutableStateOf(DockTab.LAYERS) }
+    val tutorialPreferences = remember {
+        context.getSharedPreferences("canvas_studio_tutorial_progress", android.content.Context.MODE_PRIVATE)
+    }
+    val tutorialSession = remember(tutorialMode) {
+        if (tutorialMode) {
+            val saved = StudioTutorialProgressStore.load(tutorialPreferences)
+            EditorTutorialSession(freshEditorTutorialState(saved), tutorialPreferences)
+        }
+        else null
+    }
+    val tutorialFocus = rememberTutorialFocusRegistry()
     var customBrushes by remember { mutableStateOf(BrushRepository.load(context)) }
     var selectedPreset by remember { mutableStateOf(premiumBrushes.first()) }
     var brushSettings by remember {
@@ -299,7 +323,7 @@ fun EditorScreen(
     var layerModels by remember { mutableStateOf<List<LayerUiModel>>(emptyList()) }
     var layerGroups by remember { mutableStateOf<List<LayerGroupUiModel>>(emptyList()) }
     var changeTick by remember { mutableIntStateOf(0) }
-    var saveLabel by remember { mutableStateOf("Guardado automático") }
+    var saveLabel by remember { mutableStateOf(if (tutorialMode) "Sesión temporal" else "Guardado automático") }
     var engineStatus by remember { mutableStateOf("Tiles 512 · preparando") }
     var zenMode by remember { mutableStateOf(false) }
     var zoomLabel by remember { mutableIntStateOf(100) }
@@ -368,7 +392,7 @@ fun EditorScreen(
     }
 
     LaunchedEffect(changeTick) {
-        if (changeTick == 0) return@LaunchedEffect
+        if (changeTick == 0 || tutorialMode) return@LaunchedEffect
         saveLabel = "Guardando…"
         delay(3_000)
         drawingView?.saveProject(
@@ -382,6 +406,7 @@ fun EditorScreen(
     DisposableEffect(lifecycleOwner, document.id) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP) {
+                if (tutorialMode) return@LifecycleEventObserver
                 drawingView?.saveProject(
                     projectId = document.id,
                     title = document.title,
@@ -393,12 +418,14 @@ fun EditorScreen(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            drawingView?.saveProject(
-                projectId = document.id,
-                title = document.title,
-                dpi = document.dpi,
-                includePreview = false,
-            )
+            if (!tutorialMode) {
+                drawingView?.saveProject(
+                    projectId = document.id,
+                    title = document.title,
+                    dpi = document.dpi,
+                    includePreview = false,
+                )
+            }
         }
     }
 
@@ -609,6 +636,14 @@ fun EditorScreen(
         }
     }
 
+    tutorialSession?.also { session ->
+        session.activeTool = selectedTool
+        session.layersPanelActive = selectedDock == DockTab.LAYERS
+        session.brushesPanelActive = selectedDock == DockTab.BRUSHES
+        session.selectionActive = selectionActive
+    }
+    Box(Modifier.fillMaxSize()) {
+    EditorTutorialFocusProvider(tutorialFocus, tutorialSession?.guide?.target) {
     Column(Modifier.fillMaxSize().background(StudioPalette.Background)) {
         EditorTopBar(
             document = document,
@@ -616,8 +651,10 @@ fun EditorScreen(
             rotation = rotationLabel,
             saveLabel = saveLabel,
             onBack = {
-                drawingView?.saveProject(document.id, document.title, document.dpi)
-                onBackToGallery()
+                if (tutorialMode) onTutorialExit() else {
+                    drawingView?.saveProject(document.id, document.title, document.dpi)
+                    onBackToGallery()
+                }
             },
             onUndo = { drawingView?.undo() },
             onRedo = { drawingView?.redo() },
@@ -638,8 +675,13 @@ fun EditorScreen(
             },
             onExport = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                exportLauncher.launch("$safeName.png")
+                if (tutorialMode) {
+                    tutorialSession?.observe(StudioTutorialEvent.ExportFormatSelected("PNG"))
+                    tutorialSession?.observe(StudioTutorialEvent.ExportPreviewGenerated("PNG", document.width, document.height))
+                } else {
+                    val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
+                    exportLauncher.launch("$safeName.png")
+                }
             },
             onExportOpenRaster = {
                 drawingView?.commitPendingTransform()
@@ -696,6 +738,7 @@ fun EditorScreen(
                         }
                     }
                 }
+                tutorialSession?.observe(StudioTutorialEvent.SymmetryEnabled(symmetryMode != 0))
             },
             guideLabel = when (guideMode) {
                 GuideMode.PERSPECTIVE_ONE_POINT -> "Perspectiva 1 punto"
@@ -736,7 +779,7 @@ fun EditorScreen(
                         InkDrawingContainer(viewContext).also { container ->
                             container.drawingView.apply {
                             configureDocument(document.width, document.height)
-                            val loaded = if (document.isLocal) loadProject(document.id) else false
+                            val loaded = if (!tutorialMode && document.isLocal) loadProject(document.id) else false
                             if (!loaded) {
                                 seedDemoArtwork(document.preview?.name)
                             } else {
@@ -763,8 +806,10 @@ fun EditorScreen(
                             onLayerGroupsChanged = { layerGroups = it }
                             onDocumentChanged = { changeTick++ }
                             onColorPicked = { color ->
+                                val previous = brushSettings.color
                                 brushSettings = brushSettings.copy(color = color)
                                 selectedDock = DockTab.COLOR
+                                tutorialSession?.observe(StudioTutorialEvent.ColorSampled(color.toLong(), previous.toLong()))
                             }
                             onZoomChanged = { zoomLabel = it }
                             onRotationChanged = { rotationLabel = it }
@@ -786,6 +831,7 @@ fun EditorScreen(
                                 selectionActive = it
                                 if (!it) selectionFeatherPx = 0f
                             }
+                            onInteraction = { tutorialSession?.observeDrawing(it) }
                             setRendererMode(rendererMode)
                             setGridVisible(gridVisible)
                             setRulersVisible(rulersVisible)
@@ -831,7 +877,7 @@ fun EditorScreen(
                         view.setPerspectiveEditing(perspectiveEditing)
                         view.setRendererMode(rendererMode)
                     },
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().editorTutorialAnchor("canvas"),
                 )
 
                 if (BuildConfig.DEBUG && !zenMode) {
@@ -861,8 +907,16 @@ fun EditorScreen(
                             label = "Tamaño",
                             progress = brushSettings.sizePx / 180f,
                             value = "${brushSettings.sizePx.toInt()} px",
-                            onDecrease = { brushSettings = brushSettings.copy(sizePx = (brushSettings.sizePx / 1.16f).coerceAtLeast(2f)) },
-                            onIncrease = { brushSettings = brushSettings.copy(sizePx = (brushSettings.sizePx * 1.16f).coerceAtMost(180f)) },
+                            onDecrease = {
+                                val before = brushSettings.sizePx
+                                brushSettings = brushSettings.copy(sizePx = (before / 1.16f).coerceAtLeast(2f))
+                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
+                            },
+                            onIncrease = {
+                                val before = brushSettings.sizePx
+                                brushSettings = brushSettings.copy(sizePx = (before * 1.16f).coerceAtMost(180f))
+                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
+                            },
                         )
                         QuickDial(
                             label = "Opacidad",
@@ -939,7 +993,13 @@ fun EditorScreen(
                     brushes = availableBrushes,
                     brushSettings = brushSettings,
                     onPresetSelected = applyBrushPreset,
-                    onBrushSettingsChanged = { brushSettings = it },
+                    onBrushSettingsChanged = { updated ->
+                        val before = brushSettings.sizePx
+                        brushSettings = updated
+                        if (abs(updated.sizePx - before) / before.coerceAtLeast(1f) >= .15f) {
+                            tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, updated.sizePx))
+                        }
+                    },
                     onSaveCustomBrush = { brushName ->
                         val custom = BrushPreset(
                             id = "custom-${System.currentTimeMillis()}",
@@ -976,7 +1036,11 @@ fun EditorScreen(
                     groups = layerGroups,
                     onSelectLayer = { drawingView?.setActiveLayer(it) },
                     onToggleLayerSelection = { drawingView?.toggleLayerSelection(it) },
-                    onToggleVisibility = { drawingView?.toggleLayerVisibility(it) },
+                    onToggleVisibility = { id ->
+                        val before = layerModels.firstOrNull { it.id == id }?.visible ?: true
+                        drawingView?.toggleLayerVisibility(id)
+                        tutorialSession?.observe(StudioTutorialEvent.LayerVisibilityChanged(id, !before, true))
+                    },
                     onLayerOpacity = { id, opacity -> drawingView?.setLayerOpacity(id, opacity) },
                     onLayerBlendMode = { id, mode -> drawingView?.setLayerBlendMode(id, mode) },
                     onLayerAlphaLock = { id, locked -> drawingView?.setLayerAlphaLocked(id, locked) },
@@ -986,18 +1050,42 @@ fun EditorScreen(
                     onToggleGroupVisibility = { drawingView?.toggleGroupVisibility(it) },
                     onToggleGroupCollapsed = { drawingView?.toggleGroupCollapsed(it) },
                     onGroupOpacity = { id, opacity -> drawingView?.setGroupOpacity(id, opacity) },
-                    onAddMask = { drawingView?.addMaskToActiveLayer() },
+                    onAddMask = {
+                        drawingView?.addMaskToActiveLayer()
+                        layerModels.firstOrNull { it.isActive }?.let { tutorialSession?.observe(StudioTutorialEvent.MaskCreated(it.id)) }
+                    },
                     onEditMask = { id, editing ->
                         drawingView?.setEditingLayerMask(id, editing)
                         if (editing) selectedTool = DrawingTool.BRUSH
                     },
+                    onHideWithMask = { id ->
+                        drawingView?.setEditingLayerMask(id, true)
+                        selectedTool = DrawingTool.BRUSH
+                    },
+                    onRevealWithMask = { id ->
+                        drawingView?.setEditingLayerMask(id, true)
+                        selectedTool = DrawingTool.ERASER
+                    },
                     onToggleMask = { drawingView?.toggleLayerMaskEnabled(it) },
                     onDeleteMask = { drawingView?.deleteActiveLayerMask() },
-                    onAddLayer = { drawingView?.addLayer() },
+                    onAddLayer = {
+                        drawingView?.addLayer()
+                        drawingView?.post {
+                            layerModels.firstOrNull { it.isActive }?.let { tutorialSession?.observe(StudioTutorialEvent.LayerCreated(it.id)) }
+                        }
+                    },
                     onDuplicateLayer = { drawingView?.duplicateActiveLayer() },
                     onDeleteLayer = { drawingView?.deleteActiveLayer() },
-                    onMoveLayerUp = { drawingView?.moveActiveLayer(true) },
-                    onMoveLayerDown = { drawingView?.moveActiveLayer(false) },
+                    onMoveLayerUp = {
+                        val id = layerModels.firstOrNull { it.isActive }?.id.orEmpty()
+                        drawingView?.moveActiveLayer(true)
+                        tutorialSession?.observe(StudioTutorialEvent.LayerReordered(id, true))
+                    },
+                    onMoveLayerDown = {
+                        val id = layerModels.firstOrNull { it.isActive }?.id.orEmpty()
+                        drawingView?.moveActiveLayer(false)
+                        tutorialSession?.observe(StudioTutorialEvent.LayerReordered(id, true))
+                    },
                     onClearLayer = { drawingView?.clearActiveLayer() },
                     onRenameLayer = {
                         renameLayerText = layerModels.firstOrNull { it.isActive }?.name.orEmpty()
@@ -1007,6 +1095,11 @@ fun EditorScreen(
             }
         }
         }
+    }
+    }
+    tutorialSession?.let { session ->
+        EditorTutorialOverlay(session, tutorialFocus, onTutorialFinish, onTutorialExit)
+    }
     }
 
     if (brushLibraryOpen) {
@@ -1172,8 +1265,8 @@ private fun EditorTopBar(
                     )
                 }
             }
-            TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", onUndo)
-            TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", onRedo)
+            TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", "undo", onUndo)
+            TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", "redo", onRedo)
             Spacer(Modifier.width(6.dp))
             Surface(
                 color = StudioPalette.SurfaceRaised,
@@ -1197,7 +1290,7 @@ private fun EditorTopBar(
                             Icon(Icons.AutoMirrored.Outlined.RotateRight, "Rotar a la derecha", tint = StudioPalette.TextMuted)
                         }
                     }
-                    IconButton(onClick = onResetView, modifier = Modifier.size(38.dp)) {
+                    IconButton(onClick = onResetView, modifier = Modifier.size(38.dp).editorTutorialAnchor("view_reset")) {
                         Icon(Icons.Outlined.CenterFocusStrong, "Restablecer vista", tint = StudioPalette.TextMuted)
                     }
                 }
@@ -1211,9 +1304,10 @@ private fun EditorTopBar(
                 }
                 Spacer(Modifier.width(10.dp))
             }
-            TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", onToggleZen)
+            TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", null, onToggleZen)
             Button(
                 onClick = onExport,
+                modifier = Modifier.editorTutorialAnchor("export_png"),
                 colors = ButtonDefaults.buttonColors(containerColor = StudioPalette.Accent),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = if (compact) 10.dp else 14.dp, vertical = 9.dp),
@@ -1225,7 +1319,7 @@ private fun EditorTopBar(
                 }
             }
             Box {
-                IconButton(onClick = { menuExpanded = true }) {
+                IconButton(onClick = { menuExpanded = true }, modifier = Modifier.editorTutorialAnchor("more_menu")) {
                     Icon(Icons.Outlined.MoreHoriz, "Más opciones", tint = StudioPalette.TextMuted)
                 }
                 DropdownMenu(
@@ -1321,8 +1415,8 @@ private fun EditorTopBar(
 }
 
 @Composable
-private fun TopIconButton(icon: ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(42.dp)) {
+private fun TopIconButton(icon: ImageVector, description: String, anchorId: String?, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(42.dp).let { if (anchorId != null) it.editorTutorialAnchor(anchorId) else it }) {
         Icon(icon, description, tint = StudioPalette.TextMuted, modifier = Modifier.size(21.dp))
     }
 }
@@ -1369,6 +1463,19 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
+            .editorTutorialAnchor(
+                when (spec.tool) {
+                    DrawingTool.BRUSH -> "tool_brush"
+                    DrawingTool.ERASER -> "tool_eraser"
+                    DrawingTool.EYEDROPPER -> "tool_eyedropper"
+                    DrawingTool.SELECT_RECTANGLE -> "tool_select_rectangle"
+                    DrawingTool.TRANSFORM -> "tool_transform"
+                    DrawingTool.RECTANGLE -> "tool_rectangle"
+                    DrawingTool.FILL -> "tool_fill"
+                    DrawingTool.GRADIENT -> "tool_gradient"
+                    else -> "tool_${spec.tool.name.lowercase(Locale.ROOT)}"
+                },
+            )
             .background(if (selected) StudioPalette.Accent else Color.Transparent, RoundedCornerShape(11.dp))
             .semantics {
                 this.selected = selected
@@ -1397,6 +1504,7 @@ private fun QuickDial(
     color: Color? = null,
 ) {
     Surface(
+        modifier = Modifier.editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
         color = Color(0xEA171A1F),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -1566,6 +1674,8 @@ private fun RightDock(
     onGroupOpacity: (String, Float) -> Unit,
     onAddMask: () -> Unit,
     onEditMask: (String, Boolean) -> Unit,
+    onHideWithMask: (String) -> Unit,
+    onRevealWithMask: (String) -> Unit,
     onToggleMask: (String) -> Unit,
     onDeleteMask: () -> Unit,
     onAddLayer: () -> Unit,
@@ -1635,6 +1745,8 @@ private fun RightDock(
                 onGroupOpacity = onGroupOpacity,
                 onAddMask = onAddMask,
                 onEditMask = onEditMask,
+                onHideWithMask = onHideWithMask,
+                onRevealWithMask = onRevealWithMask,
                 onToggleMask = onToggleMask,
                 onDeleteMask = onDeleteMask,
                 onAdd = onAddLayer,
@@ -1660,6 +1772,13 @@ private fun DockTabButton(
     Row(
         modifier = modifier
             .fillMaxHeight()
+            .editorTutorialAnchor(
+                when (label) {
+                    "Pinceles" -> "dock_brushes"
+                    "Color" -> "dock_color"
+                    else -> "dock_layers"
+                },
+            )
             .background(if (selected) StudioPalette.SurfaceHover else Color.Transparent, RoundedCornerShape(9.dp))
             .semantics {
                 this.selected = selected
@@ -2957,6 +3076,8 @@ private fun LayersDock(
     onGroupOpacity: (String, Float) -> Unit,
     onAddMask: () -> Unit,
     onEditMask: (String, Boolean) -> Unit,
+    onHideWithMask: (String) -> Unit,
+    onRevealWithMask: (String) -> Unit,
     onToggleMask: (String) -> Unit,
     onDeleteMask: () -> Unit,
     onAdd: () -> Unit,
@@ -2987,7 +3108,7 @@ private fun LayersDock(
                     )
                 }
                 IconButton(onClick = onCreateGroup) { Icon(Icons.Outlined.Layers, "Crear grupo", tint = StudioPalette.TextMuted) }
-                IconButton(onClick = onAdd) { Icon(Icons.Outlined.Add, "Añadir capa", tint = StudioPalette.TextMuted) }
+                IconButton(onClick = onAdd, modifier = Modifier.editorTutorialAnchor("layer_add")) { Icon(Icons.Outlined.Add, "Añadir capa", tint = StudioPalette.TextMuted) }
             }
             if (layers.size >= 6) {
                 Spacer(Modifier.height(10.dp))
@@ -3055,24 +3176,64 @@ private fun LayersDock(
                 }
                 Spacer(Modifier.height(8.dp))
                 if (active.hasMask) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = StudioPalette.AccentSoft,
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Accent),
+                    ) {
+                        Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                            Text("Ocultar sin borrar", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "La capa original queda intacta. Usa Pincel para ocultar y Borrador para recuperar.",
+                                color = StudioPalette.Text,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = { onHideWithMask(active.id) }, modifier = Modifier.weight(1f)) {
+                                    Icon(Icons.Outlined.Brush, null, modifier = Modifier.size(16.dp))
+                                    Text(" Ocultar")
+                                }
+                                TextButton(onClick = { onRevealWithMask(active.id) }, modifier = Modifier.weight(1f)) {
+                                    Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(16.dp))
+                                    Text(" Recuperar")
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         LayerToggle(
-                            label = if (active.editingMask) "Editando máscara" else "Editar máscara",
+                            label = if (active.editingMask) "Editando ocultación" else "Editar ocultación",
                             checked = active.editingMask,
                             modifier = Modifier.weight(1f),
                         ) { onEditMask(active.id, it) }
                         LayerToggle(
-                            label = if (active.maskEnabled) "Máscara activa" else "Máscara oculta",
+                            label = if (active.maskEnabled) "Efecto visible" else "Mostrar original",
                             checked = active.maskEnabled,
                             modifier = Modifier.weight(1f),
                         ) { onToggleMask(active.id) }
                     }
-                    TextButton(onClick = onDeleteMask) { Text("Eliminar máscara") }
+                    TextButton(onClick = onDeleteMask) { Text("Quitar ocultación") }
                 } else {
-                    TextButton(onClick = onAddMask) { Text("Añadir máscara raster") }
+                    Surface(
+                        modifier = Modifier.fillMaxWidth().editorTutorialAnchor("mask_add").clickable(onClick = onAddMask),
+                        color = StudioPalette.SurfaceRaised,
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+                    ) {
+                        Column(Modifier.padding(11.dp)) {
+                            Text("Ocultar sin borrar", color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "Crea una máscara para esconder partes y recuperarlas después, sin dañar esta capa.",
+                                color = StudioPalette.TextMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                 }
                 if (activeGroup != null) {
                     SettingSlider(
@@ -3161,13 +3322,13 @@ private fun LayersDock(
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            LayerAction(Icons.Outlined.Add, "Añadir", onAdd)
-            LayerAction(Icons.Outlined.ContentCopy, "Duplicar", onDuplicate)
-            LayerAction(Icons.Outlined.MoreHoriz, "Renombrar", onRename)
-            LayerAction(Icons.Outlined.ArrowUpward, "Subir", onMoveUp)
-            LayerAction(Icons.Outlined.ArrowDownward, "Bajar", onMoveDown)
-            LayerAction(Icons.Outlined.Remove, "Limpiar", onClear)
-            LayerAction(Icons.Outlined.Delete, "Eliminar", onDelete)
+            LayerAction(Icons.Outlined.Add, "Añadir", "layer_add", onAdd)
+            LayerAction(Icons.Outlined.ContentCopy, "Duplicar", onClick = onDuplicate)
+            LayerAction(Icons.Outlined.MoreHoriz, "Renombrar", onClick = onRename)
+            LayerAction(Icons.Outlined.ArrowUpward, "Subir", "layer_up", onMoveUp)
+            LayerAction(Icons.Outlined.ArrowDownward, "Bajar", "layer_down", onMoveDown)
+            LayerAction(Icons.Outlined.Remove, "Limpiar", onClick = onClear)
+            LayerAction(Icons.Outlined.Delete, "Eliminar", onClick = onDelete)
         }
     }
 }
@@ -3305,7 +3466,10 @@ private fun LayerRow(
                     modifier = Modifier.size(17.dp),
                 )
             }
-            IconButton(onClick = { onToggleVisibility(layer.id) }, modifier = Modifier.size(34.dp)) {
+            IconButton(
+                onClick = { onToggleVisibility(layer.id) },
+                modifier = Modifier.size(34.dp).let { if (layer.isActive) it.editorTutorialAnchor("layer_visibility") else it },
+            ) {
                 Icon(
                     if (layer.visible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
                     if (layer.visible) "Ocultar ${layer.name}" else "Mostrar ${layer.name}",
@@ -3339,8 +3503,8 @@ private fun LayerRow(
 }
 
 @Composable
-private fun LayerAction(icon: ImageVector, description: String, onClick: () -> Unit) {
-    IconButton(onClick = onClick, modifier = Modifier.size(40.dp)) {
+private fun LayerAction(icon: ImageVector, description: String, anchorId: String? = null, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(40.dp).let { if (anchorId != null) it.editorTutorialAnchor(anchorId) else it }) {
         Icon(icon, description, tint = StudioPalette.TextMuted, modifier = Modifier.size(19.dp))
     }
 }

@@ -1,6 +1,6 @@
 # Tutorial interactivo integrado · Canvas Studio 2.4.0
 
-Fecha de certificación: 2026-08-04
+Fecha de certificación: 2026-08-09
 
 Dispositivo: Samsung Galaxy Tab S8 (`SM-X700`)
 
@@ -77,16 +77,20 @@ Comandos Gradle aprobados:
 
 Resultados en la Tab S8:
 
-- `EditorTutorialIntegrationTest`: 9/9;
-- suite instrumentada completa: 116/116;
-- duración completa: `808,15 s`;
-- sesión continua real: diez minutos;
+- `EditorTutorialIntegrationTest`: 18/18;
+- `EditorTutorialUiTest`: 3/3;
+- `StudioTutorialStateTest`: 10/10;
+- paquete enfocado de tutorial, máscara y Quick Access: 41/41;
+- suite instrumentada completa: 133/133 en 34/34 clases;
+- duración completa: `307,2 s`;
 - proceso ADB: código de salida `0`;
 - fallos del tutorial o máscaras: `0`.
 
 La suite completa también cubrió 500 trazos largos, 200 trazos gruesos, cruce de cuatro tiles, historial escalable, máscaras y el backend Vulkan experimental.
 
-Log preservado: [`test-results/tutorial-editor-full-suite-tab-s8-2.4.txt`](test-results/tutorial-editor-full-suite-tab-s8-2.4.txt).
+La sesión continua de diez minutos está aislada en `VulkanEnduranceTest`, excluida de forma predeterminada mediante `LongRunningTest` y disponible únicamente con `-IncludeEndurance`. No se contabiliza como parte de esta certificación cotidiana.
+
+Evidencia actual: [`test-results/premium-ux-tab-s8-2026-08-09.md`](test-results/premium-ux-tab-s8-2026-08-09.md).
 
 ## Alcance de la revisión manual
 

@@ -37,6 +37,10 @@ El APK está firmado con un certificado RSA de 4096 bits (`CN=Canvas Studio, OU=
 - código de salida ADB: `0`;
 - enlaces Markdown locales: verificados.
 
+Esta tabla conserva la evidencia exacta de la release publicada. El código posterior dispone de una
+certificación normal más reciente (`133/133`, sin endurance fija) en
+[`test-results/premium-ux-tab-s8-2026-08-09.md`](test-results/premium-ux-tab-s8-2026-08-09.md).
+
 ## Alcance conocido
 
 - la interfaz está destinada exclusivamente a tablets;

@@ -10,20 +10,20 @@ enum class StudioTutorialModule(
     val objective: String,
     val lessonVersion: Int = 2,
 ) {
-    NAVIGATION("Navegacion del lienzo", "Haz zoom, desplaza, rota y restablece la vista."),
-    BRUSH_PEN("Pincel y S Pen", "Compara presion suave y fuerte; observa presion e inclinacion."),
-    ERASER("Borrador", "Borra una parte visible de la figura y recuperala."),
-    COLOR_PICKER("Color y cuentagotas", "Muestrea un color y usalo en un trazo."),
-    LAYERS("Capas", "Crea, dibuja, oculta, muestra y ordena una capa temporal."),
-    MASKS("Ocultar sin borrar", "Esconde y recupera partes de una figura manteniendo intacta la capa original."),
-    SELECTION("Seleccion", "Crea una seleccion con area suficiente y observa su contorno."),
-    TRANSFORMATION("Transformacion", "Previsualiza y confirma un cambio geometrico real."),
+    NAVIGATION("Navegación del lienzo", "Haz zoom, desplaza, rota y restablece la vista."),
+    BRUSH_PEN("Pincel y S Pen", "Compara presión suave y fuerte; observa presión e inclinación."),
+    ERASER("Borrador", "Borra una parte visible de la figura y recupérala."),
+    COLOR_PICKER("Color y cuentagotas", "Muestrea un color y úsalo en un trazo."),
+    LAYERS("Capas y molde inferior", "Crea, dibuja, oculta, usa una capa inferior como molde y ordena una capa temporal.", lessonVersion = 3),
+    MASKS("Ocultar sin borrar", "Esconde y recupera partes de una figura manteniendo intacta la capa original.", lessonVersion = 3),
+    SELECTION("Selección", "Crea una selección con área suficiente y observa su contorno."),
+    TRANSFORMATION("Transformación", "Previsualiza y confirma un cambio geométrico real."),
     SHAPES_FILL("Formas, linea y relleno", "Crea una figura y rellena su region interior."),
-    GRADIENT("Degradado", "Define inicio, direccion y longitud de un degradado visible."),
-    SYMMETRY_GUIDES("Simetria y guias", "Activa un eje y produce un trazo reflejado."),
-    UNDO_REDO("Undo y redo", "Deshaz un trazo identificable y restaura exactamente el mismo."),
-    SAVE_EXPORT("Guardado y exportacion", "Previsualiza una exportacion segura sin escribir archivos."),
-    BRUSH_CUSTOMIZATION("Personalizacion de pinceles", "Compara antes y despues de un parametro perceptible."),
+    GRADIENT("Degradado", "Define inicio, dirección y longitud de un degradado visible."),
+    SYMMETRY_GUIDES("Simetría y guías", "Activa un eje y produce un trazo reflejado."),
+    UNDO_REDO("Deshacer y rehacer", "Deshaz un trazo identificable y restaura exactamente el mismo."),
+    SAVE_EXPORT("Guardado y exportación", "Previsualiza una exportación segura sin escribir archivos."),
+    BRUSH_CUSTOMIZATION("Personalización de pinceles", "Compara antes y después de un parámetro perceptible."),
 }
 
 enum class TutorialTrack { QUICK_START, FULL_COURSE }
@@ -50,7 +50,7 @@ enum class TutorialEvidence {
     LIGHT_STROKE, HEAVY_STROKE, PRESSURE_VARIATION,
     ERASED_PIXELS, ERASURE_RESTORED,
     COLOR_SAMPLED, ACTIVE_COLOR_CHANGED, COLOR_STROKE,
-    LAYER_CREATED, LAYER_STROKE, LAYER_HIDDEN, LAYER_SHOWN, LAYER_REORDERED,
+    LAYER_CREATED, LAYER_STROKE, LAYER_HIDDEN, LAYER_SHOWN, LAYER_CLIPPING_ENABLED, LAYER_REORDERED,
     MASK_CREATED, MASK_CHANGED, MASK_RESTORED,
     SELECTION_VALID,
     TRANSFORM_PREVIEW, TRANSFORM_COMMITTED,
@@ -83,6 +83,7 @@ sealed interface StudioTutorialEvent {
     data class LayerCreated(val layerId: String) : StudioTutorialEvent
     data class LayerStrokeCommitted(val layerId: String, val lengthPx: Float) : StudioTutorialEvent
     data class LayerVisibilityChanged(val layerId: String, val visible: Boolean, val canvasChanged: Boolean) : StudioTutorialEvent
+    data class LayerClippingChanged(val layerId: String, val enabled: Boolean) : StudioTutorialEvent
     data class LayerReordered(val layerId: String, val canvasChanged: Boolean) : StudioTutorialEvent
     data class MaskCreated(val layerId: String) : StudioTutorialEvent
     data class MaskContentChanged(val hiddenAreaPx: Float) : StudioTutorialEvent
@@ -251,6 +252,7 @@ private fun evidenceFor(state: StudioTutorialState, event: StudioTutorialEvent):
     is StudioTutorialEvent.LayerCreated -> if (event.layerId.isNotBlank()) setOf(TutorialEvidence.LAYER_CREATED) else emptySet()
     is StudioTutorialEvent.LayerStrokeCommitted -> if (event.lengthPx >= 48f && TutorialEvidence.LAYER_CREATED in state.evidence) setOf(TutorialEvidence.LAYER_STROKE) else emptySet()
     is StudioTutorialEvent.LayerVisibilityChanged -> if (event.canvasChanged && TutorialEvidence.LAYER_STROKE in state.evidence) setOf(if (event.visible) TutorialEvidence.LAYER_SHOWN else TutorialEvidence.LAYER_HIDDEN) else emptySet()
+    is StudioTutorialEvent.LayerClippingChanged -> if (event.enabled && TutorialEvidence.LAYER_CREATED in state.evidence) setOf(TutorialEvidence.LAYER_CLIPPING_ENABLED) else emptySet()
     is StudioTutorialEvent.LayerReordered -> if (event.canvasChanged && TutorialEvidence.LAYER_CREATED in state.evidence) setOf(TutorialEvidence.LAYER_REORDERED) else emptySet()
     is StudioTutorialEvent.MaskCreated -> if (event.layerId.isNotBlank()) setOf(TutorialEvidence.MASK_CREATED) else emptySet()
     is StudioTutorialEvent.MaskContentChanged -> if (event.hiddenAreaPx >= 256f && TutorialEvidence.MASK_CREATED in state.evidence) setOf(TutorialEvidence.MASK_CHANGED) else emptySet()
@@ -268,9 +270,14 @@ private fun evidenceFor(state: StudioTutorialState, event: StudioTutorialEvent):
     is StudioTutorialEvent.RedoPerformed -> if (event.visualRestored && TutorialEvidence.UNDO_VISUAL_CHANGE in state.evidence) setOf(TutorialEvidence.REDO_VISUAL_RESTORE) else emptySet()
     is StudioTutorialEvent.ExportFormatSelected -> if (event.format in setOf("PNG", "Canvas Studio")) setOf(TutorialEvidence.EXPORT_FORMAT_SELECTED) else emptySet()
     is StudioTutorialEvent.ExportPreviewGenerated -> if (event.width > 0 && event.height > 0 && TutorialEvidence.EXPORT_FORMAT_SELECTED in state.evidence) setOf(TutorialEvidence.EXPORT_PREVIEW_VISIBLE) else emptySet()
-    is StudioTutorialEvent.BrushParameterChanged -> if (abs(event.after - event.before) >= .15f) setOf(TutorialEvidence.BRUSH_PARAMETER_CHANGED) else emptySet()
+    is StudioTutorialEvent.BrushParameterChanged -> if (isPerceptibleParameterChange(event.before, event.after)) setOf(TutorialEvidence.BRUSH_PARAMETER_CHANGED) else emptySet()
     is StudioTutorialEvent.BrushComparisonCommitted -> if (event.differenceScore >= .15f && TutorialEvidence.BRUSH_PARAMETER_CHANGED in state.evidence) setOf(TutorialEvidence.BRUSH_BEFORE_AFTER) else emptySet()
     }
+}
+
+internal fun isPerceptibleParameterChange(before: Float, after: Float): Boolean {
+    val baseline = abs(before).coerceAtLeast(.01f)
+    return abs(after - before) / baseline >= .15f
 }
 
 private fun eventModule(event: StudioTutorialEvent): StudioTutorialModule = when (event) {
@@ -278,7 +285,7 @@ private fun eventModule(event: StudioTutorialEvent): StudioTutorialModule = when
     is StudioTutorialEvent.StrokeCommitted -> if (event.eraser) StudioTutorialModule.ERASER else StudioTutorialModule.BRUSH_PEN
     is StudioTutorialEvent.ErasureRestored -> StudioTutorialModule.ERASER
     is StudioTutorialEvent.ColorSampled, is StudioTutorialEvent.StrokeWithActiveColor -> StudioTutorialModule.COLOR_PICKER
-    is StudioTutorialEvent.LayerCreated, is StudioTutorialEvent.LayerStrokeCommitted, is StudioTutorialEvent.LayerVisibilityChanged, is StudioTutorialEvent.LayerReordered -> StudioTutorialModule.LAYERS
+    is StudioTutorialEvent.LayerCreated, is StudioTutorialEvent.LayerStrokeCommitted, is StudioTutorialEvent.LayerVisibilityChanged, is StudioTutorialEvent.LayerClippingChanged, is StudioTutorialEvent.LayerReordered -> StudioTutorialModule.LAYERS
     is StudioTutorialEvent.MaskCreated, is StudioTutorialEvent.MaskContentChanged, is StudioTutorialEvent.MaskContentRestored -> StudioTutorialModule.MASKS
     is StudioTutorialEvent.SelectionCreated -> StudioTutorialModule.SELECTION
     is StudioTutorialEvent.TransformPreviewChanged, is StudioTutorialEvent.TransformCommitted -> StudioTutorialModule.TRANSFORMATION
@@ -302,7 +309,7 @@ fun requiredEvidence(module: StudioTutorialModule): Set<TutorialEvidence> = when
     StudioTutorialModule.BRUSH_PEN -> setOf(TutorialEvidence.LIGHT_STROKE, TutorialEvidence.HEAVY_STROKE, TutorialEvidence.PRESSURE_VARIATION)
     StudioTutorialModule.ERASER -> setOf(TutorialEvidence.ERASED_PIXELS, TutorialEvidence.ERASURE_RESTORED)
     StudioTutorialModule.COLOR_PICKER -> setOf(TutorialEvidence.COLOR_SAMPLED, TutorialEvidence.ACTIVE_COLOR_CHANGED, TutorialEvidence.COLOR_STROKE)
-    StudioTutorialModule.LAYERS -> setOf(TutorialEvidence.LAYER_CREATED, TutorialEvidence.LAYER_STROKE, TutorialEvidence.LAYER_HIDDEN, TutorialEvidence.LAYER_SHOWN, TutorialEvidence.LAYER_REORDERED)
+    StudioTutorialModule.LAYERS -> setOf(TutorialEvidence.LAYER_CREATED, TutorialEvidence.LAYER_STROKE, TutorialEvidence.LAYER_HIDDEN, TutorialEvidence.LAYER_SHOWN, TutorialEvidence.LAYER_CLIPPING_ENABLED, TutorialEvidence.LAYER_REORDERED)
     StudioTutorialModule.MASKS -> setOf(TutorialEvidence.MASK_CREATED, TutorialEvidence.MASK_CHANGED, TutorialEvidence.MASK_RESTORED)
     StudioTutorialModule.SELECTION -> setOf(TutorialEvidence.SELECTION_VALID)
     StudioTutorialModule.TRANSFORMATION -> setOf(TutorialEvidence.TRANSFORM_PREVIEW, TutorialEvidence.TRANSFORM_COMMITTED)
@@ -316,19 +323,19 @@ fun requiredEvidence(module: StudioTutorialModule): Set<TutorialEvidence> = when
 
 fun completionMessage(module: StudioTutorialModule): String = when (module) {
     StudioTutorialModule.NAVIGATION -> "Vista transformada y restablecida"
-    StudioTutorialModule.BRUSH_PEN -> "La presion cambio el grosor del trazo"
+    StudioTutorialModule.BRUSH_PEN -> "La presión cambió el grosor del trazo"
     StudioTutorialModule.ERASER -> "Zona borrada y recuperada"
     StudioTutorialModule.COLOR_PICKER -> "Color muestreado y usado en un trazo"
     StudioTutorialModule.LAYERS -> "Capa creada, dibujada, reordenada y comprobada"
     StudioTutorialModule.MASKS -> "Ocultación aplicada sin modificar la figura original"
-    StudioTutorialModule.SELECTION -> "Seleccion valida creada"
-    StudioTutorialModule.TRANSFORMATION -> "Transformacion previsualizada y confirmada"
+    StudioTutorialModule.SELECTION -> "Selección válida creada"
+    StudioTutorialModule.TRANSFORMATION -> "Transformación previsualizada y confirmada"
     StudioTutorialModule.SHAPES_FILL -> "Figura creada y rellenada"
     StudioTutorialModule.GRADIENT -> "Degradado visible aplicado"
     StudioTutorialModule.SYMMETRY_GUIDES -> "Eje visible y trazo reflejado"
     StudioTutorialModule.UNDO_REDO -> "Trazo deshecho y restaurado"
-    StudioTutorialModule.SAVE_EXPORT -> "Vista previa de exportacion generada"
-    StudioTutorialModule.BRUSH_CUSTOMIZATION -> "Cambio del pincel comparado antes y despues"
+    StudioTutorialModule.SAVE_EXPORT -> "Vista previa de exportación generada"
+    StudioTutorialModule.BRUSH_CUSTOMIZATION -> "Cambio del pincel comparado antes y después"
 }
 
 internal object StudioTutorialProgressStore {

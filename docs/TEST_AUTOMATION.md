@@ -1,15 +1,43 @@
 # Automatización de pruebas en tablet
 
+## Runner instrumentado con estado observable
+
+La suite recomendada se ejecuta por clase para aislar bloqueos y publicar su estado en tiempo real:
+
+```powershell
+.\scripts\run-tablet-instrumentation.ps1 -Serial R52W404GGPK
+```
+
+Cada ejecución crea `build-logs/instrumentation-<fecha>/` con:
+
+- `state.json` para conocer la clase actual y su estado `START`, `RUNNING`, `PASS`, `FAIL` o `TIMEOUT`;
+- `events.log` con heartbeats y marcas de tiempo;
+- stdout y stderr independientes por clase;
+- `results.json` con duración y código de salida.
+
+El runner no interpreta `INSTRUMENTATION_CODE: -1` como error: AndroidJUnitRunner usa ese valor al finalizar correctamente. El éxito exige además el marcador `OK (...)` en la salida. La sesión fija de diez minutos está anotada con `LongRunningTest` y se excluye de la suite normal.
+
+Para ejecutarla de manera deliberada:
+
+```powershell
+.\scripts\run-tablet-instrumentation.ps1 -Serial R52W404GGPK `
+  -Classes com.orbyte.canvasstudio.drawing.VulkanEnduranceTest `
+  -IncludeEndurance -PerClassTimeoutMinutes 12
+```
+
+La última certificación normal en Galaxy Tab S8 obtuvo `133/133` pruebas y `34/34` clases en `307,2 s`, con código de salida `0`. Véase [`test-results/premium-ux-tab-s8-2026-08-09.md`](test-results/premium-ux-tab-s8-2026-08-09.md).
+
 ## Certificación de Vulkan, pinceles y tutorial
 
-La Fase 3 tiene un runner reproducible que compila, reinstala ambos APK, ejecuta las suites rápidas,
-la suite completa sin duplicar la sesión larga y los escenarios Vulkan de 200/500 trazos:
+El runner histórico de Fase 3 todavía permite compilar, reinstalar ambos APK y solicitar expresamente
+los escenarios Vulkan de 200/500 trazos junto con la sesión larga:
 
 ```powershell
 .\scripts\test-phase3.ps1 -Serial R52W404GGPK -IncludeTenMinute
 ```
 
-Todos los comandos, horas, conteos y códigos ADB se guardan en `test-logs/`.
+Todos los comandos, horas, conteos y códigos ADB de ese flujo se guardan en `test-logs/`. Para la
+certificación cotidiana debe preferirse `run-tablet-instrumentation.ps1`, que excluye endurance por defecto.
 
 ## Suite determinista
 
@@ -50,7 +78,7 @@ Cada ciclo rápido ejecuta al menos 40 pruebas. La suite cubre:
 - opcionalmente, 500 trazos largos de 180 px alternando cinco medios profesionales.
 - renderer Vulkan real, comparación A/B de tinta/grafito y fallback simulado;
 - tutorial modular con validación ordenada de acciones, pausa, reinicio y progreso local;
-- cargas Vulkan aisladas de 200 y 500 trazos y sesión continua de diez minutos.
+- cargas Vulkan aisladas de 200 y 500 trazos; la sesión continua de diez minutos se ejecuta únicamente como endurance opt-in.
 
 El script detecta dinámicamente el total de tests, exige un mínimo configurable y genera
 `build/reports/phase8-certification/latest.json`.

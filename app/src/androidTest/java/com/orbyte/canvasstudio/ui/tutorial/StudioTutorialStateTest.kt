@@ -50,6 +50,8 @@ class StudioTutorialStateTest {
         invalid.forEach { (module, event) ->
             assertFalse(module.name, reduceStudioTutorial(StudioTutorialState(current = module), StudioTutorialAction.Observe(event)).currentComplete)
         }
+        assertFalse(isPerceptibleParameterChange(100f, 110f))
+        assertTrue(isPerceptibleParameterChange(100f, 116f))
     }
 
     @Test fun layerMaskHistoryAndShapeSequencesAreStrictlyOrdered() {
@@ -113,9 +115,9 @@ class StudioTutorialStateTest {
             track = TutorialTrack.FULL_COURSE,
             current = StudioTutorialModule.MASKS,
             progressByModule = mapOf(
-                StudioTutorialModule.NAVIGATION to StudioModuleProgress(TutorialProgressStatus.COMPLETED, 4, 777L, 2),
-                StudioTutorialModule.MASKS to StudioModuleProgress(TutorialProgressStatus.IN_PROGRESS, 1, null, 2),
-                StudioTutorialModule.GRADIENT to StudioModuleProgress(TutorialProgressStatus.SKIPPED, 0, null, 2),
+                StudioTutorialModule.NAVIGATION to StudioModuleProgress(TutorialProgressStatus.COMPLETED, 4, 777L, StudioTutorialModule.NAVIGATION.lessonVersion),
+                StudioTutorialModule.MASKS to StudioModuleProgress(TutorialProgressStatus.IN_PROGRESS, 1, null, StudioTutorialModule.MASKS.lessonVersion),
+                StudioTutorialModule.GRADIENT to StudioModuleProgress(TutorialProgressStatus.SKIPPED, 0, null, StudioTutorialModule.GRADIENT.lessonVersion),
             ),
         )
         StudioTutorialProgressStore.save(preferences, expected)
@@ -156,6 +158,7 @@ class StudioTutorialStateTest {
         StudioTutorialModule.LAYERS -> listOf(
             StudioTutorialEvent.LayerCreated("layer"), StudioTutorialEvent.LayerStrokeCommitted("layer", 100f),
             StudioTutorialEvent.LayerVisibilityChanged("layer", false, true), StudioTutorialEvent.LayerVisibilityChanged("layer", true, true),
+            StudioTutorialEvent.LayerClippingChanged("layer", true),
             StudioTutorialEvent.LayerReordered("layer", true),
         )
         StudioTutorialModule.MASKS -> listOf(StudioTutorialEvent.MaskCreated("layer"), StudioTutorialEvent.MaskContentChanged(600f), StudioTutorialEvent.MaskContentRestored(400f))

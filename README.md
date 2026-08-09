@@ -4,12 +4,12 @@ Aplicación Android **local-first** de dibujo, pintura e ilustración digital, d
 
 Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
 
-> **Estado del proyecto:** Release 2.4.0 certificada para tablets
-> **Versión incluida en este repositorio:** `2.4.0`
+> **Estado del proyecto:** Release 2.5.0 certificada para tablets
+> **Versión incluida en este repositorio:** `2.5.0`
 > **Formato de documento actual:** v7  
 > **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
 
-Descarga verificable: [Canvas Studio 2.4.0](https://github.com/rck1996/CanvasStudio/releases/tag/v2.4.0).
+Descarga verificable: [Canvas Studio 2.5.0](https://github.com/rck1996/CanvasStudio/releases/tag/v2.5.0).
 
 ![Identidad visual de Canvas Studio](docs/canvas-studio-logo.png)
 
@@ -353,6 +353,10 @@ Operaciones disponibles:
 - modificar opacidad;
 - cambiar modo de fusión.
 
+El editor incluye una rueda de **Acceso rápido** de seis posiciones. Se abre manteniendo un dedo quieto sobre el lienzo y aparece centrada en ese punto; al deslizar y soltar se ejecuta directamente el sector elegido. La estrella discreta permanece como alternativa accesible. Cada posición puede reasignarse manteniéndola pulsada y existen perfiles **Dibujo**, **Color** y **Capas**; tanto el perfil como el gesto se configuran localmente. Las opciones disponibles incluyen biblioteca, cuentagotas, capa nueva, visibilidad, duplicado, pintar dentro, ocultación reversible y panel de capas.
+
+El panel de Capas prioriza la capa activa y adapta sus acciones en filas de ancho completo. El inspector se divide en **General**, **Molde** y **Ocultar**, por lo que la lista y los controles mantienen una jerarquía predecible aun con texto grande. Las capas molde muestran una conexión visual hacia la capa inferior; contenido y ocultación usan miniaturas emparejadas, y la miniatura de ocultación permite entrar o salir de su edición. Un asa dedicada permite reordenar manteniendo y arrastrando sin convertir toda la fila en un gesto ambiguo.
+
 ### Modos de fusión
 
 - Normal
@@ -374,9 +378,9 @@ La suite de modos todavía no pretende reproducir toda la precisión o variedad 
 
 Restringe el dibujo a los píxeles que ya contienen transparencia parcial o color en la capa activa.
 
-### Clipping
+### Usar la capa inferior como molde (clipping)
 
-Recorta la capa usando el alfa de la capa inferior. La composición también considera la máscara de la capa base.
+Hace que la capa activa solo sea visible donde la capa inferior ya tenga contenido. La interfaz lo explica como un molde para sombras, luces y color sin salirse; la composición también considera la ocultación reversible de la capa base.
 
 ### Grupos
 
@@ -392,13 +396,15 @@ Los grupos pueden anidarse y permiten:
 
 La opacidad se aplica a los miembros del grupo. Todavía no existe composición aislada de grupos.
 
-### Ocultar sin borrar (máscaras raster)
+### Ocultación reversible (máscaras raster)
 
-El panel presenta esta función por su resultado: **Ocultar sin borrar**. La capa original permanece intacta y puede recuperarse visualmente en cualquier momento. Técnicamente, cada capa puede tener una máscara raster independiente.
+El panel presenta esta función por su resultado: **Ocultar partes sin borrar**. La capa original permanece intacta y puede recuperarse visualmente en cualquier momento. La pestaña **Ocultar** enseña el flujo Crear → Esconder → Recuperar y permite comparar el resultado con el original. Técnicamente, cada capa puede tener una máscara raster independiente.
 
 - La máscara vacía deja visible toda la capa.
 - Dibujar con **Pincel** en modo máscara oculta contenido.
 - Dibujar con **Borrador** revela contenido.
+- Salir de la edición vuelve de forma explícita al contenido de la capa; también ocurre automáticamente al elegir Selección u otra herramienta incompatible.
+- La rueda, el acceso superior de Capas, la miniatura emparejada y el botón **Volver a pintar la capa** pueden alternar este modo.
 - La máscara puede activarse o desactivarse sin eliminarse.
 - Puede eliminarse sin destruir los píxeles originales de la capa.
 - Su historial se mantiene separado del historial de contenido durante la sesión.
@@ -412,10 +418,15 @@ El tutorial abre un documento temporal `2048 × 1536` dentro del editor principa
 
 - 14 lecciones guiadas por evidencia de dominio, no por simples pulsaciones;
 - foco calculado desde los límites reales de cada control;
-- tarjeta que cambia de posición para no tapar el objetivo y que puede minimizarse;
-- pistas y repetición de la lección actual;
+- tarjeta colocada por intersección geométrica para no tapar el objetivo, con coordenadas corregidas respecto de barras del sistema y opción de minimizar;
+- pistas contextuales de dos niveles, confirmación visible del resultado y repetición segura de la lección actual;
 - exportación simulada mediante preview segura, sin crear archivos durante el tutorial;
-- máscaras explicadas como **Ocultar** con Pincel y **Recuperar** con Borrador.
+- cada paso separa **Acción guiada** de **Comprueba** para explicar el resultado esperado;
+- el tutorial enseña el gesto que abre la rueda, practica sus acciones y después pasa al panel completo de capas;
+- molde inferior explicado por su resultado visual;
+- máscaras explicadas como **Ocultar** con Pincel y **Recuperar** con Borrador, sin lenguaje técnico sobre canales o colores de máscara.
+- limpieza centralizada entre lecciones: Ocultación se cierra antes de Selección, las selecciones antiguas no contaminan Formas y la simetría no permanece activa en lecciones posteriores;
+- si el usuario sale de Ocultación a mitad del ejercicio, la guía detecta el estado y muestra cómo reanudarlo.
 
 ---
 
@@ -1027,6 +1038,20 @@ La suite determinista recomendada no depende de coordenadas ni de reconocimiento
 .\scripts\test-raster-engine.ps1 -Iterations 20
 ```
 
+La instrumentación en una tablet conectada se ejecuta por clases, con heartbeat y estado JSON:
+
+```powershell
+.\scripts\run-tablet-instrumentation.ps1 -Serial R52W404GGPK
+```
+
+Cada clase produce logs independientes bajo `build-logs/instrumentation-*`; el estado actual se puede leer en `state.json`. La prueba continua de diez minutos está marcada como endurance y no forma parte de la suite normal. Solo se ejecuta cuando se solicita expresamente:
+
+```powershell
+.\scripts\run-tablet-instrumentation.ps1 -Serial R52W404GGPK `
+  -Classes com.orbyte.canvasstudio.drawing.VulkanEnduranceTest `
+  -IncludeEndurance -PerClassTimeoutMinutes 12
+```
+
 ### Instrumentación del renderizador
 
 Las builds `debug` exponen contadores locales, sin persistencia ni telemetría externa, para
@@ -1041,7 +1066,7 @@ La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy
 pincel, HB modificado con trazos largos, transición a navegación con dos dedos y
 exportación de un lienzo 8K.
 
-La certificación final de `2.4.0` ejecutó 116 pruebas instrumentadas en la misma Tab S8. Incluyó 500 trazos largos, 200 trazos gruesos, cruce de cuatro tiles, máscaras, historial indexado, Vulkan experimental y una sesión continua de diez minutos. El tutorial integrado añadió 9 regresiones específicas de foco, inicio limpio, eventos reales y lenguaje reversible de máscaras.
+La certificación más reciente ejecutó `133/133` pruebas instrumentadas, agrupadas en `34/34` clases, en la misma Tab S8. Incluyó 500 trazos largos, 200 trazos gruesos, cruce de cuatro tiles, máscaras, historial indexado y Vulkan experimental. Un paquete enfocado de `41/41` regresiones valida el tutorial real, el inicio limpio en `1/14`, la transición Ocultación → Selección, el gesto radial, la salida explícita de máscara y la colocación no bloqueante de la guía. La sesión continua de diez minutos se ejecuta por separado y solo bajo solicitud explícita, para no bloquear el ciclo cotidiano. La evidencia reproducible está en [`docs/test-results/premium-ux-tab-s8-2026-08-09.md`](docs/test-results/premium-ux-tab-s8-2026-08-09.md).
 
 ### Prueba de documentos
 
@@ -1226,13 +1251,14 @@ Comprueba:
 - tutorial interactivo de catorce módulos, accesible desde **Más opciones → Tutorial interactivo**;
 - 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
 
-### Integración final 2.4 — completada
+### Integración final 2.4 y mejoras posteriores
 
 - tutorial ejecutado dentro del editor principal con documento temporal no persistente;
 - foco contextual reposicionable y tarjeta minimizable que no bloquea controles laterales;
 - máscaras presentadas como **Ocultar sin borrar**, con acciones directas para ocultar y recuperar;
 - catálogo curado de 14 pinceles profesionales y 4 experimentales opcionales;
-- suite completa de 116 pruebas aprobada en Galaxy Tab S8, incluida una sesión continua de diez minutos.
+- release publicada certificada originalmente con 116 pruebas; el estado actual del repositorio supera una suite normal de `133/133` pruebas en Galaxy Tab S8;
+- sesión continua de diez minutos aislada como endurance opt-in, separada de los escenarios normales de 200 trazos gruesos y 500 trazos largos.
 
 La arquitectura busca una experiencia profesional comparable en tablet Android. No afirma
 compatibilidad binaria ni identidad exacta con el motor propietario o los recursos de Procreate.
@@ -1266,6 +1292,7 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | [`docs/PHASE_9_PROFESSIONAL_BRUSHES.md`](docs/PHASE_9_PROFESSIONAL_BRUSHES.md) | Motor 3.0, investigación, materiales y validación visual |
 | [`docs/PHASE_9_1_BRUSH_STUDIO_4.md`](docs/PHASE_9_1_BRUSH_STUDIO_4.md) | Dual Brush, dinámicas independientes, mezcla húmeda, tutorial y pruebas masivas |
 | [`docs/RELEASE_2.4.0.md`](docs/RELEASE_2.4.0.md) | Notas, artefactos, checksums y certificación de la release 2.4.0 |
+| [`docs/RELEASE_2.5.0.md`](docs/RELEASE_2.5.0.md) | Tutorial premium, Quick Access radial, capas/ocultación y certificación de la release 2.5.0 |
 | [`docs/PERFORMANCE_HOTFIX_1.5.1.md`](docs/PERFORMANCE_HOTFIX_1.5.1.md) | Primer hotfix de rendimiento |
 | [`docs/PERFORMANCE_HOTFIX_1.5.2.md`](docs/PERFORMANCE_HOTFIX_1.5.2.md) | Procesamiento de pinceles texturizados |
 | [`docs/CRASH_HOTFIX_1.5.3.md`](docs/CRASH_HOTFIX_1.5.3.md) | Corrección del cierre por desbordamiento |

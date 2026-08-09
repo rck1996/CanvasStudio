@@ -1,6 +1,6 @@
-# Feature matrix · 2.4.0
+# Feature matrix · 2.5.0
 
-| Área | Estado 2.4.0 | Evolución futura |
+| Área | Estado 2.5.0 | Evolución futura |
 |---|---|---|
 | Galería | Adaptativa, búsqueda, duplicado, eliminación, restauración local y semántica accesible | Colecciones y papelera |
 | Lienzos | Presets, personalizados, DPI, estimación de memoria y límite dinámico 12/26/40 Mpx | Presets del usuario |

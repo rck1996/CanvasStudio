@@ -12,8 +12,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -39,17 +44,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import com.orbyte.canvasstudio.drawing.DrawingInteractionEvent
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.model.StudioPalette
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 @Stable
 internal class EditorTutorialSession(
@@ -63,9 +74,19 @@ internal class EditorTutorialSession(
     var layersPanelActive by mutableStateOf(false)
     var brushesPanelActive by mutableStateOf(false)
     var selectionActive by mutableStateOf(false)
+    var quickMenuOpen by mutableStateOf(false)
+    var maskEditingActive by mutableStateOf(false)
     private var historyStrokeId: String? = null
 
-    val guide: EditorTutorialGuide get() = guideFor(state, activeTool, layersPanelActive, brushesPanelActive, selectionActive)
+    val guide: EditorTutorialGuide get() = guideFor(
+        state,
+        activeTool,
+        layersPanelActive,
+        brushesPanelActive,
+        selectionActive,
+        quickMenuOpen,
+        maskEditingActive,
+    )
 
     fun dispatch(action: StudioTutorialAction) {
         state = reduceStudioTutorial(state, action)
@@ -142,9 +163,78 @@ internal class EditorTutorialSession(
     }
 }
 
-internal data class EditorTutorialGuide(val target: String, val instruction: String)
+internal data class EditorTutorialGuide(
+    val target: String,
+    val instruction: String,
+    val expectedOutcome: String = expectedOutcomeFor(target),
+)
+
+private fun expectedOutcomeFor(target: String): String = when {
+    target == "quick_layer_add" -> "Verás una capa nueva seleccionada y lista para dibujar."
+    target == "quick_layer_visibility" -> "El contenido de esa capa cambia sin afectar las demás."
+    target == "quick_layer_mask" -> "Entrarás a Ocultación; la capa original seguirá intacta."
+    target == "quick_menu_trigger" -> "La rueda aparece sobre el lienzo y muestra seis acciones configurables."
+    target == "quick_menu_gesture" -> "La rueda aparece bajo tu dedo; puedes deslizar hacia una acción y soltar."
+    target == "layer_clipping" -> "La pintura de esta capa solo se verá dentro del contenido de la capa inferior."
+    target == "quick_access" -> "Tus acciones frecuentes quedan disponibles sin cambiar de panel."
+    target == "undo" -> "El último cambio visible desaparece."
+    target == "redo" -> "El mismo cambio vuelve exactamente a su posición."
+    target == "view_reset" -> "El lienzo vuelve centrado, derecho y al zoom inicial."
+    target == "export_png" -> "El tutorial valida una vista previa sin guardar archivos."
+    target.startsWith("tool_") -> "La herramienta elegida queda resaltada en la barra izquierda."
+    target.startsWith("dock_") -> "El panel solicitado aparece a la derecha sin salir del lienzo."
+    target == "canvas" -> "El resultado debe verse inmediatamente sobre el lienzo."
+    else -> "El cambio debe verse de inmediato y podrás deshacerlo si lo necesitas."
+}
 
 internal enum class TutorialCardPlacement { TOP_CENTER, BOTTOM_CENTER, TOP_START, BOTTOM_START }
+
+/**
+ * Places the instruction card close to the highlighted control without covering it.
+ * Coordinates are local to the tutorial overlay, which also fixes status/navigation inset drift.
+ */
+internal fun tutorialCardOffset(
+    target: Rect?,
+    viewport: IntSize,
+    card: IntSize,
+    margin: Float = 18f,
+): IntOffset {
+    if (viewport.width <= 0 || viewport.height <= 0 || card.width <= 0 || card.height <= 0) {
+        return IntOffset(margin.roundToInt(), margin.roundToInt())
+    }
+    val maxX = (viewport.width - card.width - margin).coerceAtLeast(margin).toFloat()
+    val maxY = (viewport.height - card.height - margin).coerceAtLeast(margin).toFloat()
+    fun clamp(point: Offset) = Offset(
+        point.x.coerceIn(margin, maxX),
+        point.y.coerceIn(margin, maxY),
+    )
+    if (target == null) return IntOffset(maxX.roundToInt(), margin.roundToInt())
+
+    val candidates = listOf(
+        Offset(target.left - card.width - margin, target.center.y - card.height / 2f),
+        Offset(target.right + margin, target.center.y - card.height / 2f),
+        Offset(target.center.x - card.width / 2f, target.top - card.height - margin),
+        Offset(target.center.x - card.width / 2f, target.bottom + margin),
+        Offset(maxX, margin),
+        Offset(margin, margin),
+        Offset(maxX, maxY),
+        Offset(margin, maxY),
+    ).map(::clamp).distinct()
+    val protectedTarget = Rect(
+        target.left - margin,
+        target.top - margin,
+        target.right + margin,
+        target.bottom + margin,
+    )
+    fun overlapArea(point: Offset): Float {
+        val candidate = Rect(point, androidx.compose.ui.geometry.Size(card.width.toFloat(), card.height.toFloat()))
+        val overlapWidth = (minOf(candidate.right, protectedTarget.right) - maxOf(candidate.left, protectedTarget.left)).coerceAtLeast(0f)
+        val overlapHeight = (minOf(candidate.bottom, protectedTarget.bottom) - maxOf(candidate.top, protectedTarget.top)).coerceAtLeast(0f)
+        return overlapWidth * overlapHeight
+    }
+    val chosen = candidates.minByOrNull(::overlapArea) ?: Offset(maxX, margin)
+    return IntOffset(chosen.x.roundToInt(), chosen.y.roundToInt())
+}
 
 internal fun tutorialCardPlacement(target: Rect?, width: Float, height: Float): TutorialCardPlacement {
     if (target == null || width <= 0f || height <= 0f) return TutorialCardPlacement.BOTTOM_CENTER
@@ -166,7 +256,47 @@ private fun TutorialCardPlacement.alignment(): Alignment = when (this) {
 }
 
 internal fun freshEditorTutorialState(saved: StudioTutorialState): StudioTutorialState =
-    StudioTutorialState(track = saved.track, current = StudioTutorialModule.NAVIGATION)
+    StudioTutorialState(track = TutorialTrack.FULL_COURSE, current = StudioTutorialModule.NAVIGATION)
+
+internal fun tutorialShouldExitMaskEditing(state: StudioTutorialState): Boolean =
+    state.current != StudioTutorialModule.MASKS || state.currentComplete
+
+internal data class TutorialRuntimePolicy(
+    val exitMaskEditing: Boolean,
+    val clearSelection: Boolean,
+    val resetSymmetry: Boolean,
+    val closeTransientUi: Boolean = true,
+)
+
+internal fun tutorialRuntimePolicy(state: StudioTutorialState): TutorialRuntimePolicy = TutorialRuntimePolicy(
+    exitMaskEditing = tutorialShouldExitMaskEditing(state),
+    clearSelection = state.current != StudioTutorialModule.TRANSFORMATION,
+    resetSymmetry = state.current != StudioTutorialModule.SYMMETRY_GUIDES,
+)
+
+internal fun contextualTutorialHint(
+    state: StudioTutorialState,
+    guide: EditorTutorialGuide,
+    level: Int,
+): String {
+    if (level <= 1) return "Busca el borde turquesa. ${guide.expectedOutcome}"
+    return when (state.current) {
+        StudioTutorialModule.NAVIGATION -> "Apoya dos dedos dentro del papel, no sobre la tarjeta. Puedes minimizar la guía mientras haces el gesto."
+        StudioTutorialModule.BRUSH_PEN -> "Usa el S Pen: empieza suave, aumenta la presión en el centro y termina suave. Haz un solo trazo largo."
+        StudioTutorialModule.ERASER -> "Borra una zona que tenga pintura visible. Después usa Deshacer, no vuelvas a pintarla manualmente."
+        StudioTutorialModule.COLOR_PICKER -> "Toca una zona de color distinta con el cuentagotas y luego vuelve a Pincel para comprobarla."
+        StudioTutorialModule.LAYERS -> "Sigue la rueda y luego el panel Capas. La capa temporal debe contener un trazo para que ocultar y ordenar tengan un resultado visible."
+        StudioTutorialModule.MASKS -> "Mientras diga Ocultando ahora, Pincel esconde y Borrador recupera. Toca Salir ocultación para volver a pintar la capa normal."
+        StudioTutorialModule.SELECTION -> "La ocultación anterior ya se cerró. Elige Selección rectangular y encierra una zona amplia del dibujo."
+        StudioTutorialModule.TRANSFORMATION -> "Con el contorno de selección visible, elige Transformar y arrastra dentro de la zona seleccionada."
+        StudioTutorialModule.SHAPES_FILL -> "Crea primero un rectángulo cerrado y grande; luego elige Relleno y toca claramente dentro de él."
+        StudioTutorialModule.GRADIENT -> "Arrastra de un extremo al otro de una zona amplia; una pulsación corta no alcanza el mínimo."
+        StudioTutorialModule.SYMMETRY_GUIDES -> "En Más opciones, pulsa Simetría hasta ver un eje. Luego dibuja a un solo lado."
+        StudioTutorialModule.UNDO_REDO -> "Dibuja una marca reconocible, deshaz una vez y reházala una vez."
+        StudioTutorialModule.SAVE_EXPORT -> "Exportar PNG solo crea una vista previa durante el tutorial; no modifica tus proyectos."
+        StudioTutorialModule.BRUSH_CUSTOMIZATION -> "Abre Pinceles, cambia Tamaño de forma evidente y dibuja un segundo trazo para comparar."
+    }
+}
 
 internal fun guideFor(
     state: StudioTutorialState,
@@ -174,19 +304,21 @@ internal fun guideFor(
     layersPanelActive: Boolean,
     brushesPanelActive: Boolean,
     selectionActive: Boolean = true,
+    quickMenuOpen: Boolean = true,
+    maskEditingActive: Boolean = true,
 ): EditorTutorialGuide {
     val evidence = state.evidence
     fun missing(item: TutorialEvidence) = item !in evidence
     return when (state.current) {
         StudioTutorialModule.NAVIGATION -> when {
-            missing(TutorialEvidence.ZOOMED) -> EditorTutorialGuide("canvas", "Pon dos dedos sobre el lienzo y separalos para hacer zoom.")
+            missing(TutorialEvidence.ZOOMED) -> EditorTutorialGuide("canvas", "Pon dos dedos sobre el lienzo y sepáralos para hacer zoom.")
             missing(TutorialEvidence.PANNED) -> EditorTutorialGuide("canvas", "Sin levantar los dos dedos, desplaza el lienzo.")
             missing(TutorialEvidence.ROTATED) -> EditorTutorialGuide("canvas", "Gira los dos dedos hasta inclinar el lienzo.")
             else -> EditorTutorialGuide("view_reset", "Pulsa Restablecer vista para volver al encuadre inicial.")
         }
         StudioTutorialModule.BRUSH_PEN -> if (activeTool != DrawingTool.BRUSH) {
             EditorTutorialGuide("tool_brush", "Selecciona el pincel real.")
-        } else EditorTutorialGuide("canvas", "Dibuja un trazo largo variando claramente la presion del S Pen.")
+        } else EditorTutorialGuide("canvas", "Dibuja un trazo largo variando claramente la presión del S Pen.")
         StudioTutorialModule.ERASER -> when {
             missing(TutorialEvidence.ERASED_PIXELS) && activeTool != DrawingTool.ERASER -> EditorTutorialGuide("tool_eraser", "Selecciona el borrador.")
             missing(TutorialEvidence.ERASED_PIXELS) -> EditorTutorialGuide("canvas", "Borra una parte visible del dibujo.")
@@ -199,46 +331,52 @@ internal fun guideFor(
             else -> EditorTutorialGuide("canvas", "Dibuja un trazo con el color que acabas de muestrear.")
         }
         StudioTutorialModule.LAYERS -> when {
-            !layersPanelActive -> EditorTutorialGuide("dock_layers", "Abre el panel Capas.")
-            missing(TutorialEvidence.LAYER_CREATED) -> EditorTutorialGuide("layer_add", "Crea una capa nueva con el boton +.")
+            missing(TutorialEvidence.LAYER_CREATED) && !quickMenuOpen -> EditorTutorialGuide("quick_menu_gesture", "Mantén un dedo quieto sobre la zona indicada para abrir la rueda. La estrella es el acceso alternativo.")
+            missing(TutorialEvidence.LAYER_CREATED) -> EditorTutorialGuide("quick_layer_add", "Crea una capa desde Acceso rápido, sin abandonar el lienzo.")
             missing(TutorialEvidence.LAYER_STROKE) -> EditorTutorialGuide("canvas", "Dibuja un trazo visible en la capa nueva.")
-            missing(TutorialEvidence.LAYER_HIDDEN) -> EditorTutorialGuide("layer_visibility", "Oculta la capa activa y observa el cambio.")
-            missing(TutorialEvidence.LAYER_SHOWN) -> EditorTutorialGuide("layer_visibility", "Vuelve a mostrar la capa.")
-            else -> EditorTutorialGuide("layer_down", "Baja la capa una posicion y observa el orden.")
+            missing(TutorialEvidence.LAYER_HIDDEN) && !quickMenuOpen -> EditorTutorialGuide("quick_menu_gesture", "Mantén un dedo sobre la zona indicada para volver a abrir la rueda.")
+            missing(TutorialEvidence.LAYER_HIDDEN) -> EditorTutorialGuide("quick_layer_visibility", "Oculta la capa activa desde Acceso rápido y observa el cambio.")
+            missing(TutorialEvidence.LAYER_SHOWN) && !quickMenuOpen -> EditorTutorialGuide("quick_menu_gesture", "Abre otra vez la rueda bajo tu dedo para recuperar la visibilidad.")
+            missing(TutorialEvidence.LAYER_SHOWN) -> EditorTutorialGuide("quick_layer_visibility", "Vuelve a mostrar la misma capa desde Acceso rápido.")
+            !layersPanelActive -> EditorTutorialGuide("dock_layers", "Abre Capas para ver el orden completo y sus ajustes.")
+            missing(TutorialEvidence.LAYER_CLIPPING_ENABLED) -> EditorTutorialGuide("layer_clipping", "Activa Molde inferior. Así esta capa solo pinta dentro de la capa que está debajo.")
+            else -> EditorTutorialGuide("layer_down", "Baja la capa una posición y observa el orden.")
         }
         StudioTutorialModule.MASKS -> when {
-            !layersPanelActive -> EditorTutorialGuide("dock_layers", "Abre el panel Capas.")
-            missing(TutorialEvidence.MASK_CREATED) -> EditorTutorialGuide("mask_add", "Pulsa Ocultar sin borrar. La imagen original quedará intacta.")
+            missing(TutorialEvidence.MASK_CREATED) && !quickMenuOpen -> EditorTutorialGuide("quick_menu_gesture", "Mantén un dedo quieto sobre la zona indicada. También puedes tocar la estrella.")
+            missing(TutorialEvidence.MASK_CREATED) -> EditorTutorialGuide("quick_layer_mask", "Pulsa Ocultar sin borrar en Acceso rápido. La imagen original quedará intacta.")
+            !maskEditingActive && !quickMenuOpen -> EditorTutorialGuide("quick_menu_gesture", "La ocultación está en pausa. Abre la rueda para volver a editarla sin borrar la capa.")
+            !maskEditingActive -> EditorTutorialGuide("quick_layer_mask", "Pulsa Editar ocultación para continuar exactamente donde estabas.")
             missing(TutorialEvidence.MASK_CHANGED) && activeTool != DrawingTool.BRUSH -> EditorTutorialGuide("tool_brush", "Elige Pincel: en este modo sirve para ocultar.")
             missing(TutorialEvidence.MASK_CHANGED) -> EditorTutorialGuide("canvas", "Pinta sobre una parte de la figura para ocultarla sin borrarla.")
             activeTool != DrawingTool.ERASER -> EditorTutorialGuide("tool_eraser", "Elige Borrador: en este modo sirve para recuperar.")
             else -> EditorTutorialGuide("canvas", "Pasa el borrador por la zona oculta para recuperarla.")
         }
         StudioTutorialModule.SELECTION -> if (activeTool != DrawingTool.SELECT_RECTANGLE) {
-            EditorTutorialGuide("tool_select_rectangle", "Selecciona la herramienta Seleccion rectangular.")
-        } else EditorTutorialGuide("canvas", "Arrastra un rectangulo amplio sobre el dibujo.")
+            EditorTutorialGuide("tool_select_rectangle", "Selecciona la herramienta Selección rectangular.")
+        } else EditorTutorialGuide("canvas", "Arrastra un rectángulo amplio sobre el dibujo.")
         StudioTutorialModule.TRANSFORMATION -> when {
             !selectionActive && activeTool != DrawingTool.SELECT_RECTANGLE -> EditorTutorialGuide("tool_select_rectangle", "Primero selecciona Seleccion rectangular.")
-            !selectionActive -> EditorTutorialGuide("canvas", "Crea una seleccion amplia sobre el dibujo.")
-            activeTool != DrawingTool.TRANSFORM -> EditorTutorialGuide("tool_transform", "Con la seleccion activa, elige Transformar.")
-            else -> EditorTutorialGuide("canvas", "Arrastra la seleccion; al soltar se confirmara el cambio real.")
+            !selectionActive -> EditorTutorialGuide("canvas", "Crea una selección amplia sobre el dibujo.")
+            activeTool != DrawingTool.TRANSFORM -> EditorTutorialGuide("tool_transform", "Con la selección activa, elige Transformar.")
+            else -> EditorTutorialGuide("canvas", "Arrastra la selección; al soltar se confirmará el cambio real.")
         }
         StudioTutorialModule.SHAPES_FILL -> when {
             missing(TutorialEvidence.SHAPE_CREATED) && activeTool != DrawingTool.RECTANGLE -> EditorTutorialGuide("tool_rectangle", "Selecciona Rectangulo.")
-            missing(TutorialEvidence.SHAPE_CREATED) -> EditorTutorialGuide("canvas", "Arrastra para crear un rectangulo grande.")
+            missing(TutorialEvidence.SHAPE_CREATED) -> EditorTutorialGuide("canvas", "Arrastra para crear un rectángulo grande.")
             activeTool != DrawingTool.FILL -> EditorTutorialGuide("tool_fill", "Selecciona Relleno.")
             else -> EditorTutorialGuide("canvas", "Toca el interior del rectangulo para rellenarlo.")
         }
         StudioTutorialModule.GRADIENT -> if (activeTool != DrawingTool.GRADIENT) {
             EditorTutorialGuide("tool_gradient", "Selecciona Degradado.")
-        } else EditorTutorialGuide("canvas", "Arrastra una linea larga para definir direccion y longitud.")
+        } else EditorTutorialGuide("canvas", "Arrastra una línea larga para definir dirección y longitud.")
         StudioTutorialModule.SYMMETRY_GUIDES -> when {
-            missing(TutorialEvidence.SYMMETRY_GUIDE_VISIBLE) -> EditorTutorialGuide("more_menu", "Abre Mas opciones y activa una simetria.")
+            missing(TutorialEvidence.SYMMETRY_GUIDE_VISIBLE) -> EditorTutorialGuide("more_menu", "Abre Más opciones y activa una simetría.")
             activeTool != DrawingTool.BRUSH -> EditorTutorialGuide("tool_brush", "Selecciona el pincel.")
             else -> EditorTutorialGuide("canvas", "Dibuja a un lado del eje y observa su copia reflejada.")
         }
         StudioTutorialModule.UNDO_REDO -> when {
-            missing(TutorialEvidence.HISTORY_STROKE) -> EditorTutorialGuide("canvas", "Dibuja un trazo largo y facil de reconocer.")
+            missing(TutorialEvidence.HISTORY_STROKE) -> EditorTutorialGuide("canvas", "Dibuja un trazo largo y fácil de reconocer.")
             missing(TutorialEvidence.UNDO_VISUAL_CHANGE) -> EditorTutorialGuide("undo", "Pulsa Deshacer y comprueba que desaparece.")
             else -> EditorTutorialGuide("redo", "Pulsa Rehacer y comprueba que vuelve igual.")
         }
@@ -261,8 +399,14 @@ internal fun EditorTutorialOverlay(
     val state = session.state
     val guide = session.guide
     var minimized by remember { mutableStateOf(false) }
+    var cardSize by remember { mutableStateOf(IntSize.Zero) }
     LaunchedEffect(guide.target, guide.instruction) { minimized = false }
-    BoxWithConstraints(Modifier.fillMaxSize().testTag("editor_tutorial_overlay")) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            .onGloballyPositioned { focusRegistry.updateOverlay(it.boundsInRoot()) }
+            .testTag("editor_tutorial_overlay"),
+    ) {
         TutorialFocusOverlay(focusRegistry, guide.target)
         val placement = tutorialCardPlacement(
             focusRegistry.target,
@@ -284,15 +428,27 @@ internal fun EditorTutorialOverlay(
             }
             return@BoxWithConstraints
         }
+        val cardOffset = tutorialCardOffset(
+            target = focusRegistry.target,
+            viewport = IntSize(constraints.maxWidth, constraints.maxHeight),
+            card = cardSize,
+        )
         Surface(
-            modifier = Modifier.align(placement.alignment()).padding(18.dp).widthIn(max = 680.dp)
+            modifier = Modifier
+                .offset { cardOffset }
+                .widthIn(max = 620.dp)
+                .heightIn(max = maxHeight - 36.dp)
+                .onGloballyPositioned { cardSize = it.size }
                 .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = guide.instruction }
                 .testTag("editor_tutorial_card"),
             color = Color(0xF21B2026),
             shape = RoundedCornerShape(18.dp),
             shadowElevation = 12.dp,
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                Modifier.padding(16.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("${state.modules.indexOf(state.current) + 1}/${state.modules.size} · ${state.current.title}", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
@@ -302,13 +458,47 @@ internal fun EditorTutorialOverlay(
                     IconButton(onClick = onExit) { Icon(Icons.Outlined.Close, "Salir del tutorial", tint = StudioPalette.TextMuted) }
                 }
                 LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
+                Text("Acción guiada", color = StudioPalette.Accent, style = MaterialTheme.typography.labelMedium)
                 Text(guide.instruction, color = StudioPalette.Text, style = MaterialTheme.typography.bodyLarge)
-                Text("${state.evidence.size}/${requiredEvidence(state.current).size} acciones verificadas", color = StudioPalette.Accent)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { session.dispatch(StudioTutorialAction.ShowHint) }) {
+                Surface(
+                    color = StudioPalette.SurfaceRaised,
+                    shape = RoundedCornerShape(11.dp),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                        Text("Comprueba", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+                        Text(guide.expectedOutcome, color = StudioPalette.Text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                val required = requiredEvidence(state.current)
+                val verified = required.count(state.evidence::contains)
+                Text("Resultados verificados: $verified/${required.size}", color = StudioPalette.Accent)
+                if (state.currentComplete) {
+                    Surface(color = StudioPalette.AccentSoft, shape = RoundedCornerShape(11.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.CheckCircle, null, tint = StudioPalette.Accent)
+                            Text(
+                                state.confirmation ?: completionMessage(state.current),
+                                modifier = Modifier.padding(start = 9.dp),
+                                color = StudioPalette.Text,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { session.dispatch(StudioTutorialAction.ShowHint) },
+                        modifier = Modifier.testTag("editor_tutorial_hint"),
+                    ) {
                         Icon(Icons.Outlined.Lightbulb, null); Text(" Pista")
                     }
-                    OutlinedButton(onClick = { session.dispatch(StudioTutorialAction.RestartModule(state.current)) }) {
+                    OutlinedButton(
+                        onClick = { session.dispatch(StudioTutorialAction.RestartModule(state.current)) },
+                        modifier = Modifier.testTag("editor_tutorial_restart"),
+                    ) {
                         Icon(Icons.Outlined.Refresh, null); Text(" Repetir")
                     }
                     Spacer(Modifier.weight(1f))
@@ -323,7 +513,7 @@ internal fun EditorTutorialOverlay(
                     }
                 }
                 if (state.hintLevel > 0) {
-                    Text(if (state.hintLevel == 1) nextHint(state.current) else recoveryHint(state.current), color = StudioPalette.TextMuted)
+                    Text(contextualTutorialHint(state, guide, state.hintLevel), color = StudioPalette.TextMuted)
                 }
             }
         }

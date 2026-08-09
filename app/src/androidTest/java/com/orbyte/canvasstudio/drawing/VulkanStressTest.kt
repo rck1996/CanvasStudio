@@ -11,8 +11,6 @@ import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class VulkanStressTest {
@@ -58,39 +56,6 @@ class VulkanStressTest {
         Log.i("CanvasStudioVulkanStress", "VULKAN_500 durationMs=$duration stats=${view.debugVulkanStats()} history=${view.debugPerformanceMetrics()}")
     }
 
-    @Test fun continuousTenMinuteSessionExercisesBackendSwitchViewHistoryAndSave() {
-        val view = onMain { configuredView("technical-ink", 24f).apply { debugPerformanceMetricsEnabled = true } }
-        val started = SystemClock.elapsedRealtime()
-        var strokes = 0
-        instrumentation.runOnMainSync {
-            while (SystemClock.elapsedRealtime() - started < TEN_MINUTES_MS) {
-                val y = 80f + (strokes % 15) * 55f
-                view.debugDrawStrokeForTest(line(80f, y, 1960f, y + (strokes % 7 - 3) * 11f, .65f, 0f))
-                strokes += 1
-                if (strokes % 20 == 0) {
-                    view.zoomBy(if ((strokes / 20) % 2 == 0) 1.04f else .96f)
-                    view.rotateBy(if ((strokes / 20) % 2 == 0) 2f else -2f)
-                }
-                if (strokes % 40 == 0) { view.undo(); view.redo() }
-                if (strokes % 80 == 0) {
-                    view.setRendererMode(RendererMode.CANVAS_BITMAP)
-                    view.debugDrawStrokeForTest(line(100f, 940f, 1900f, 940f, .6f, 0f))
-                    view.setRendererMode(RendererMode.VULKAN_EXPERIMENTAL)
-                }
-            }
-        }
-        val saved = CountDownLatch(1)
-        var saveSucceeded = false
-        onMain {
-            view.onProjectSaved = { success -> saveSucceeded = success; saved.countDown() }
-            view.saveProject("vulkan-ten-minute", "Vulkan 10 minute", 300)
-        }
-        assertTrue(saved.await(90, TimeUnit.SECONDS) && saveSucceeded)
-        assertTrue(onMain { DrawingView(context).loadProject("vulkan-ten-minute") })
-        assertTrue(strokes > 100)
-        Log.i("CanvasStudioVulkanStress", "TEN_MINUTES strokes=$strokes elapsedMs=${SystemClock.elapsedRealtime() - started} metrics=${view.debugPerformanceMetrics()} vulkan=${view.debugVulkanStats()}")
-    }
-
     private fun configuredView(presetId: String, size: Float): DrawingView = DrawingView(context).apply {
         configureDocument(2048, 1024)
         setRendererMode(RendererMode.VULKAN_EXPERIMENTAL)
@@ -110,5 +75,4 @@ class VulkanStressTest {
         return result!!.getOrThrow()
     }
 
-    private companion object { const val TEN_MINUTES_MS = 10L * 60L * 1000L }
 }

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.0
+
+- rueda contextual de seis accesos configurables bajo el punto de contacto, con gesto mantener/deslizar/soltar, estrella alternativa y perfiles Dibujo, Color y Capas;
+- panel de capas reorganizado con acciones adaptativas, inspector por pestañas y controles que no se cortan en tablets compactas;
+- relación visual entre capas molde y base, miniaturas emparejadas de contenido/ocultación y asa de reordenamiento por arrastre prolongado;
+- clipping presentado como **Usar la capa inferior como molde**, con explicación orientada a sombras, luces y color;
+- máscaras presentadas como **Ocultación reversible**, con flujo Esconder/Recuperar, vista del original y eliminación no destructiva;
+- tutorial único sobre el editor real: siempre 1/14, tarjeta que evita el control objetivo, foco sin desplazamiento por barras del sistema, feedback verificable y pistas contextuales;
+- salida explícita de Ocultación desde cuatro accesos y cierre automático antes de Selección; recuperación guiada si se abandona el modo a mitad de la lección;
+- limpieza de selección, simetría y UI transitoria entre módulos para impedir estados heredados;
+- estado de guardado sin duplicación sobre el lienzo; tamaño y opacidad permanecen despejados;
+- runner ADB por clases con heartbeat, timeout y estado JSON; 41 regresiones enfocadas aprobadas en Galaxy Tab S8, incluida la finalización de los 14 módulos mediante los eventos reales del editor.
+- sesión Vulkan continua reclasificada como `VulkanEnduranceTest` opt-in; la suite normal conserva los escenarios de 200 trazos gruesos y 500 trazos largos sin una espera fija de diez minutos.
+- certificación integral actualizada en Galaxy Tab S8: `133/133` pruebas, `34/34` clases, `0` fallos y código de salida `0`; evidencia y comandos preservados en `docs/test-results/premium-ux-tab-s8-2026-08-09.md`.
+
 ## 2.4.0
 
 - tutorial de 14 lecciones integrado en el editor real mediante un documento temporal que nunca se guarda;

@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,10 +27,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -59,6 +64,7 @@ import androidx.compose.material.icons.outlined.FormatColorFill
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.material.icons.outlined.Gradient
+import androidx.compose.material.icons.outlined.DragHandle
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Lock
@@ -85,6 +91,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -118,6 +125,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -131,6 +139,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -165,6 +174,18 @@ import com.orbyte.canvasstudio.ui.tutorial.StudioTutorialProgressStore
 import com.orbyte.canvasstudio.ui.tutorial.editorTutorialAnchor
 import com.orbyte.canvasstudio.ui.tutorial.freshEditorTutorialState
 import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
+import com.orbyte.canvasstudio.ui.tutorial.tutorialRuntimePolicy
+import com.orbyte.canvasstudio.ui.tutorial.tutorialShouldExitMaskEditing
+import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
+import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
+import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.defaultQuickAccessActions
+import com.orbyte.canvasstudio.ui.workspace.matchingQuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.normalizedQuickAccessActions
+import com.orbyte.canvasstudio.ui.workspace.quickAccessActionsFor
+import com.orbyte.canvasstudio.ui.workspace.quickAccessItems
+import com.orbyte.canvasstudio.ui.workspace.quickMenuTopLeft
+import com.orbyte.canvasstudio.ui.workspace.reassignQuickAccessAction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -177,6 +198,7 @@ import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.roundToInt
 
 private fun decodeBitmapForImport(
     context: android.content.Context,
@@ -324,8 +346,26 @@ fun EditorScreen(
     var layerGroups by remember { mutableStateOf<List<LayerGroupUiModel>>(emptyList()) }
     var changeTick by remember { mutableIntStateOf(0) }
     var saveLabel by remember { mutableStateOf(if (tutorialMode) "Sesión temporal" else "Guardado automático") }
-    var engineStatus by remember { mutableStateOf("Tiles 512 · preparando") }
     var zenMode by remember { mutableStateOf(false) }
+    val workspacePreferences = remember {
+        context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
+    }
+    var quickMenuOpen by remember { mutableStateOf(false) }
+    var quickMenuAnchor by remember { mutableStateOf<Offset?>(null) }
+    var quickMenuEditSlot by remember { mutableStateOf<Int?>(null) }
+    var quickMenuTouchHoldEnabled by remember {
+        mutableStateOf(workspacePreferences.getBoolean("quick_access_touch_hold", true))
+    }
+    var quickAccessActions by remember(tutorialMode) {
+        mutableStateOf(
+            if (tutorialMode) defaultQuickAccessActions
+            else normalizedQuickAccessActions(
+                workspacePreferences.getString("quick_access_actions", null)
+                    ?.split(',')
+                    .orEmpty(),
+            ),
+        )
+    }
     var zoomLabel by remember { mutableIntStateOf(100) }
     var rotationLabel by remember { mutableIntStateOf(0) }
     var gridVisible by remember { mutableStateOf(false) }
@@ -636,11 +676,99 @@ fun EditorScreen(
         }
     }
 
+    val activeLayer = layerModels.firstOrNull { it.isActive }
     tutorialSession?.also { session ->
         session.activeTool = selectedTool
         session.layersPanelActive = selectedDock == DockTab.LAYERS
         session.brushesPanelActive = selectedDock == DockTab.BRUSHES
         session.selectionActive = selectionActive
+        session.quickMenuOpen = quickMenuOpen
+        session.maskEditingActive = activeLayer?.editingMask ?: false
+    }
+    LaunchedEffect(
+        tutorialSession?.state?.current,
+        tutorialSession?.state?.attemptId,
+        drawingView,
+    ) {
+        val state = tutorialSession?.state ?: return@LaunchedEffect
+        val policy = tutorialRuntimePolicy(state)
+        if (policy.closeTransientUi) {
+            quickMenuOpen = false
+            brushLibraryOpen = false
+            quickMenuEditSlot = null
+            zenMode = false
+        }
+        if (policy.exitMaskEditing) drawingView?.finishMaskEditing()
+        if (policy.clearSelection) drawingView?.deselect()
+        if (policy.resetSymmetry) {
+            symmetryMode = 0
+            drawingView?.setVerticalSymmetry(false)
+            drawingView?.setRadialSymmetry(1)
+        }
+    }
+    LaunchedEffect(
+        tutorialSession?.state?.current,
+        tutorialSession?.state?.currentComplete,
+        selectedTool,
+        activeLayer?.editingMask,
+        drawingView,
+    ) {
+        val incompatibleTool = selectedTool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)
+        val tutorialFinishedMask = tutorialSession?.state?.let(::tutorialShouldExitMaskEditing) == true
+        if (activeLayer?.editingMask == true && (incompatibleTool || tutorialFinishedMask)) {
+            drawingView?.finishMaskEditing()
+            quickMenuOpen = false
+        }
+    }
+    val addLayerFromWorkspace: () -> Unit = {
+        val beforeCount = layerModels.size
+        drawingView?.addLayer()
+        drawingView?.post {
+            val created = layerModels.firstOrNull { it.isActive }
+            if (layerModels.size > beforeCount && created != null) {
+                tutorialSession?.observe(StudioTutorialEvent.LayerCreated(created.id))
+            }
+        }
+    }
+    val toggleActiveLayerVisibility: () -> Unit = {
+        activeLayer?.let { layer ->
+            drawingView?.toggleLayerVisibility(layer.id)
+            tutorialSession?.observe(StudioTutorialEvent.LayerVisibilityChanged(layer.id, !layer.visible, true))
+        }
+    }
+    val openActiveMaskWorkflow: () -> Unit = {
+        activeLayer?.let { layer ->
+            if (!layer.hasMask) {
+                drawingView?.addMaskToActiveLayer()
+                tutorialSession?.observe(StudioTutorialEvent.MaskCreated(layer.id))
+            } else {
+                drawingView?.setEditingLayerMask(layer.id, !layer.editingMask)
+            }
+            if (!layer.hasMask || !layer.editingMask) selectedTool = DrawingTool.BRUSH
+        }
+    }
+    val setLayerClippingFromWorkspace: (String, Boolean) -> Unit = { id, clipping ->
+        drawingView?.setLayerClipping(id, clipping)
+        tutorialSession?.observe(StudioTutorialEvent.LayerClippingChanged(id, clipping))
+    }
+    val performQuickAccessAction: (QuickAccessAction) -> Unit = { action ->
+        when (action) {
+            QuickAccessAction.BRUSH_LIBRARY -> brushLibraryOpen = true
+            QuickAccessAction.EYEDROPPER -> selectedTool = DrawingTool.EYEDROPPER
+            QuickAccessAction.ADD_LAYER -> addLayerFromWorkspace()
+            QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> toggleActiveLayerVisibility()
+            QuickAccessAction.DUPLICATE_LAYER -> drawingView?.duplicateActiveLayer()
+            QuickAccessAction.TOGGLE_ALPHA_LOCK -> activeLayer?.let {
+                drawingView?.setLayerAlphaLocked(it.id, !it.alphaLocked)
+            }
+            QuickAccessAction.MASK_WORKFLOW -> openActiveMaskWorkflow()
+            QuickAccessAction.OPEN_LAYERS -> {
+                zenMode = false
+                selectedDock = DockTab.LAYERS
+            }
+        }
+        quickMenuOpen = false
+        quickMenuAnchor = null
     }
     Box(Modifier.fillMaxSize()) {
     EditorTutorialFocusProvider(tutorialFocus, tutorialSession?.guide?.target) {
@@ -823,7 +951,6 @@ fun EditorScreen(
                             onProjectSaved = { success ->
                                 saveLabel = if (success) "Guardado" else "Error al guardar"
                             }
-                            onEngineStatusChanged = { engineStatus = it }
                             onEngineMessage = { message ->
                                 Toast.makeText(viewContext, message, Toast.LENGTH_LONG).show()
                             }
@@ -832,6 +959,14 @@ fun EditorScreen(
                                 if (!it) selectionFeatherPx = 0f
                             }
                             onInteraction = { tutorialSession?.observeDrawing(it) }
+                            onQuickMenuRequested = { x, y ->
+                                quickMenuAnchor = Offset(x, y)
+                                quickMenuOpen = true
+                            }
+                            onQuickMenuFlickSelected = { slot ->
+                                quickAccessActions.getOrNull(slot)?.let(performQuickAccessAction)
+                            }
+                            quickMenuTouchHoldEnabled = tutorialMode || quickMenuTouchHoldEnabled
                             setRendererMode(rendererMode)
                             setGridVisible(gridVisible)
                             setRulersVisible(rulersVisible)
@@ -876,9 +1011,67 @@ fun EditorScreen(
                         view.setGuideMode(guideMode)
                         view.setPerspectiveEditing(perspectiveEditing)
                         view.setRendererMode(rendererMode)
+                        view.onQuickMenuRequested = { x, y ->
+                            quickMenuAnchor = Offset(x, y)
+                            quickMenuOpen = true
+                        }
+                        view.onQuickMenuFlickSelected = { slot ->
+                            quickAccessActions.getOrNull(slot)?.let(performQuickAccessAction)
+                        }
+                        view.quickMenuTouchHoldEnabled = tutorialMode || quickMenuTouchHoldEnabled
                     },
                     modifier = Modifier.fillMaxSize().editorTutorialAnchor("canvas"),
                 )
+
+                if (tutorialSession?.guide?.target == "quick_menu_gesture") {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .size(150.dp)
+                            .editorTutorialAnchor("quick_menu_gesture")
+                            .semantics { contentDescription = "Zona para abrir Acceso rápido manteniendo un dedo" },
+                        color = StudioPalette.Accent.copy(alpha = .12f),
+                        shape = CircleShape,
+                        border = androidx.compose.foundation.BorderStroke(2.dp, StudioPalette.Accent),
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(Icons.Outlined.Gesture, null, tint = StudioPalette.Accent, modifier = Modifier.size(34.dp))
+                            Text("Mantén aquí", color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+                            Text("y desliza", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+
+                QuickMenuTrigger(
+                    onOpen = {
+                        quickMenuAnchor = null
+                        quickMenuOpen = true
+                    },
+                    modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
+                )
+
+                if (quickMenuOpen) {
+                    RadialQuickMenu(
+                        actions = quickAccessActions,
+                        activeLayer = activeLayer,
+                        selectedTool = selectedTool,
+                        anchor = quickMenuAnchor,
+                        onDismiss = {
+                            quickMenuOpen = false
+                            quickMenuAnchor = null
+                        },
+                        onAction = performQuickAccessAction,
+                        onEditSlot = { slot ->
+                            if (tutorialMode) {
+                                Toast.makeText(context, "Personaliza la rueda fuera del tutorial.", Toast.LENGTH_SHORT).show()
+                            } else quickMenuEditSlot = slot
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
 
                 if (BuildConfig.DEBUG && !zenMode) {
                     RendererDebugSelector(
@@ -894,7 +1087,7 @@ fun EditorScreen(
                                 ).show()
                             }
                         },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(14.dp),
+                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 82.dp, end = 14.dp),
                     )
                 }
 
@@ -973,10 +1166,9 @@ fun EditorScreen(
 
                 CanvasStatusBar(
                     document = document,
-                    saveLabel = saveLabel,
                     rotation = rotationLabel,
-                    engineStatus = engineStatus,
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+                    compact = compactWorkspace,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 14.dp),
                 )
             }
 
@@ -1044,19 +1236,16 @@ fun EditorScreen(
                     onLayerOpacity = { id, opacity -> drawingView?.setLayerOpacity(id, opacity) },
                     onLayerBlendMode = { id, mode -> drawingView?.setLayerBlendMode(id, mode) },
                     onLayerAlphaLock = { id, locked -> drawingView?.setLayerAlphaLocked(id, locked) },
-                    onLayerClipping = { id, clipping -> drawingView?.setLayerClipping(id, clipping) },
+                    onLayerClipping = setLayerClippingFromWorkspace,
                     onCreateGroup = { drawingView?.createGroupFromActiveLayer() },
                     onUngroupLayer = { drawingView?.ungroupActiveLayer() },
                     onToggleGroupVisibility = { drawingView?.toggleGroupVisibility(it) },
                     onToggleGroupCollapsed = { drawingView?.toggleGroupCollapsed(it) },
                     onGroupOpacity = { id, opacity -> drawingView?.setGroupOpacity(id, opacity) },
-                    onAddMask = {
-                        drawingView?.addMaskToActiveLayer()
-                        layerModels.firstOrNull { it.isActive }?.let { tutorialSession?.observe(StudioTutorialEvent.MaskCreated(it.id)) }
-                    },
+                    onAddMask = openActiveMaskWorkflow,
                     onEditMask = { id, editing ->
                         drawingView?.setEditingLayerMask(id, editing)
-                        if (editing) selectedTool = DrawingTool.BRUSH
+                        if (editing || selectedTool == DrawingTool.ERASER) selectedTool = DrawingTool.BRUSH
                     },
                     onHideWithMask = { id ->
                         drawingView?.setEditingLayerMask(id, true)
@@ -1068,12 +1257,7 @@ fun EditorScreen(
                     },
                     onToggleMask = { drawingView?.toggleLayerMaskEnabled(it) },
                     onDeleteMask = { drawingView?.deleteActiveLayerMask() },
-                    onAddLayer = {
-                        drawingView?.addLayer()
-                        drawingView?.post {
-                            layerModels.firstOrNull { it.isActive }?.let { tutorialSession?.observe(StudioTutorialEvent.LayerCreated(it.id)) }
-                        }
-                    },
+                    onAddLayer = addLayerFromWorkspace,
                     onDuplicateLayer = { drawingView?.duplicateActiveLayer() },
                     onDeleteLayer = { drawingView?.deleteActiveLayer() },
                     onMoveLayerUp = {
@@ -1100,6 +1284,85 @@ fun EditorScreen(
     tutorialSession?.let { session ->
         EditorTutorialOverlay(session, tutorialFocus, onTutorialFinish, onTutorialExit)
     }
+    }
+
+    quickMenuEditSlot?.let { slot ->
+        AlertDialog(
+            onDismissRequest = { quickMenuEditSlot = null },
+            title = { Text("Acción ${slot + 1} de ${defaultQuickAccessActions.size}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Perfiles", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        QuickAccessProfile.entries.filterNot { it == QuickAccessProfile.CUSTOM }.forEach { profile ->
+                            FilterChip(
+                                selected = matchingQuickAccessProfile(quickAccessActions) == profile,
+                                onClick = {
+                                    val updated = quickAccessActionsFor(profile)
+                                    quickAccessActions = updated
+                                    workspacePreferences.edit()
+                                        .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                        .apply()
+                                },
+                                label = { Text(profile.label) },
+                            )
+                        }
+                    }
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Mantener un dedo en el lienzo", color = StudioPalette.Text)
+                            Text("Abre la rueda en el punto de contacto; el botón estrella siempre queda disponible.", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(
+                            checked = quickMenuTouchHoldEnabled,
+                            onCheckedChange = { enabled ->
+                                quickMenuTouchHoldEnabled = enabled
+                                workspacePreferences.edit().putBoolean("quick_access_touch_hold", enabled).apply()
+                            },
+                        )
+                    }
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 210.dp),
+                        modifier = Modifier.heightIn(max = 340.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        gridItems(QuickAccessAction.entries) { action ->
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val updated = reassignQuickAccessAction(quickAccessActions, slot, action)
+                                        quickAccessActions = updated
+                                        workspacePreferences.edit()
+                                            .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                            .apply()
+                                        quickMenuEditSlot = null
+                                    },
+                                color = if (quickAccessActions.getOrNull(slot) == action) StudioPalette.AccentSoft else Color.Transparent,
+                                shape = RoundedCornerShape(10.dp),
+                            ) {
+                                Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(quickAccessIcon(action, activeLayer), null, tint = StudioPalette.TextMuted)
+                                    Spacer(Modifier.width(10.dp))
+                                    Column {
+                                        Text(quickAccessShortLabel(action), color = StudioPalette.Text)
+                                        Text(
+                                            quickAccessDescription(action),
+                                            color = StudioPalette.TextMuted,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { quickMenuEditSlot = null }) { Text("Cerrar") }
+            },
+        )
     }
 
     if (brushLibraryOpen) {
@@ -1540,6 +1803,203 @@ private fun QuickDial(
 }
 
 @Composable
+private fun QuickMenuTrigger(
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .size(54.dp)
+            .editorTutorialAnchor("quick_menu_trigger")
+            .semantics {
+                contentDescription = "Abrir rueda de acceso rápido"
+                role = Role.Button
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { onOpen() }, onLongPress = { onOpen() })
+            },
+        color = Color(0xF2171A1F),
+        shape = CircleShape,
+        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+        shadowElevation = 10.dp,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.Outlined.Star, null, tint = StudioPalette.Accent, modifier = Modifier.size(23.dp))
+        }
+    }
+}
+
+@Composable
+private fun RadialQuickMenu(
+    actions: List<QuickAccessAction>,
+    activeLayer: LayerUiModel?,
+    selectedTool: DrawingTool,
+    anchor: Offset?,
+    onDismiss: () -> Unit,
+    onAction: (QuickAccessAction) -> Unit,
+    onEditSlot: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val items = quickAccessItems(
+        QuickAccessContext(
+            hasActiveLayer = activeLayer != null,
+            layerVisible = activeLayer?.visible ?: true,
+            alphaLocked = activeLayer?.alphaLocked ?: false,
+            hasMask = activeLayer?.hasMask ?: false,
+            editingMask = activeLayer?.editingMask ?: false,
+        ),
+        actions,
+    )
+    BoxWithConstraints(
+        modifier = modifier
+            .background(Color.Black.copy(alpha = .24f))
+            .pointerInput(Unit) { detectTapGestures(onTap = { onDismiss() }) },
+    ) {
+        val density = LocalDensity.current
+        val wheelSize = 330.dp
+        val wheelSizePx = with(density) { wheelSize.toPx() }
+        val position = quickMenuTopLeft(
+            anchorX = anchor?.x,
+            anchorY = anchor?.y,
+            viewportWidth = constraints.maxWidth.toFloat(),
+            viewportHeight = constraints.maxHeight.toFloat(),
+            wheelSize = wheelSizePx,
+        )
+        Box(
+            Modifier
+                .offset { IntOffset(position.x.roundToInt(), position.y.roundToInt()) }
+                .size(wheelSize),
+            contentAlignment = Alignment.Center,
+        ) {
+            items.forEachIndexed { index, item ->
+                val angle = Math.toRadians((-90.0 + index * 60.0))
+                val anchor = when (item.action) {
+                    QuickAccessAction.ADD_LAYER -> "quick_layer_add"
+                    QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> "quick_layer_visibility"
+                    QuickAccessAction.MASK_WORKFLOW -> "quick_layer_mask"
+                    else -> null
+                }
+                val selected = item.selected ||
+                    (item.action == QuickAccessAction.EYEDROPPER && selectedTool == DrawingTool.EYEDROPPER)
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .offset(
+                            x = (cos(angle) * 112.0).toFloat().dp,
+                            y = (sin(angle) * 112.0).toFloat().dp,
+                        )
+                        .size(78.dp)
+                        .let { if (anchor != null) it.editorTutorialAnchor(anchor) else it }
+                        .semantics {
+                            contentDescription = quickAccessLabel(item.action, activeLayer)
+                            this.selected = selected
+                            role = Role.Button
+                        }
+                        .pointerInput(item.action, item.enabled) {
+                            detectTapGestures(
+                                onTap = { if (item.enabled) onAction(item.action) },
+                                onLongPress = { onEditSlot(index) },
+                            )
+                        },
+                    color = if (selected) StudioPalette.AccentSoft else Color(0xFA1A1E24),
+                    shape = CircleShape,
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (selected) StudioPalette.Accent else StudioPalette.Border,
+                    ),
+                    shadowElevation = 10.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(7.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            quickAccessIcon(item.action, activeLayer),
+                            null,
+                            tint = if (item.enabled) Color.White else StudioPalette.TextMuted.copy(alpha = .35f),
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            when {
+                                item.action == QuickAccessAction.MASK_WORKFLOW && activeLayer?.editingMask == true -> "Salir"
+                                item.action == QuickAccessAction.MASK_WORKFLOW && activeLayer?.hasMask == true -> "Editar"
+                                else -> quickAccessShortLabel(item.action)
+                            },
+                            color = if (item.enabled) StudioPalette.Text else StudioPalette.TextMuted.copy(alpha = .35f),
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            Surface(
+                modifier = Modifier
+                    .size(108.dp)
+                    .semantics { contentDescription = "Cerrar rueda de acceso rápido" }
+                    .clickable(onClick = onDismiss),
+                color = Color(0xFC111419),
+                shape = CircleShape,
+                border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Accent),
+                shadowElevation = 12.dp,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                    Icon(Icons.Outlined.Star, null, tint = StudioPalette.Accent, modifier = Modifier.size(24.dp))
+                    Text("Acceso rápido", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                    Text("Desliza y suelta", color = StudioPalette.TextMuted, fontSize = 9.sp)
+                }
+            }
+        }
+    }
+}
+
+private fun quickAccessIcon(action: QuickAccessAction, layer: LayerUiModel?): ImageVector = when (action) {
+    QuickAccessAction.BRUSH_LIBRARY -> Icons.Outlined.Tune
+    QuickAccessAction.EYEDROPPER -> Icons.Outlined.Colorize
+    QuickAccessAction.ADD_LAYER -> Icons.Outlined.Add
+    QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> if (layer?.visible == false) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility
+    QuickAccessAction.DUPLICATE_LAYER -> Icons.Outlined.ContentCopy
+    QuickAccessAction.TOGGLE_ALPHA_LOCK -> if (layer?.alphaLocked == true) Icons.Outlined.Lock else Icons.Outlined.LockOpen
+    QuickAccessAction.MASK_WORKFLOW -> Icons.Outlined.AutoFixNormal
+    QuickAccessAction.OPEN_LAYERS -> Icons.Outlined.Layers
+}
+
+private fun quickAccessShortLabel(action: QuickAccessAction): String = when (action) {
+    QuickAccessAction.BRUSH_LIBRARY -> "Pinceles"
+    QuickAccessAction.EYEDROPPER -> "Color"
+    QuickAccessAction.ADD_LAYER -> "Nueva capa"
+    QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> "Visibilidad"
+    QuickAccessAction.DUPLICATE_LAYER -> "Duplicar"
+    QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar dentro"
+    QuickAccessAction.MASK_WORKFLOW -> "Ocultar"
+    QuickAccessAction.OPEN_LAYERS -> "Capas"
+}
+
+private fun quickAccessLabel(action: QuickAccessAction, layer: LayerUiModel?): String = when (action) {
+    QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> if (layer?.visible == false) "Mostrar capa" else "Ocultar capa"
+    QuickAccessAction.TOGGLE_ALPHA_LOCK -> if (layer?.alphaLocked == true) "Desactivar Pintar dentro" else "Activar Pintar dentro"
+    QuickAccessAction.MASK_WORKFLOW -> when {
+        layer?.editingMask == true -> "Salir de la ocultación y volver a pintar la capa"
+        layer?.hasMask == true -> "Editar ocultación reversible"
+        else -> "Crear ocultación reversible"
+    }
+    else -> quickAccessShortLabel(action)
+}
+
+private fun quickAccessDescription(action: QuickAccessAction): String = when (action) {
+    QuickAccessAction.BRUSH_LIBRARY -> "Abrir la biblioteca y ajustar el pincel."
+    QuickAccessAction.EYEDROPPER -> "Tomar un color directamente del lienzo."
+    QuickAccessAction.ADD_LAYER -> "Crear y seleccionar una capa vacía."
+    QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> "Mostrar u ocultar la capa activa."
+    QuickAccessAction.DUPLICATE_LAYER -> "Crear una copia de la capa activa."
+    QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar únicamente sobre píxeles existentes."
+    QuickAccessAction.MASK_WORKFLOW -> "Ocultar o recuperar sin borrar el original."
+    QuickAccessAction.OPEN_LAYERS -> "Abrir el panel completo de capas."
+}
+
+@Composable
 private fun PerspectiveToolbar(
     modifier: Modifier = Modifier,
     editing: Boolean,
@@ -1615,9 +2075,8 @@ private fun SelectionToolbar(
 @Composable
 private fun CanvasStatusBar(
     document: EditorDocument,
-    saveLabel: String,
     rotation: Int,
-    engineStatus: String,
+    compact: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -1627,21 +2086,11 @@ private fun CanvasStatusBar(
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Save, null, tint = StudioPalette.Success, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(7.dp))
-            Text(saveLabel, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(18.dp))
             Text("${document.width} × ${document.height}", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(18.dp))
-            Text("Rotación ${rotation}°", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-            Spacer(Modifier.width(18.dp))
-            Text(
-                engineStatus,
-                color = StudioPalette.TextMuted,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (!compact) {
+                Spacer(Modifier.width(18.dp))
+                Text("Rotación ${rotation}°", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }
@@ -3092,7 +3541,9 @@ private fun LayersDock(
     val selectedCount = layers.count { it.isSelected }
     val activeGroup = groups.firstOrNull { it.id == active?.groupId }
     var layerQuery by remember { mutableStateOf("") }
-    var propertiesExpanded by remember { mutableStateOf(true) }
+    var propertiesExpanded by remember { mutableStateOf(false) }
+    var inspectorPage by remember { mutableIntStateOf(0) }
+    var actionsMenuExpanded by remember { mutableStateOf(false) }
     val visibleLayers = layers.filter { layer ->
         layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
     }
@@ -3102,13 +3553,66 @@ private fun LayersDock(
                 Column(Modifier.weight(1f)) {
                     Text("Capas", color = StudioPalette.Text, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "${layers.size} capas · $selectedCount seleccionadas",
+                        active?.let { "${it.name} · ${layers.size} capas" } ?: "${layers.size} capas · $selectedCount seleccionadas",
                         color = StudioPalette.TextMuted,
                         style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 IconButton(onClick = onCreateGroup) { Icon(Icons.Outlined.Layers, "Crear grupo", tint = StudioPalette.TextMuted) }
                 IconButton(onClick = onAdd, modifier = Modifier.editorTutorialAnchor("layer_add")) { Icon(Icons.Outlined.Add, "Añadir capa", tint = StudioPalette.TextMuted) }
+            }
+            if (active != null) {
+                Spacer(Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        LayerQuickChip(
+                            icon = if (active.visible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff,
+                            label = if (active.visible) "Visible" else "Oculta",
+                            selected = active.visible,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onToggleVisibility(active.id) },
+                        )
+                        LayerQuickChip(
+                            icon = if (active.alphaLocked) Icons.Outlined.Lock else Icons.Outlined.LockOpen,
+                            label = "Pintar dentro",
+                            selected = active.alphaLocked,
+                            modifier = Modifier.weight(1f),
+                            onClick = { onAlphaLock(active.id, !active.alphaLocked) },
+                        )
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        LayerQuickChip(
+                            icon = Icons.Outlined.AutoFixNormal,
+                            label = when {
+                                active.editingMask -> "Salir ocultación"
+                                active.hasMask -> "Editar ocultación"
+                                else -> "Ocultar"
+                            },
+                            selected = active.editingMask,
+                            modifier = Modifier.weight(1.15f),
+                            onClick = {
+                                if (active.hasMask) onEditMask(active.id, !active.editingMask) else onAddMask()
+                            },
+                        )
+                        LayerQuickChip(
+                            icon = Icons.Outlined.Layers,
+                            label = "Molde",
+                            selected = active.clipping,
+                            anchorId = "layer_clipping",
+                            modifier = Modifier.weight(1f),
+                            onClick = { onClipping(active.id, !active.clipping) },
+                        )
+                        LayerQuickChip(
+                            icon = Icons.Outlined.ArrowDownward,
+                            label = "Bajar",
+                            anchorId = "layer_down",
+                            modifier = Modifier.weight(.8f),
+                            onClick = onMoveDown,
+                        )
+                    }
+                }
             }
             if (layers.size >= 6) {
                 Spacer(Modifier.height(10.dp))
@@ -3128,122 +3632,134 @@ private fun LayersDock(
                 shape = RoundedCornerShape(9.dp),
             ) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                    Text("Propiedades de capa", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                    Text("Ajustes de la capa activa", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
                     Spacer(Modifier.weight(1f))
-                    Text(if (propertiesExpanded) "Ocultar" else "Mostrar", color = StudioPalette.Accent, fontSize = 11.sp)
+                    Text(if (propertiesExpanded) "Cerrar" else "Abrir", color = StudioPalette.Accent, fontSize = 11.sp)
                 }
             }
             if (propertiesExpanded) {
-            Spacer(Modifier.height(8.dp))
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        active?.let { layer ->
-                            val modes = LayerBlendMode.values()
-                            onBlendMode(layer.id, modes[(layer.blendMode.ordinal + 1) % modes.size])
-                        }
-                    },
-                color = StudioPalette.SurfaceRaised,
-                shape = RoundedCornerShape(10.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
-            ) {
-                Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-                    Text(active?.blendMode?.displayName() ?: "Normal", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.weight(1f))
-                    Text("Toca para cambiar", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(7.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    LayerInspectorTab("General", inspectorPage == 0, Modifier.weight(1f)) { inspectorPage = 0 }
+                    LayerInspectorTab("Molde", inspectorPage == 1, Modifier.weight(1f)) { inspectorPage = 1 }
+                    LayerInspectorTab("Ocultar", inspectorPage == 2, Modifier.weight(1f)) { inspectorPage = 2 }
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            if (active != null) {
-                SettingSlider("Opacidad de capa", active.opacity, 0f..1f, "${(active.opacity * 100).toInt()}%") {
-                    onOpacity(active.id, it)
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    LayerToggle(
-                        label = "Bloquear alfa",
-                        checked = active.alphaLocked,
-                        modifier = Modifier.weight(1f),
-                    ) { onAlphaLock(active.id, it) }
-                    LayerToggle(
-                        label = "Recorte",
-                        checked = active.clipping,
-                        modifier = Modifier.weight(1f),
-                    ) { onClipping(active.id, it) }
-                }
-                Spacer(Modifier.height(8.dp))
-                if (active.hasMask) {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = StudioPalette.AccentSoft,
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Accent),
-                    ) {
-                        Column(Modifier.padding(11.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text("Ocultar sin borrar", color = Color.White, style = MaterialTheme.typography.labelLarge)
-                            Text(
-                                "La capa original queda intacta. Usa Pincel para ocultar y Borrador para recuperar.",
-                                color = StudioPalette.Text,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                TextButton(onClick = { onHideWithMask(active.id) }, modifier = Modifier.weight(1f)) {
-                                    Icon(Icons.Outlined.Brush, null, modifier = Modifier.size(16.dp))
-                                    Text(" Ocultar")
+                Spacer(Modifier.height(7.dp))
+                Column(Modifier.heightIn(max = 230.dp).verticalScroll(rememberScrollState())) {
+                    if (active != null) when (inspectorPage) {
+                        0 -> {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    val modes = LayerBlendMode.values()
+                                    onBlendMode(active.id, modes[(active.blendMode.ordinal + 1) % modes.size])
+                                },
+                                color = StudioPalette.SurfaceRaised,
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+                            ) {
+                                Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                                    Text(active.blendMode.displayName(), color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                                    Spacer(Modifier.weight(1f))
+                                    Text("Modo de mezcla", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodyMedium)
                                 }
-                                TextButton(onClick = { onRevealWithMask(active.id) }, modifier = Modifier.weight(1f)) {
-                                    Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(16.dp))
-                                    Text(" Recuperar")
+                            }
+                            Spacer(Modifier.height(7.dp))
+                            SettingSlider("Opacidad de capa", active.opacity, 0f..1f, "${(active.opacity * 100).toInt()}%") {
+                                onOpacity(active.id, it)
+                            }
+                            LayerConceptToggle(
+                                title = "Pintar dentro de esta capa",
+                                explanation = "Evita salirte: el pincel solo modifica los píxeles que ya existen aquí.",
+                                checked = active.alphaLocked,
+                                onCheckedChange = { onAlphaLock(active.id, it) },
+                            )
+                            activeGroup?.let { group ->
+                                Spacer(Modifier.height(7.dp))
+                                SettingSlider("Opacidad del grupo", group.opacity, 0f..1f, "${(group.opacity * 100).toInt()}%") {
+                                    onGroupOpacity(group.id, it)
+                                }
+                            }
+                        }
+                        1 -> LayerConceptToggle(
+                            title = "Usar la capa inferior como molde",
+                            explanation = "Esta capa solo se verá donde la capa de abajo tenga contenido. Úsalo para sombras, luces y color sin salirte.",
+                            checked = active.clipping,
+                            onCheckedChange = { onClipping(active.id, it) },
+                        )
+                        else -> {
+                            if (active.hasMask) {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    color = StudioPalette.AccentSoft,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Accent),
+                                ) {
+                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                                        Text(
+                                            if (active.editingMask) "Editando ocultación reversible" else "Ocultación reversible lista",
+                                            color = Color.White,
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                        Text(
+                                            "La imagen original no se borra. Pinta para esconder y usa Recuperar para traer de vuelta.",
+                                            color = StudioPalette.Text,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            TextButton(onClick = { onHideWithMask(active.id) }, modifier = Modifier.weight(1f)) {
+                                                Icon(Icons.Outlined.Brush, null, modifier = Modifier.size(16.dp)); Text(" Esconder")
+                                            }
+                                            TextButton(onClick = { onRevealWithMask(active.id) }, modifier = Modifier.weight(1f)) {
+                                                Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(16.dp)); Text(" Recuperar")
+                                            }
+                                        }
+                                        if (active.editingMask) {
+                                            Button(
+                                                onClick = { onEditMask(active.id, false) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text("Volver a pintar la capa")
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.height(7.dp))
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                    LayerToggle(
+                                        label = if (active.editingMask) "Pintando ocultación" else "Editar ocultación",
+                                        checked = active.editingMask,
+                                        modifier = Modifier.weight(1f),
+                                    ) { onEditMask(active.id, it) }
+                                    LayerToggle(
+                                        label = if (active.maskEnabled) "Resultado visible" else "Viendo original",
+                                        checked = active.maskEnabled,
+                                        modifier = Modifier.weight(1f),
+                                    ) { onToggleMask(active.id) }
+                                }
+                                TextButton(onClick = onDeleteMask) { Text("Eliminar ocultación; conservar capa") }
+                            } else {
+                                Surface(
+                                    modifier = Modifier.fillMaxWidth().editorTutorialAnchor("mask_add"),
+                                    color = StudioPalette.SurfaceRaised,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+                                ) {
+                                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Text("Ocultar partes sin borrar", color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+                                        Text(
+                                            "1. Crea la ocultación. 2. Pinta lo que quieres esconder. 3. Recupera si cambias de idea.",
+                                            color = StudioPalette.TextMuted,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                        TextButton(onClick = onAddMask) {
+                                            Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(17.dp)); Text(" Crear y empezar")
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        LayerToggle(
-                            label = if (active.editingMask) "Editando ocultación" else "Editar ocultación",
-                            checked = active.editingMask,
-                            modifier = Modifier.weight(1f),
-                        ) { onEditMask(active.id, it) }
-                        LayerToggle(
-                            label = if (active.maskEnabled) "Efecto visible" else "Mostrar original",
-                            checked = active.maskEnabled,
-                            modifier = Modifier.weight(1f),
-                        ) { onToggleMask(active.id) }
-                    }
-                    TextButton(onClick = onDeleteMask) { Text("Quitar ocultación") }
-                } else {
-                    Surface(
-                        modifier = Modifier.fillMaxWidth().editorTutorialAnchor("mask_add").clickable(onClick = onAddMask),
-                        color = StudioPalette.SurfaceRaised,
-                        shape = RoundedCornerShape(10.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
-                    ) {
-                        Column(Modifier.padding(11.dp)) {
-                            Text("Ocultar sin borrar", color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
-                            Text(
-                                "Crea una máscara para esconder partes y recuperarlas después, sin dañar esta capa.",
-                                color = StudioPalette.TextMuted,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                    }
                 }
-                if (activeGroup != null) {
-                    SettingSlider(
-                        "Opacidad del grupo",
-                        activeGroup.opacity,
-                        0f..1f,
-                        "${(activeGroup.opacity * 100).toInt()}%",
-                    ) { onGroupOpacity(activeGroup.id, it) }
-                }
-            }
             }
         }
         HorizontalDivider(color = StudioPalette.Border)
@@ -3280,6 +3796,11 @@ private fun LayersDock(
                         onSelect = onSelectLayer,
                         onToggleSelection = onToggleLayerSelection,
                         onToggleVisibility = onToggleVisibility,
+                        onToggleMaskEditing = onEditMask,
+                        onMove = { id, up ->
+                            onSelectLayer(id)
+                            if (up) onMoveUp() else onMoveDown()
+                        },
                         indentDepth = ancestors.size,
                     )
                     Spacer(Modifier.height(7.dp))
@@ -3312,23 +3833,52 @@ private fun LayersDock(
         }
         HorizontalDivider(color = StudioPalette.Border)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            TextButton(onClick = onCreateGroup, modifier = Modifier.weight(1f)) { Text("Agrupar capa") }
-            TextButton(onClick = onUngroup, modifier = Modifier.weight(1f)) { Text("Sacar del grupo") }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            LayerAction(Icons.Outlined.Add, "Añadir", "layer_add", onAdd)
-            LayerAction(Icons.Outlined.ContentCopy, "Duplicar", onClick = onDuplicate)
-            LayerAction(Icons.Outlined.MoreHoriz, "Renombrar", onClick = onRename)
-            LayerAction(Icons.Outlined.ArrowUpward, "Subir", "layer_up", onMoveUp)
-            LayerAction(Icons.Outlined.ArrowDownward, "Bajar", "layer_down", onMoveDown)
-            LayerAction(Icons.Outlined.Remove, "Limpiar", onClick = onClear)
-            LayerAction(Icons.Outlined.Delete, "Eliminar", onClick = onDelete)
+            LayerFooterAction(Icons.Outlined.Add, "Nueva", true, "layer_add", onAdd)
+            LayerFooterAction(Icons.Outlined.ContentCopy, "Duplicar", active != null, null, onDuplicate)
+            LayerFooterAction(Icons.Outlined.MoreHoriz, "Nombre", active != null, null, onRename)
+            Box {
+                LayerFooterAction(Icons.Outlined.Tune, "Más", active != null, null) { actionsMenuExpanded = true }
+                DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Subir capa") },
+                        leadingIcon = { Icon(Icons.Outlined.ArrowUpward, null) },
+                        onClick = { actionsMenuExpanded = false; onMoveUp() },
+                        modifier = Modifier.editorTutorialAnchor("layer_up"),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Bajar capa") },
+                        leadingIcon = { Icon(Icons.Outlined.ArrowDownward, null) },
+                        onClick = { actionsMenuExpanded = false; onMoveDown() },
+                        modifier = Modifier.editorTutorialAnchor("layer_down"),
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Agrupar selección") },
+                        leadingIcon = { Icon(Icons.Outlined.Layers, null) },
+                        onClick = { actionsMenuExpanded = false; onCreateGroup() },
+                    )
+                    if (activeGroup != null) {
+                        DropdownMenuItem(
+                            text = { Text("Sacar del grupo") },
+                            leadingIcon = { Icon(Icons.Outlined.Remove, null) },
+                            onClick = { actionsMenuExpanded = false; onUngroup() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Limpiar contenido") },
+                        leadingIcon = { Icon(Icons.Outlined.DeleteSweep, null) },
+                        onClick = { actionsMenuExpanded = false; onClear() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Eliminar capa") },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, null) },
+                        onClick = { actionsMenuExpanded = false; onDelete() },
+                    )
+                }
+            }
         }
     }
 }
@@ -3346,6 +3896,107 @@ private fun LayerBlendMode.displayName(): String = when (this) {
     LayerBlendMode.DIFFERENCE -> "Diferencia"
     LayerBlendMode.COLOR_DODGE -> "Sobreexponer color"
     LayerBlendMode.COLOR_BURN -> "Subexponer color"
+}
+
+@Composable
+private fun LayerInspectorTab(
+    label: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .heightIn(min = 40.dp)
+            .semantics {
+                contentDescription = "Ajustes $label"
+                this.selected = selected
+                role = Role.Tab
+            }
+            .clickable(onClick = onClick),
+        color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
+        shape = RoundedCornerShape(9.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) StudioPalette.Accent else StudioPalette.Border,
+        ),
+    ) {
+        Box(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                color = if (selected) Color.White else StudioPalette.TextMuted,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LayerQuickChip(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean = false,
+    anchorId: String? = null,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier
+            .heightIn(min = 42.dp)
+            .let { if (anchorId != null) it.editorTutorialAnchor(anchorId) else it }
+            .semantics {
+                contentDescription = label
+                this.selected = selected
+                role = Role.Button
+            }
+            .clickable(onClick = onClick),
+        color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (selected) StudioPalette.Accent else StudioPalette.Border,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, tint = if (selected) Color.White else StudioPalette.TextMuted, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(label, color = if (selected) Color.White else StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+@Composable
+private fun LayerConceptToggle(
+    title: String,
+    explanation: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable { onCheckedChange(!checked) },
+        color = if (checked) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (checked) StudioPalette.Accent else StudioPalette.Border,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                Text(explanation, color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.width(8.dp))
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
 }
 
 @Composable
@@ -3369,7 +4020,12 @@ private fun LayerToggle(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                if (checked) Icons.Outlined.Lock else Icons.Outlined.LockOpen,
+                when {
+                    label.contains("Resultado") -> Icons.Outlined.Visibility
+                    label.contains("Viendo") -> Icons.Outlined.VisibilityOff
+                    checked -> Icons.Outlined.Brush
+                    else -> Icons.Outlined.AutoFixNormal
+                },
                 null,
                 tint = if (checked) Color.White else StudioPalette.TextMuted,
                 modifier = Modifier.size(16.dp),
@@ -3432,8 +4088,11 @@ private fun LayerRow(
     onSelect: (String) -> Unit,
     onToggleSelection: (String) -> Unit,
     onToggleVisibility: (String) -> Unit,
+    onToggleMaskEditing: (String, Boolean) -> Unit,
+    onMove: (String, Boolean) -> Unit,
     indentDepth: Int = 0,
 ) {
+    var dragDistance by remember(layer.id) { mutableFloatStateOf(0f) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -3450,14 +4109,28 @@ private fun LayerRow(
             }
             .clickable(role = Role.Button) { onSelect(layer.id) },
         color = when {
-            layer.isActive -> StudioPalette.Accent
-            layer.isSelected -> StudioPalette.AccentSoft
+            layer.isActive -> StudioPalette.SurfaceHover
+            layer.isSelected -> StudioPalette.SurfaceRaised
             else -> StudioPalette.SurfaceRaised
         },
         shape = RoundedCornerShape(11.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, if (layer.isActive) Color(0xFF74A3FF) else StudioPalette.Border),
     ) {
         Row(Modifier.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (layer.clipping) {
+                Column(
+                    modifier = Modifier.width(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(Modifier.width(2.dp).height(13.dp).background(StudioPalette.Accent))
+                    Icon(
+                        Icons.Outlined.ArrowDownward,
+                        "Usa la capa inferior como molde",
+                        tint = StudioPalette.Accent,
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+            }
             IconButton(onClick = { onToggleSelection(layer.id) }, modifier = Modifier.size(30.dp)) {
                 Icon(
                     if (layer.isSelected) Icons.Outlined.SelectAll else Icons.Outlined.RadioButtonUnchecked,
@@ -3486,6 +4159,34 @@ private fun LayerRow(
                     )
                     .border(1.dp, if (layer.isActive) Color.White.copy(alpha = .35f) else StudioPalette.Border, RoundedCornerShape(7.dp)),
             )
+            if (layer.hasMask) {
+                Spacer(Modifier.width(5.dp))
+                Surface(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .semantics {
+                            role = Role.Button
+                            contentDescription = if (layer.editingMask) {
+                                "Salir de la ocultación de ${layer.name}"
+                            } else {
+                                "Editar la ocultación de ${layer.name}"
+                            }
+                            selected = layer.editingMask
+                        }
+                        .clickable { onToggleMaskEditing(layer.id, !layer.editingMask) },
+                    color = Color(0xFFE7E7E7),
+                    shape = RoundedCornerShape(7.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        2.dp,
+                        if (layer.editingMask) StudioPalette.Accent else StudioPalette.Border,
+                    ),
+                ) {
+                    Canvas(Modifier.fillMaxSize().padding(6.dp)) {
+                        drawRect(Color.White)
+                        drawCircle(Color(0xFF555A62), radius = size.minDimension * .28f, center = center)
+                    }
+                }
+            }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(layer.name, color = Color.White, style = MaterialTheme.typography.labelLarge)
@@ -3493,11 +4194,33 @@ private fun LayerRow(
                     add("Raster")
                     add("${(layer.opacity * 100).toInt()}%")
                     if (layer.alphaLocked) add("Alfa")
-                    if (layer.clipping) add("Recorte")
-                    if (layer.hasMask) add(if (layer.editingMask) "Máscara editando" else "Máscara")
+                    if (layer.clipping) add("Molde inferior")
+                    if (layer.hasMask) add(if (layer.editingMask) "Ocultando ahora" else "Ocultación lista")
                 }.joinToString(" · ")
                 Text(attributes, color = if (layer.isActive) Color.White.copy(alpha = .72f) else StudioPalette.TextMuted, fontSize = 10.sp)
             }
+            Icon(
+                Icons.Outlined.DragHandle,
+                "Mantén y arrastra para ordenar ${layer.name}",
+                tint = StudioPalette.TextMuted,
+                modifier = Modifier
+                    .size(34.dp)
+                    .pointerInput(layer.id) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { dragDistance = 0f },
+                            onDragCancel = { dragDistance = 0f },
+                            onDragEnd = { dragDistance = 0f },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                dragDistance += dragAmount.y
+                                if (abs(dragDistance) >= 42.dp.toPx()) {
+                                    onMove(layer.id, dragDistance < 0f)
+                                    dragDistance = 0f
+                                }
+                            },
+                        )
+                    },
+            )
         }
     }
 }
@@ -3506,5 +4229,43 @@ private fun LayerRow(
 private fun LayerAction(icon: ImageVector, description: String, anchorId: String? = null, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(40.dp).let { if (anchorId != null) it.editorTutorialAnchor(anchorId) else it }) {
         Icon(icon, description, tint = StudioPalette.TextMuted, modifier = Modifier.size(19.dp))
+    }
+}
+
+@Composable
+private fun LayerFooterAction(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    anchorId: String?,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(68.dp)
+            .heightIn(min = 54.dp)
+            .let { if (anchorId != null) it.editorTutorialAnchor(anchorId) else it }
+            .semantics {
+                contentDescription = label
+                role = Role.Button
+            }
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            icon,
+            null,
+            tint = if (enabled) StudioPalette.TextMuted else StudioPalette.TextMuted.copy(alpha = .35f),
+            modifier = Modifier.size(19.dp),
+        )
+        Spacer(Modifier.height(3.dp))
+        Text(
+            label,
+            color = if (enabled) StudioPalette.TextMuted else StudioPalette.TextMuted.copy(alpha = .35f),
+            fontSize = 10.sp,
+            maxLines = 1,
+        )
     }
 }

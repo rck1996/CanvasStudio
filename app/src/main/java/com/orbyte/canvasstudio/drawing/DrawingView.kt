@@ -26,9 +26,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.os.SystemClock
 import android.view.View
+import android.view.ViewConfiguration
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.drawing.brush.BrushDabBatchBuilder
 import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
@@ -73,6 +75,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+
+internal fun radialQuickMenuSlot(dx: Float, dy: Float, threshold: Float): Int? {
+    if (hypot(dx, dy) < threshold) return null
+    val degrees = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble()))
+    return (((degrees + 90.0 + 30.0 + 360.0) % 360.0) / 60.0).toInt().coerceIn(0, 5)
+}
 
 class DrawingView(context: Context) : View(context) {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -334,6 +342,16 @@ class DrawingView(context: Context) : View(context) {
     private var tutorialTransformDistancePx = 0f
     private var tutorialTransformScaleDelta = 0f
     private var tutorialTransformRotationDegrees = 0f
+    private var quickMenuHoldRunnable: Runnable? = null
+    private var quickMenuGestureActive = false
+    private var quickMenuDownX = 0f
+    private var quickMenuDownY = 0f
+    private var quickMenuCenterX = 0f
+    private var quickMenuCenterY = 0f
+    private val quickMenuTouchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    private val quickMenuFlickThreshold = 54f * resources.displayMetrics.density
+    private val quickMenuSelectionDeadZone = 42f * resources.displayMetrics.density
+    private val quickMenuHalfSize = 165f * resources.displayMetrics.density
 
     var tool: DrawingTool = DrawingTool.BRUSH
     var brushSettings: BrushSettings = BrushSettings()
@@ -356,6 +374,9 @@ class DrawingView(context: Context) : View(context) {
     var onSelectionChanged: ((Boolean) -> Unit)? = null
     var onInteraction: ((DrawingInteractionEvent) -> Unit)? = null
     var onRasterFramePresented: (() -> Unit)? = null
+    var onQuickMenuRequested: ((Float, Float) -> Unit)? = null
+    var onQuickMenuFlickSelected: ((Int) -> Unit)? = null
+    var quickMenuTouchHoldEnabled: Boolean = true
     var usePlatformLowLatencyPreview: Boolean = false
 
     /** Local debug instrumentation for profiling on real tablets. Never persisted or uploaded. */
@@ -1621,14 +1642,15 @@ class DrawingView(context: Context) : View(context) {
             onEngineMessage?.invoke("Contacto de palma ignorado.")
             return true
         }
+        if (handleQuickMenuTouchGesture(event)) return true
         if (handlePerspectiveEdit(event)) return true
         if (handleRulerGuide(event)) return true
         val active = activeLayer()
         if (active?.editingMask == true && tool !in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)) {
+            finishMaskEditing()
             if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                onEngineMessage?.invoke("Activa Editar ocultación para usar Pincel o Borrador.")
+                onEngineMessage?.invoke("Ocultación cerrada. La capa vuelve a recibir las herramientas normales.")
             }
-            return true
         }
         if (tool == DrawingTool.TRANSFORM && selectionPath != null) {
             hoverVisible = false
@@ -4278,6 +4300,91 @@ class DrawingView(context: Context) : View(context) {
         notifyLayers()
     }
 
+    fun finishMaskEditing(): Boolean {
+        val changed = layers.any { it.editingMask }
+        if (!changed) return false
+        layers.forEach { it.editingMask = false }
+        notifyLayers()
+        return true
+    }
+
+    /**
+     * A still finger opens the radial menu at the contact point. Stylus input and
+     * multi-touch navigation never enter this path. Moving before the hold timeout
+     * simply continues the normal deferred finger stroke.
+     */
+    private fun handleQuickMenuTouchGesture(event: MotionEvent): Boolean {
+        val callback = onQuickMenuRequested
+        val fingerOnly = event.pointerCount == 1 &&
+            event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+        val eligibleTool = tool in setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.HAND)
+        if (!quickMenuTouchHoldEnabled || callback == null || !fingerOnly || !eligibleTool) {
+            if (event.actionMasked == MotionEvent.ACTION_POINTER_DOWN ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL ||
+                event.actionMasked == MotionEvent.ACTION_UP
+            ) cancelQuickMenuTouchGesture()
+            return false
+        }
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                cancelQuickMenuTouchGesture()
+                quickMenuDownX = event.x
+                quickMenuDownY = event.y
+                val hold = Runnable {
+                    quickMenuHoldRunnable = null
+                    quickMenuGestureActive = true
+                    quickMenuCenterX = if (width >= quickMenuHalfSize * 2f) {
+                        quickMenuDownX.coerceIn(quickMenuHalfSize, width - quickMenuHalfSize)
+                    } else width / 2f
+                    quickMenuCenterY = if (height >= quickMenuHalfSize * 2f) {
+                        quickMenuDownY.coerceIn(quickMenuHalfSize, height - quickMenuHalfSize)
+                    } else height / 2f
+                    clearActiveStrokeState()
+                    shapeStart = null
+                    shapeEnd = null
+                    parent?.requestDisallowInterceptTouchEvent(true)
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    callback(quickMenuCenterX, quickMenuCenterY)
+                }
+                quickMenuHoldRunnable = hold
+                postDelayed(hold, QUICK_MENU_HOLD_MS)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val distance = hypot(event.x - quickMenuDownX, event.y - quickMenuDownY)
+                if (!quickMenuGestureActive && distance > quickMenuTouchSlop) {
+                    quickMenuHoldRunnable?.let(::removeCallbacks)
+                    quickMenuHoldRunnable = null
+                }
+                if (quickMenuGestureActive) return true
+            }
+            MotionEvent.ACTION_UP -> {
+                quickMenuHoldRunnable?.let(::removeCallbacks)
+                quickMenuHoldRunnable = null
+                if (quickMenuGestureActive) {
+                    val movedFromContact = hypot(event.x - quickMenuDownX, event.y - quickMenuDownY)
+                    if (movedFromContact >= quickMenuFlickThreshold) {
+                        radialQuickMenuSlot(
+                            event.x - quickMenuCenterX,
+                            event.y - quickMenuCenterY,
+                            threshold = quickMenuSelectionDeadZone,
+                        )?.let { onQuickMenuFlickSelected?.invoke(it) }
+                    }
+                    quickMenuGestureActive = false
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                    return true
+                }
+            }
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> cancelQuickMenuTouchGesture()
+        }
+        return false
+    }
+
+    private fun cancelQuickMenuTouchGesture() {
+        quickMenuHoldRunnable?.let(::removeCallbacks)
+        quickMenuHoldRunnable = null
+        quickMenuGestureActive = false
+    }
+
     fun toggleLayerMaskEnabled(id: String) {
         layers.firstOrNull { it.id == id && it.maskSurface != null }?.let { layer ->
             layer.maskEnabled = !layer.maskEnabled
@@ -5370,6 +5477,7 @@ class DrawingView(context: Context) : View(context) {
         const val MAX_FLOOD_FILL_PIXELS = 12_000_000L
         const val MAX_ORA_LAYER_PIXELS = 40_000_000L
         const val ENGINE_STATUS_INTERVAL_MS = 650L
+        const val QUICK_MENU_HOLD_MS = 420L
         const val MAX_STAMPS_PER_SEGMENT = 48
         const val MAX_STROKE_SEGMENTS_PER_FRAME = 24
     }

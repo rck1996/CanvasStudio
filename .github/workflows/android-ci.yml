@@ -26,6 +26,9 @@ jobs:
           java-version: "17"
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The legacy 'tools' package was removed from sdkmanager repositories.
+          packages: platform-tools
 
       - uses: gradle/actions/setup-gradle@v4
         with:

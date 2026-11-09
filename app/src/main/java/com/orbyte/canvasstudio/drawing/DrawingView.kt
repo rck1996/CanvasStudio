@@ -29,6 +29,7 @@ import android.view.KeyEvent
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.os.SystemClock
+import android.util.AtomicFile
 import android.view.View
 import android.view.ViewConfiguration
 import com.orbyte.canvasstudio.BuildConfig
@@ -4794,20 +4795,17 @@ class DrawingView(context: Context) : View(context) {
 
     private fun copyTileAtomically(source: File, destination: File): Boolean {
         if (!source.isFile) return false
-        destination.parentFile?.mkdirs()
-        val temporary = File(destination.parentFile, "${destination.name}.tmp")
-        return runCatching {
-            FileInputStream(source).use { input ->
-                FileOutputStream(temporary).use { output ->
-                    input.copyTo(output)
-                    output.fd.sync()
-                }
-            }
-            if (destination.exists() && !destination.delete()) error("No se pudo reemplazar el tile")
-            if (!temporary.renameTo(destination)) error("No se pudo completar el tile")
+        if (destination.parentFile?.let { !it.isDirectory && !it.mkdirs() } == true) return false
+        val atomic = AtomicFile(destination)
+        var output: FileOutputStream? = null
+        return try {
+            output = atomic.startWrite()
+            FileInputStream(source).use { input -> input.copyTo(output) }
+            atomic.finishWrite(output)
+            File(destination.parentFile, "${destination.name}.tmp").delete()
             true
-        }.getOrElse {
-            temporary.delete()
+        } catch (_: Exception) {
+            output?.let(atomic::failWrite)
             false
         }
     }
@@ -4951,17 +4949,16 @@ class DrawingView(context: Context) : View(context) {
                     }
 
                     if (previewBitmap != null) {
-                        val previewTemporary = File(directory, "preview.png.tmp")
-                        FileOutputStream(previewTemporary).use { output ->
+                        val previewAtomic = AtomicFile(File(directory, "preview.png"))
+                        var output: FileOutputStream? = null
+                        try {
+                            output = previewAtomic.startWrite()
                             check(previewBitmap.compress(Bitmap.CompressFormat.PNG, 92, output))
-                            output.fd.sync()
-                        }
-                        val previewDestination = File(directory, "preview.png")
-                        if (previewDestination.exists() && !previewDestination.delete()) {
-                            error("No se pudo reemplazar la vista previa")
-                        }
-                        if (!previewTemporary.renameTo(previewDestination)) {
-                            error("No se pudo completar la vista previa")
+                            previewAtomic.finishWrite(output)
+                            File(directory, "preview.png.tmp").delete()
+                        } catch (error: Throwable) {
+                            output?.let(previewAtomic::failWrite)
+                            throw error
                         }
                     }
 
@@ -5016,22 +5013,17 @@ class DrawingView(context: Context) : View(context) {
                             }
                         }
                     }
-                    val metadataTemporary = File(directory, "project.properties.tmp")
-                    FileOutputStream(metadataTemporary).use { output ->
-                        properties.store(output, "Canvas Studio sparse tiled project")
-                        output.fd.sync()
+                    val metadataAtomic = AtomicFile(File(directory, "project.properties"))
+                    var metadataOutput: FileOutputStream? = null
+                    try {
+                        metadataOutput = metadataAtomic.startWrite()
+                        properties.store(metadataOutput, "Canvas Studio sparse tiled project")
+                        metadataAtomic.finishWrite(metadataOutput)
+                        File(directory, "project.properties.tmp").delete()
+                    } catch (error: Throwable) {
+                        metadataOutput?.let(metadataAtomic::failWrite)
+                        throw error
                     }
-                    val metadata = File(directory, "project.properties")
-                    val metadataBackup = File(directory, "project.properties.bak")
-                    if (metadata.exists()) {
-                        metadata.copyTo(metadataBackup, overwrite = true)
-                        if (!metadata.delete()) error("No se pudo reemplazar la metadata")
-                    }
-                    if (!metadataTemporary.renameTo(metadata)) {
-                        if (metadataBackup.exists()) metadataBackup.copyTo(metadata, overwrite = true)
-                        error("No se pudo completar el guardado del proyecto")
-                    }
-                    metadataBackup.delete()
 
                     directory.listFiles { file ->
                         file.name.startsWith("layer-") && (file.extension == "png" || file.extension == "tmp")

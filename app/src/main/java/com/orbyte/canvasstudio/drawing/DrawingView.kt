@@ -4799,9 +4799,10 @@ class DrawingView(context: Context) : View(context) {
         val atomic = AtomicFile(destination)
         var output: FileOutputStream? = null
         return try {
-            output = atomic.startWrite()
-            FileInputStream(source).use { input -> input.copyTo(output) }
-            atomic.finishWrite(output)
+            val stream = atomic.startWrite()
+            output = stream
+            FileInputStream(source).use { input -> input.copyTo(stream) }
+            atomic.finishWrite(stream)
             File(destination.parentFile, "${destination.name}.tmp").delete()
             true
         } catch (_: Exception) {

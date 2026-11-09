@@ -43,6 +43,46 @@ class ProjectRepositoryRecoveryTest {
         ProjectRepository.deleteProject(context, projectId)
     }
 
+    @Test
+    fun duplicateProjectsReceiveUniqueIdsAndPreserveOriginal() {
+        val id = "duplicate-source-test"
+        val source = cleanProject(id)
+        writeMetadata(File(source, "project.properties"), id, "Original")
+        File(source, "artwork.txt").writeText("original artwork")
+
+        val first = requireNotNull(ProjectRepository.duplicateProject(context, id))
+        val second = requireNotNull(ProjectRepository.duplicateProject(context, id))
+        try {
+            assertTrue(first.id != second.id && first.id != id && second.id != id)
+            assertEquals(first.id, ProjectRepository.projectDirectory(context, first.id).name)
+            assertEquals("Original", readMetadata(File(source, "project.properties")).getProperty("title"))
+            assertEquals("original artwork", File(ProjectRepository.projectDirectory(context, first.id), "artwork.txt").readText())
+            assertEquals("original artwork", File(ProjectRepository.projectDirectory(context, second.id), "artwork.txt").readText())
+        } finally {
+            ProjectRepository.deleteProject(context, first.id)
+            ProjectRepository.deleteProject(context, second.id)
+            ProjectRepository.deleteProject(context, id)
+        }
+    }
+
+    @Test
+    fun incompleteCopiesAndRestoreBackupsStayHidden() {
+        val id = "partial-visible-test"
+        val root = ProjectRepository.projectsRoot(context)
+        val partial = File(root, "$id.partial").apply { mkdirs() }
+        val backup = File(root, "$id.before-restore").apply { mkdirs() }
+        writeMetadata(File(partial, "project.properties"), "$id.partial", "Partial")
+        writeMetadata(File(backup, "project.properties"), "$id.before-restore", "Backup")
+        try {
+            assertTrue(ProjectRepository.loadLocalProjects(context).none {
+                it.id == "$id.partial" || it.id == "$id.before-restore"
+            })
+        } finally {
+            partial.deleteRecursively()
+            backup.deleteRecursively()
+        }
+    }
+
     private fun cleanProject(projectId: String): File {
         ProjectRepository.deleteProject(context, projectId)
         return ProjectRepository.projectDirectory(context, projectId)

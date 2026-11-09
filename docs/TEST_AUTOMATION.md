@@ -107,8 +107,19 @@ inclinación ni la frecuencia real de un S Pen.
 `.github/workflows/android-ci.yml` ejecuta en cada push y pull request:
 
 - `lintDebug`;
+- `testDebugUnitTest` (regresiones JVM rápidas);
 - `assembleDebug`;
 - `assembleDebugAndroidTest`;
 - `assembleRelease`;
 - `bundleRelease`;
 - publicación de reportes y artefactos de compilación.
+
+## Integridad de datos (auditoría de noviembre de 2026)
+
+El hardening protege las copias de proyectos y su publicación atómica, evita colisiones
+entre snapshots y conserva copias originales cuando falla una restauración. Los tiles
+PNG se guardan mediante `AtomicFile` y el codec PSD valida estrictamente los datos RLE.
+
+Las pruebas `androidTest` de persistencia, tiles y PSD **requieren emulador o dispositivo**
+y no se ejecutan con el paso JVM del CI. La certificación completa sigue usando
+`scripts/run-tablet-instrumentation.ps1`; una compilación no reemplaza esa validación.

@@ -98,7 +98,7 @@ fun StudioApp() {
                             isLocal = true,
                         )
                     } else {
-                        val localId = "${project.id}-${System.currentTimeMillis()}"
+                        val localId = ProjectRepository.newProjectId()
                         activeDocument = EditorDocument(
                             id = localId,
                             title = project.title,
@@ -119,7 +119,7 @@ fun StudioApp() {
                         }
                     } else {
                         activeDocument = EditorDocument(
-                            id = "project-${System.currentTimeMillis()}",
+                            id = ProjectRepository.newProjectId(),
                             title = "${project.title} copia",
                             width = project.width,
                             height = project.height,
@@ -183,7 +183,7 @@ fun StudioApp() {
             onDismiss = { showNewCanvas = false },
             onCreate = { draft ->
                 activeDocument = draft.copy(
-                    id = "project-${System.currentTimeMillis()}",
+                    id = ProjectRepository.newProjectId(),
                     isLocal = true,
                     preview = null,
                 )

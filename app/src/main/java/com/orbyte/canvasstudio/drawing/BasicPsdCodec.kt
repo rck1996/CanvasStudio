@@ -18,10 +18,13 @@ object BasicPsdCodec {
     private const val SIGNATURE = 0x38425053 // 8BPS
     private const val COLOR_MODE_RGB = 3
     private const val MAX_PIXELS = 40_000_000L
+    private const val MAX_DIMENSION = 30_000
 
     fun write(bitmap: Bitmap, output: OutputStream) {
-        require(bitmap.width.toLong() * bitmap.height <= MAX_PIXELS) {
-            "El PSD básico admite hasta 32 megapíxeles."
+        require(bitmap.width in 1..MAX_DIMENSION && bitmap.height in 1..MAX_DIMENSION &&
+            bitmap.width.toLong() * bitmap.height <= MAX_PIXELS
+        ) {
+            "El PSD básico admite hasta 40 megapíxeles y 30.000 px por dimensión."
         }
         DataOutputStream(BufferedOutputStream(output)).use { data ->
             data.writeInt(SIGNATURE)
@@ -66,11 +69,12 @@ object BasicPsdCodec {
             val width = data.readInt()
             val depth = data.readUnsignedShort()
             val colorMode = data.readUnsignedShort()
-            require(channels >= 3 && width > 0 && height > 0 && depth == 8 && colorMode == COLOR_MODE_RGB) {
+            require(channels in 3..4 && width in 1..MAX_DIMENSION && height in 1..MAX_DIMENSION &&
+                depth == 8 && colorMode == COLOR_MODE_RGB) {
                 "El PSD debe ser RGB de 8 bits."
             }
             require(width.toLong() * height <= MAX_PIXELS) {
-                "El PSD básico admite hasta 32 megapíxeles."
+                "El PSD básico admite hasta 40 megapíxeles."
             }
             repeat(3) {
                 val sectionLength = data.readInt().toLong() and 0xffffffffL
@@ -123,8 +127,10 @@ object BasicPsdCodec {
             val header = encoded[source++].toInt()
             when {
                 header in 0..127 -> {
-                    val count = (header + 1).coerceAtMost(target.size - destination)
-                    require(source + count <= encoded.size) { "Fila RLE PSD dañada." }
+                    val count = header + 1
+                    require(count <= target.size - destination && source + count <= encoded.size) {
+                        "Fila RLE PSD dañada."
+                    }
                     encoded.copyInto(target, destination, source, source + count)
                     source += count
                     destination += count
@@ -132,13 +138,14 @@ object BasicPsdCodec {
                 header in -127..-1 -> {
                     require(source < encoded.size) { "Fila RLE PSD dañada." }
                     val value = encoded[source++]
-                    val count = (1 - header).coerceAtMost(target.size - destination)
+                    val count = 1 - header
+                    require(count <= target.size - destination) { "Fila RLE PSD excede el ancho." }
                     target.fill(value, destination, destination + count)
                     destination += count
                 }
             }
         }
-        require(destination == target.size) { "Fila RLE PSD incompleta." }
+        require(destination == target.size && source == encoded.size) { "Fila RLE PSD incompleta o excedida." }
     }
 
     private fun skipFully(data: DataInputStream, byteCount: Long) {

@@ -2,7 +2,7 @@ name: Android certification
 
 on:
   push:
-    branches: ["main", "agent/**"]
+    branches: ["main", "agent/**", "audit/**"]
   pull_request:
   workflow_dispatch:
 
@@ -35,11 +35,23 @@ jobs:
         run: >-
           ./gradlew
           :app:lintDebug
+          :app:testDebugUnitTest
           :app:assembleDebug
           :app:assembleDebugAndroidTest
           :app:assembleRelease
           :app:bundleRelease
           --stacktrace
+
+      - name: Upload JVM test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jvm-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload lint report
         if: always()

@@ -243,6 +243,49 @@ internal class SparseTileSurface(
         trimCache(emptySet())
     }
 
+    /**
+     * Worker-only composite of detached tiles. Never holds the surface lock while
+     * decoding PNGs or drawing to the output Canvas, so preview generation cannot
+     * monopolize the same lock needed by the stylus/view renderer.
+     *
+     * The thumbnail is a best-effort point-in-time view. Project publication
+     * checks the committed document revision before accepting its result.
+     */
+    fun drawAllDetached(target: Canvas, paint: Paint?) {
+        val keys = synchronized(lock) {
+            allCurrentKeys().sortedWith(
+                compareBy<TileStorage.Key> { it.row }.thenBy { it.column },
+            )
+        }
+        keys.forEach { key ->
+            val residentCopy = synchronized(lock) {
+                cache[key]?.takeUnless(Bitmap::isRecycled)?.copy(Bitmap.Config.ARGB_8888, false)
+            }
+            val snapshot = residentCopy ?: run {
+                // Tile PNGs are immutable once atomically published. Never decode under lock.
+                val file = File(workingDirectory, key.fileName)
+                val diskCopy = if (file.isFile) TileStorage.loadTile(file) else null
+                // An in-memory dirty tile may have appeared during decoding.
+                val latestCopy = synchronized(lock) {
+                    cache[key]?.takeUnless(Bitmap::isRecycled)?.copy(Bitmap.Config.ARGB_8888, false)
+                }
+                if (latestCopy != null) {
+                    diskCopy?.recycle()
+                    latestCopy
+                } else diskCopy
+            }
+            if (snapshot != null) {
+                try {
+                    val left = (key.column * TileStorage.TILE_SIZE).toFloat()
+                    val top = (key.row * TileStorage.TILE_SIZE).toFloat()
+                    target.drawBitmap(snapshot, left, top, paint)
+                } finally {
+                    snapshot.recycle()
+                }
+            }
+        }
+    }
+
     fun drawAtPoint(target: Canvas, x: Float, y: Float, paint: Paint?) = synchronized(lock) {
         if (x < 0f || x >= width.toFloat() || y < 0f || y >= height.toFloat()) return@synchronized
         val key = TileStorage.Key(

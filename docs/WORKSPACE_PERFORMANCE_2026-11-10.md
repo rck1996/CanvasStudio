@@ -91,3 +91,13 @@ presión de memoria en tablet Android con stylus.
 - Para validar rendimiento real siguen pendientes métricas de FPS, p95/p99, memoria y latencia en tablet con S Pen.
 
 Documentación de la función: [QUICKSHAPE_2026-11-09.md](QUICKSHAPE_2026-11-09.md).
+
+### Última optimización: sin asignaciones por segmento de vista previa
+
+El render de la vista previa diferida utilizaba `transformPoint()` dentro de cada
+segmento, creando un `FloatArray` y una copia `StrokePoint` por muestra **y por
+fotograma**. Ahora transforma ambos extremos con un arreglo de cuatro floats reutilizado
+por `DrawingView` mediante `Matrix.mapPoints`; también conserva una instancia
+persistente de `Paint`. Las coordenadas y la presión dibujadas mantienen el mismo
+algoritmo; el objetivo es reducir pausas de GC con trazos largos y simetría activa.
+Las mejoras de FPS requieren medición en dispositivo real.

@@ -36,6 +36,8 @@ import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.drawing.brush.BrushDabBatchBuilder
 import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
 import com.orbyte.canvasstudio.drawing.input.StrokeSampler
+import com.orbyte.canvasstudio.drawing.input.StrokeInputBatch
+import com.orbyte.canvasstudio.drawing.pipeline.StrokeFrameBudget
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
 import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
@@ -272,6 +274,8 @@ class DrawingView(context: Context) : View(context) {
     private val viewportInverseCoords = FloatArray(8)
     // Reused only on the UI thread during active ink rasterization.
     private val strokeTransformBatch = StrokeBatchTransform()
+    private val strokeInputBatch = StrokeInputBatch()
+    private val strokeFrameBudget = StrokeFrameBudget()
     private val viewportVisibleBounds = RectF()
     private var currentScale = 1f
     private var currentRotationDegrees = 0f
@@ -1798,21 +1802,19 @@ class DrawingView(context: Context) : View(context) {
                 when (activeInputTool ?: eventTool) {
                     DrawingTool.BRUSH, DrawingTool.ERASER -> {
                         val points = activeStrokePoints ?: return true
-                        for (historyIndex in 0 until event.historySize) {
-                            val sample = StylusInputController.historicalSample(
-                                event,
-                                activePointerIndex,
-                                historyIndex,
-                            )
-                            val mapped = mapToDocument(sample.x, sample.y)
+                        strokeInputBatch.forEachHistorical(
+                            event,
+                            activePointerIndex,
+                            inverse,
+                        ) { x, y, historicalPressure, historicalTilt, historicalOrientation, historicalTime ->
                             appendStrokePoint(
                                 points,
-                                mapped[0],
-                                mapped[1],
-                                sample.pressure,
-                                sample.tilt,
-                                sample.orientation,
-                                sample.eventTimeMillis,
+                                x,
+                                y,
+                                historicalPressure,
+                                historicalTilt,
+                                historicalOrientation,
+                                historicalTime,
                             )
                         }
                         appendStrokePoint(
@@ -2120,7 +2122,16 @@ class DrawingView(context: Context) : View(context) {
         strokeFramePosted = true
         postOnAnimation {
             strokeFramePosted = false
-            renderActiveStrokePending(MAX_STROKE_SEGMENTS_PER_FRAME)
+            val before = activeRenderedPointCount
+            val pending = ((activeStrokePoints?.size ?: 0) - before).coerceAtLeast(0)
+            if (pending > 0) {
+                val startedNanos = System.nanoTime()
+                renderActiveStrokePending(strokeFrameBudget.nextSegments(pending))
+                strokeFrameBudget.record(
+                    (activeRenderedPointCount - before).coerceAtLeast(0),
+                    System.nanoTime() - startedNanos,
+                )
+            }
             val points = activeStrokePoints
             if (points != null && activeRenderedPointCount < points.size) {
                 scheduleActiveStrokeRender()
@@ -5613,6 +5624,5 @@ class DrawingView(context: Context) : View(context) {
         const val ENGINE_STATUS_INTERVAL_MS = 650L
         const val QUICK_MENU_HOLD_MS = 420L
         const val MAX_STAMPS_PER_SEGMENT = 48
-        const val MAX_STROKE_SEGMENTS_PER_FRAME = 24
     }
 }

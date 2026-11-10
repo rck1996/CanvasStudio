@@ -355,6 +355,9 @@ fun EditorScreen(
     var changeTick by remember { mutableIntStateOf(0) }
     var saveLabel by remember { mutableStateOf(if (tutorialMode) "Sesión temporal" else "Guardado automático") }
     var zenMode by remember { mutableStateOf(false) }
+    // Portrait tablets should open on the canvas, not a 316dp side inspector.
+    // Landscape keeps the dock visible by default; compact layouts expose a toggle.
+    var inspectorExpanded by remember { mutableStateOf(false) }
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
     }
@@ -782,6 +785,7 @@ fun EditorScreen(
             QuickAccessAction.MASK_WORKFLOW -> openActiveMaskWorkflow()
             QuickAccessAction.OPEN_LAYERS -> {
                 zenMode = false
+                inspectorExpanded = true
                 selectedDock = DockTab.LAYERS
             }
         }
@@ -903,6 +907,11 @@ fun EditorScreen(
             },
             zenMode = zenMode,
             onToggleZen = { zenMode = !zenMode },
+            inspectorExpanded = inspectorExpanded,
+            onToggleInspector = {
+                inspectorExpanded = !inspectorExpanded
+                if (inspectorExpanded) zenMode = false
+            },
             onShowHelp = { showHelp = true },
             onOpenTutorial = onOpenTutorial,
         )
@@ -1205,7 +1214,7 @@ fun EditorScreen(
                 )
             }
 
-            if (!zenMode) {
+            if (!zenMode && (!compactWorkspace || inspectorExpanded)) {
                 RightDock(
                     dockWidth = if (compactWorkspace) 316.dp else 360.dp,
                     selectedTab = selectedDock,
@@ -1533,6 +1542,8 @@ private fun EditorTopBar(
     onCycleGuides: () -> Unit,
     zenMode: Boolean,
     onToggleZen: () -> Unit,
+    inspectorExpanded: Boolean,
+    onToggleInspector: () -> Unit,
     onShowHelp: () -> Unit,
     onOpenTutorial: () -> Unit,
 ) {
@@ -1550,7 +1561,7 @@ private fun EditorTopBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = StudioPalette.Text) }
-            Column(Modifier.width(if (compact) 148.dp else 230.dp)) {
+            Column(Modifier.width(if (compact) 118.dp else 230.dp)) {
                 Text(
                     document.title,
                     color = StudioPalette.Text,
@@ -1569,7 +1580,14 @@ private fun EditorTopBar(
             TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", "undo", onUndo)
             TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", "redo", onRedo)
             Spacer(Modifier.width(6.dp))
-            Surface(
+            if (maxWidth < 760.dp) {
+                TopIconButton(
+                    Icons.Outlined.CenterFocusStrong,
+                    "Restablecer vista",
+                    "view_reset",
+                    onResetView,
+                )
+            } else Surface(
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -1604,6 +1622,14 @@ private fun EditorTopBar(
                     Text(saveLabel, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
                 }
                 Spacer(Modifier.width(10.dp))
+            }
+            if (compact) {
+                TopIconButton(
+                    Icons.Outlined.Layers,
+                    if (inspectorExpanded) "Ocultar inspector" else "Mostrar paneles de edición",
+                    null,
+                    onToggleInspector,
+                )
             }
             TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", null, onToggleZen)
             Button(

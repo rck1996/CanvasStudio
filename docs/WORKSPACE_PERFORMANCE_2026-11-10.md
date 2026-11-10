@@ -137,3 +137,7 @@ Se amplía de 36 a 48 dp el alto táctil de ambos sliders y se amplían los boto
 - El selector flotante de pinceles puede desplazarse tomando su encabezado. La posición está acotada al área del lienzo y no interfiere con la búsqueda ni la elección del pincel.
 - El panel lateral de inspector ocupa 286/320 dp en lugar de 316/360 dp, recuperando lienzo.
 - Añadidas pruebas de transformación, reutilización y equivalencia de límites. La reducción esperada de asignaciones no sustituye el perfilado de latencia y frame time en un S Pen físico.
+
+### Ajuste responsive de la interfaz del render
+
+Los controles de tamaño y opacidad comparten una única implementación interactiva. En el espacio central de dibujo de al menos **780 dp** se presentan horizontalmente sobre el borde inferior; en ventanas más angostas conservan el diseño vertical para evitar solapamiento con el inspector y la barra de estado. El movimiento de la paleta de pinceles se limita ahora a su altura máxima efectiva, evitando que se desplace completamente fuera de la vista. El test del encabezado simula un arrastre táctil real y verifica que la paleta siga visible.

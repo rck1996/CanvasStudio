@@ -5,6 +5,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import com.orbyte.canvasstudio.drawing.premiumBrushes
 import com.orbyte.canvasstudio.ui.theme.CanvasStudioTheme
@@ -59,6 +62,35 @@ class FloatingBrushPaletteUiTest {
         }
         compose.onNodeWithTag("floating_brush_advanced").performClick()
         compose.runOnIdle { assertTrue(advanced) }
+    }
+
+    @Test fun draggingHeaderMovesPaletteWithoutClosingIt() {
+        val presets = premiumBrushes.take(2)
+        var horizontalMotion = 0f
+        compose.setContent {
+            CanvasStudioTheme {
+                FloatingBrushPalette(
+                    brushes = presets,
+                    selectedPresetId = presets.first().id,
+                    favoriteBrushIds = emptySet(),
+                    recentBrushIds = emptyList(),
+                    maxPanelHeight = 440.dp,
+                    onPresetSelected = {},
+                    onOpenAdvanced = {},
+                    onDismiss = {},
+                    onDragBy = { distance -> horizontalMotion += distance.x },
+                )
+            }
+        }
+        compose.onNodeWithTag("floating_brush_drag_handle").performTouchInput {
+            swipe(
+                start = Offset(width * .15f, height * .5f),
+                end = Offset(width * .70f, height * .5f),
+                durationMillis = 320L,
+            )
+        }
+        compose.runOnIdle { assertTrue("Header must accept a drag", horizontalMotion > 8f) }
+        compose.onNodeWithTag("floating_brush_palette").assertExists()
     }
 
     @Test fun searchShowsEmptyStateRatherThanBlockingOrClosingEditor() {

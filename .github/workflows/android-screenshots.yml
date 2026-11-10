@@ -58,7 +58,8 @@ jobs:
             set -e
             ./gradlew :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=com.orbyte.canvasstudio.ui.screens.DesignScreenshotTest" --stacktrace
             mkdir -p design-screenshots
-            adb pull /sdcard/Android/data/com.orbyte.canvasstudio.debug/files/screenshots/. design-screenshots/
+            adb shell ls -lh /sdcard/Pictures/CanvasStudioCaptures/
+            adb pull /sdcard/Pictures/CanvasStudioCaptures/. design-screenshots/
             ls -lh design-screenshots
             test "$(find design-screenshots -maxdepth 1 -name '*.png' | wc -l)" -ge 4
 

@@ -1,6 +1,9 @@
 package com.orbyte.canvasstudio.ui.screens
 
 import android.graphics.Bitmap
+import android.content.ContentValues
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -98,17 +101,31 @@ class DesignScreenshotTest {
         val screenshot = instrumentation.uiAutomation.takeScreenshot()
         assertNotNull("Emulator did not return a screenshot", screenshot)
         screenshot!!
-        val targetContext = instrumentation.targetContext
-        val directory = File(
-            requireNotNull(targetContext.getExternalFilesDir(null)),
-            "screenshots",
-        )
-        assertTrue("Could not create screenshot directory", directory.isDirectory || directory.mkdirs())
-        val file = File(directory, "$baseName.png")
-        file.outputStream().use { stream ->
-            assertTrue("Could not encode screenshot $baseName", screenshot.compress(Bitmap.CompressFormat.PNG, 100, stream))
+        // Gradle may uninstall the test target after instrumented tests, deleting
+        // its Android/data folder. MediaStore keeps these files in public Pictures.
+        val resolver = instrumentation.targetContext.contentResolver
+        val metadata = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "$baseName.png")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+            put(
+                MediaStore.Images.Media.RELATIVE_PATH,
+                Environment.DIRECTORY_PICTURES + "/CanvasStudioCaptures/",
+            )
+            put(MediaStore.Images.Media.IS_PENDING, 1)
         }
-        assertTrue("Screenshot file is empty", file.length() > 20_000L)
+        val imageUri = requireNotNull(
+            resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, metadata),
+        ) { "Could not register public screenshot $baseName" }
+        val saved = resolver.openOutputStream(imageUri)?.use { stream ->
+            screenshot.compress(Bitmap.CompressFormat.PNG, 100, stream)
+        } == true
         screenshot.recycle()
+        assertTrue("Could not encode screenshot $baseName", saved)
+        resolver.update(
+            imageUri,
+            ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) },
+            null,
+            null,
+        )
     }
 }

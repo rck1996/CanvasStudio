@@ -211,6 +211,21 @@ fun GalleryScreen(
                         Text("Papelera (${trashedProjects.size})")
                     }
                 }
+                if (filteredProjects.isEmpty() && searchQuery.isNotBlank()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Sin resultados", style = MaterialTheme.typography.titleMedium, color = StudioPalette.Text)
+                        Text(
+                            "Prueba otro nombre o resolución de lienzo.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = StudioPalette.TextMuted,
+                        )
+                        TextButton(onClick = { searchQuery = "" }) { Text("Limpiar búsqueda") }
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = if (compactLayout) 180.dp else 260.dp),

@@ -70,6 +70,12 @@ internal class ProjectSaveTransaction private constructor(
         fun isActive(projectId: String): Boolean =
             synchronized(lock) { projectId in active }
 
+        /** Serialize gallery mutations with the start of an asynchronous project save. */
+        fun runWhenIdle(projectId: String, block: () -> Boolean): Boolean =
+            synchronized(lock) {
+                projectId !in active && block()
+            }
+
         fun begin(context: Context, projectId: String): ProjectSaveTransaction {
             require(projectId.matches(Regex("[a-zA-Z0-9_-]+"))) { "ID de proyecto no válido" }
             val root = ProjectRepository.projectsRoot(context)
@@ -78,6 +84,9 @@ internal class ProjectSaveTransaction private constructor(
             val backup = File(root, "$projectId$BACKUP")
             synchronized(lock) {
                 check(projectId !in active) { "El proyecto ya se está guardando" }
+                check(!File(context.filesDir, "canvasstudio/trash/$projectId").exists()) {
+                    "No se puede guardar un proyecto enviado a la papelera"
+                }
                 recoverFiles(projectId, live, stage, backup)
                 check(active.add(projectId))
             }

@@ -316,6 +316,7 @@ class DrawingView(context: Context) : View(context) {
     private val performanceMetrics = DrawingPerformanceMetrics(BuildConfig.DEBUG)
     // Isolated mutable paints, shaders and brush textures; UI-thread owner.
     private val brushRasterSession = BrushRasterSession(performanceMetrics)
+    private val strokeCommandPainter = StrokeCommandPainter(brushRasterSession)
     private var activeStrokeInputStartedNanos = 0L
     private val bitmapRasterBackend: TileRasterBackend = BitmapCanvasTileRasterBackend()
     private var vulkanRasterBackend: VulkanTileRasterBackend? = null
@@ -867,47 +868,11 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
-    private fun strokeSegmentBounds(from: StrokePoint, to: StrokePoint, settings: BrushSettings): RectF {
-        val radius = maximumBrushExtent(settings)
-        return RectF(
-            min(from.x, to.x) - radius,
-            min(from.y, to.y) - radius,
-            max(from.x, to.x) + radius,
-            max(from.y, to.y) + radius,
-        )
-    }
+    private fun strokeSegmentBounds(from: StrokePoint, to: StrokePoint, settings: BrushSettings): RectF =
+        BrushStrokeGeometry.segmentBounds(from, to, settings)
 
-    private fun maximumBrushExtent(settings: BrushSettings): Float {
-        val tilt = max(
-            settings.tiltResponse,
-            settings.dynamicsProfile.tiltSize,
-        ).coerceIn(0f, 1f)
-        val primaryRadius = settings.sizePx * .5f * (1f + tilt * .9f)
-        val scatterExtent = primaryRadius * settings.scatter.coerceIn(0f, 1f)
-        val particleExtent = if (
-            settings.tipProfile.shape == BrushTipShape.PARTICLE ||
-            settings.kind == BrushKind.CHARCOAL ||
-            settings.kind == BrushKind.CHALK
-        ) {
-            primaryRadius * (1.3f + settings.scatter.coerceIn(0f, 1f))
-        } else {
-            primaryRadius
-        }
-        val dual = settings.dualBrushProfile
-        val dualExtent = if (dual.enabled) {
-            primaryRadius * (
-                dual.sizeScale.coerceIn(.1f, 2f) +
-                    dual.offset.coerceIn(-1f, 1f).let(::abs) +
-                    dual.scatter.coerceIn(0f, 1f)
-                )
-        } else {
-            0f
-        }
-        val blurExtent = settings.sizePx * (1f - settings.hardness.coerceIn(0f, 1f)) * .24f
-        val wetExtent = settings.sizePx * settings.renderProfile.bleed.coerceIn(0f, 1f) * .28f
-        return max(max(primaryRadius + scatterExtent, particleExtent), dualExtent) +
-            blurExtent + wetExtent + 10f
-    }
+    private fun maximumBrushExtent(settings: BrushSettings): Float =
+        BrushStrokeGeometry.maximumBrushExtent(settings)
 
     private fun isStampBrush(kind: BrushKind): Boolean = brushRasterSession.isStampBrush(kind)
 
@@ -2980,74 +2945,13 @@ class DrawingView(context: Context) : View(context) {
         renderClipBounds: RectF? = null,
     ) {
         when (command) {
-            is StrokeCommand -> {
-                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
-                    ?.let { pathFromPoints(it, close = true) }
-                val clipSave = clipPath?.let {
-                    beginSelectionMask(
-                        canvas,
-                        it,
-                        command.clipInverted,
-                        command.clipFeatherPx,
-                    )
-                }
-                command.points.firstOrNull()?.takeIf { first ->
-                    renderClipBounds == null ||
-                        RectF.intersects(
-                            strokeSegmentBounds(first, first, command.settings),
-                            renderClipBounds,
-                        )
-                }?.let { first ->
-                    brushRasterSession.drawBrushStamp(
-                        canvas = canvas,
-                        x = first.x,
-                        y = first.y,
-                        pressure = first.pressure * brushRasterSession.taperFactor(command.settings, 0f),
-                        tilt = first.tilt,
-                        drawingTool = command.tool,
-                        settings = command.settings,
-                        stampIndex = 0,
-                        angleRadians = 0f,
-                        orientation = first.orientation,
-                    )
-                }
-                val segmentCount = (command.points.size - 1).coerceAtLeast(0)
-                for (index in 0 until segmentCount) {
-                    if (
-                        renderClipBounds != null &&
-                        !RectF.intersects(
-                            strokeSegmentBounds(
-                                command.points[index],
-                                command.points[index + 1],
-                                command.settings,
-                            ),
-                            renderClipBounds,
-                        )
-                    ) {
-                        continue
-                    }
-                    val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
-                    brushRasterSession.drawStrokeSegment(
-                        canvas,
-                        command.points[index],
-                        command.points[index + 1],
-                        command.tool,
-                        command.settings,
-                        progress,
-                        index,
-                        pickupColors?.getOrNull(index),
-                    )
-                }
-                if (clipPath != null && clipSave != null) {
-                    endSelectionMask(
-                        canvas,
-                        clipSave,
-                        clipPath,
-                        command.clipInverted,
-                        command.clipFeatherPx,
-                    )
-                }
-            }
+            is StrokeCommand -> strokeCommandPainter.draw(
+                canvas = canvas,
+                command = command,
+                documentBounds = documentBounds,
+                pickupColors = pickupColors,
+                renderClipBounds = renderClipBounds,
+            )
             is ShapeCommand -> {
                 val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
                     ?.let { pathFromPoints(it, close = true) }

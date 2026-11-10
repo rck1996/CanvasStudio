@@ -41,6 +41,8 @@ import com.orbyte.canvasstudio.drawing.pipeline.StrokeFrameBudget
 import com.orbyte.canvasstudio.drawing.pipeline.StrokePreviewRenderer
 import com.orbyte.canvasstudio.drawing.pipeline.CoalescingSerialWorker
 import com.orbyte.canvasstudio.drawing.pipeline.OrderedRasterCommandQueue
+import com.orbyte.canvasstudio.drawing.pipeline.StrokeCommitLane
+import com.orbyte.canvasstudio.drawing.raster.DetachedStrokeRasterizer
 import com.orbyte.canvasstudio.drawing.raster.PreviewCompositor
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
@@ -329,6 +331,27 @@ class DrawingView(context: Context) : View(context) {
             .coerceIn(20L * 1024L * 1024L, 80L * 1024L * 1024L)
 
     private val strokePreviewRenderer = StrokePreviewRenderer()
+    // Strictly experimental. The proven synchronous renderer remains the
+    // default until end-to-end stylus latency and pixel parity are certified.
+    internal var debugAsyncStrokeRasterEnabled: Boolean = false
+    private val strokeCommitWorker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "canvas-stroke-commit").apply { isDaemon = true }
+    }
+    private val strokeCommitLane = StrokeCommitLane<DetachedStrokeRasterizer.PreparedBatch>(
+        strokeCommitWorker,
+        { callback -> mainHandler.post(callback) },
+    ) { error ->
+        android.util.Log.e("CanvasStudio", "Stroke commit failed", error)
+        onEngineMessage?.invoke("Error al procesar un trazo; se usará el motor CPU.")
+    }
+    private data class QueuedStrokePreview(
+        val command: StrokeCommand,
+    )
+    private val queuedStrokePreviews = mutableListOf<QueuedStrokePreview>()
+    internal fun debugPendingStrokeCommits(): Int = strokeCommitLane.pendingCount
+    private fun flushStrokeCommits() {
+        if (strokeCommitLane.hasPending) strokeCommitLane.flushSynchronously()
+    }
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
@@ -632,6 +655,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun createEmptyDocument(width: Int, height: Int) {
+        flushStrokeCommits()
         documentGeneration += 1L
         clearActiveStrokeState()
         cancelSelectionTransform(rebuild = false)
@@ -1002,6 +1026,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     override fun onDetachedFromWindow() {
+        strokeCommitLane.close()
+        strokeCommitWorker.shutdown()
         prefetchGeneration.incrementAndGet()
         rasterWorkQueue.close()
         prefetchExecutor.shutdownNow()
@@ -1054,7 +1080,9 @@ class DrawingView(context: Context) : View(context) {
         if (hasMissingTiles) performanceMetrics.recordVisibleMiss()
         scheduleTilePrefetch(prefetchedBounds, force = hasMissingTiles)
         scheduleEngineStatusUpdate()
-        onRasterFramePresented?.invoke()
+        // AndroidX Ink must retain its finished front-buffer stroke while
+        // the detached tile batch is still being prepared or published.
+        if (!strokeCommitLane.hasPending) onRasterFramePresented?.invoke()
         if (frameStartedNanos != 0L) {
             performanceMetrics.addViewportFrame(System.nanoTime() - frameStartedNanos)
         }
@@ -1895,6 +1923,9 @@ class DrawingView(context: Context) : View(context) {
         time: Long,
         deferUntilCommit: Boolean = false,
     ) {
+        // Preserve history order if the user draws again before the previous
+        // experimental background batch has published.
+        flushStrokeCommits()
         activeStrokeInputStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         val settings = brushSettings
         val points = mutableListOf(
@@ -2001,6 +2032,17 @@ class DrawingView(context: Context) : View(context) {
      * The exact brush is rasterized once in finishStroke(), avoiding overdraw and tile churn.
      */
     private fun drawDeferredStrokePreview(canvas: Canvas) {
+        // A finished asynchronous stroke must stay visible until tile
+        // publication; otherwise pen-up would briefly erase its preview.
+        queuedStrokePreviews.forEach { preview ->
+            strokePreviewRenderer.draw(
+                canvas,
+                preview.command.points,
+                preview.command.settings,
+                preview.command.tool,
+                listOf(Matrix()),
+            )
+        }
         val points = activeStrokePoints ?: return
         val settings = activeStrokeSettings ?: return
         if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return

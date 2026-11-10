@@ -47,6 +47,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,7 +76,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -127,16 +127,13 @@ fun GalleryScreen(
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
+    var sortOrder by remember { mutableStateOf(GallerySortOrder.RECENT) }
     var showSettings by remember { mutableStateOf(false) }
     var showTrash by remember { mutableStateOf(false) }
     var pendingPermanentDelete by remember { mutableStateOf<TrashedProject?>(null) }
     var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
-    val filteredProjects = remember(projects, searchQuery) {
-        val query = searchQuery.trim()
-        if (query.isBlank()) projects else projects.filter { project ->
-            project.title.contains(query, ignoreCase = true) ||
-                "${project.width}x${project.height}".contains(query.replace(" ", ""), ignoreCase = true)
-        }
+    val filteredProjects = remember(projects, searchQuery, sortOrder) {
+        sortGalleryProjects(projects, searchQuery, sortOrder)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(StudioPalette.Background)) {
@@ -145,7 +142,12 @@ fun GalleryScreen(
         GallerySidebar(onNewCanvas = onNewCanvas, compact = compactLayout, onSettings = { showSettings = true })
         Column(Modifier.weight(1f).fillMaxHeight()) {
             GalleryTopBar(onSettings = { showSettings = true })
-            Column(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 20.dp)) {
+            Column(
+                Modifier.fillMaxSize().padding(
+                    horizontal = if (compactLayout) 12.dp else 28.dp,
+                    vertical = if (compactLayout) 12.dp else 20.dp,
+                ),
+            ) {
                 if (compactLayout) {
                     Column {
                         Text("Mis proyectos", style = MaterialTheme.typography.headlineMedium, color = StudioPalette.Text)
@@ -190,7 +192,19 @@ fun GalleryScreen(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GallerySortOrder.entries.forEach { order ->
+                        FilterChip(
+                            selected = sortOrder == order,
+                            onClick = { sortOrder = order },
+                            label = { Text(order.label) },
+                            modifier = Modifier.testTag("gallery_sort_${order.name.lowercase()}"),
+                        )
+                    }
                     TextButton(onClick = { showTrash = true }) {
                         Icon(Icons.Outlined.DeleteOutline, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -199,9 +213,9 @@ fun GalleryScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 260.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                    columns = GridCells.Adaptive(minSize = if (compactLayout) 180.dp else 260.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (compactLayout) 10.dp else 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compactLayout) 10.dp else 18.dp),
                     contentPadding = PaddingValues(bottom = 28.dp),
                 ) {
                     item {
@@ -1053,4 +1067,30 @@ internal fun NumberField(label: String, value: Int, modifier: Modifier, onValueC
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
     )
+}
+
+/** Pure ordering/search policy to keep filtering out of individual card compositions. */
+internal enum class GallerySortOrder(val label: String) {
+    RECENT("Recientes"), NAME("Nombre"), LARGEST("Resolución"),
+}
+
+internal fun sortGalleryProjects(
+    projects: List<ProjectCard>,
+    query: String,
+    order: GallerySortOrder,
+): List<ProjectCard> {
+    val term = query.trim()
+    val normalizedDimensions = term.replace(" ", "")
+    val matching = if (term.isBlank()) projects else projects.filter { project ->
+        project.title.contains(term, ignoreCase = true) ||
+            "${project.width}x${project.height}".contains(normalizedDimensions, ignoreCase = true)
+    }
+    return when (order) {
+        GallerySortOrder.RECENT -> matching
+        GallerySortOrder.NAME -> matching.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        GallerySortOrder.LARGEST -> matching.sortedWith(
+            compareByDescending<ProjectCard> { it.width.toLong() * it.height.toLong() }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+        )
+    }
 }

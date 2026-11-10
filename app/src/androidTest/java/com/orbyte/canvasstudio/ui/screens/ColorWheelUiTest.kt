@@ -35,8 +35,8 @@ class ColorWheelUiTest {
             }
         }
         compose.onNodeWithTag("hsv_color_wheel").performTouchInput {
-            val start = Offset(size.width - 8f, size.height / 2f)
-            val end = Offset(size.width / 2f, size.height - 8f)
+            val start = Offset(right - 8f, center.y)
+            val end = Offset(center.x, bottom - 8f)
             swipe(start = start, end = end, durationMillis = 380)
         }
         compose.runOnIdle { assertTrue("Hue should approach 90° after dragging", hue in 65f..115f) }
@@ -59,10 +59,10 @@ class ColorWheelUiTest {
             }
         }
         compose.onNodeWithTag("hsv_color_wheel").performTouchInput {
-            val center = Offset(size.width / 2f, size.height / 2f)
+            val origin = center
             swipe(
-                start = center,
-                end = Offset(center.x + size.width * .15f, center.y - size.height * .15f),
+                start = origin,
+                end = Offset(origin.x + right * .15f, origin.y - bottom * .15f),
                 durationMillis = 380,
             )
         }

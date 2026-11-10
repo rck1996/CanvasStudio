@@ -110,14 +110,14 @@ import kotlin.math.min
 @Composable
 fun GalleryScreen(
     projects: List<ProjectCard>,
-    trashedProjects: List<TrashedProject>,
+    trashedProjects: List<TrashedProject> = emptyList(),
     onNewCanvas: () -> Unit,
     onOpenProject: (ProjectCard) -> Unit,
     onDuplicateProject: (ProjectCard) -> Unit,
     onDeleteProject: (ProjectCard) -> Unit,
     onRestoreLatestVersion: (ProjectCard) -> Unit,
-    onRestoreTrashedProject: (TrashedProject) -> Unit,
-    onDeleteTrashedProjectForever: (TrashedProject) -> Unit,
+    onRestoreTrashedProject: (TrashedProject) -> Unit = {},
+    onDeleteTrashedProjectForever: (TrashedProject) -> Unit = {},
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }

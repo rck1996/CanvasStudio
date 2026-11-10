@@ -52,6 +52,41 @@ a claim that the application has achieved GPU or Procreate parity.
    branch; tests cover layer/mask thumbnails, detached cached/disk tiles,
    save coalescing, queue ordering, barriers, and cancellation.
 
+## M2-B — isolated authoritative painter and detached tile publication
+
+Implemented in the same experimental branch:
+
+- `BrushRasterSession` now owns all mutable brush `Paint`, shader matrices,
+  grain/tip Bitmap caches, alpha filters and blend modes. The legacy CPU
+  drawing algorithms were moved without changing their per-dab behavior.
+  Each session is **strictly single-thread owned**; UI and worker sessions
+  never share mutable rendering state.
+- `StrokeCommandPainter` handles authoritative immutable `StrokeCommand`
+  playback, clipping, masks and feathering with its own document bounds.
+  `DrawingView` delegates replay instead of implementing the brush renderer.
+- `BrushStrokeGeometry` shares the exact conservative stroke envelope used
+  by viewport incremental painting, command history and background workers.
+- `DetachedStrokeRasterizer` prepares complete raster patches from detached
+  tile snapshots on a worker thread. It has no access to View/Compose or
+  authoritative in-memory tile bitmaps.
+- `SparseTileSurface.publishDetachedTiles` atomically adopts a prepared set of
+  mutable ARGB tiles **only if the whole destination raster revision matches**
+  the one captured before preparation. A newer stroke/undo/redo invalidates
+  the batch without partial publication.
+- The prototype handles normal strokes, clipping and alpha-lock, caps
+  preparation to 24 tiles to bound temporary RAM, and defers wet color pickup
+  to the legacy CPU renderer until deterministic pigment snapshots exist.
+- Instrumented tests compare independent brush-session pixels and the
+  detached/off-thread prototype against live document strokes. Additional
+  tests check stale-revision rejection and alpha-lock behavior.
+
+**Not yet activated for production pen input:** although the authoritative
+CPU algorithm is extracted, `finishStroke()` still uses the legacy synchronous
+publication route. In-flight asynchronous stroke previews need a durable
+handoff until batch commit; history/save/undo must be performed at the same
+ordered commit boundary. Do not enable the new route just because the detached
+rasterizer passes unit tests.
+
 ## Invariants that the replacement must preserve
 
 - Project serialization and undo/redo are independent of the chosen backend.
@@ -68,8 +103,9 @@ a claim that the application has achieved GPU or Procreate parity.
 ## Remaining architecture milestones (NOT yet implemented)
 
 **M2 — asynchronous authoritative raster (partially implemented).**
-The worker/queue, nonblocking barriers, generation cancellation, serial save
-and detached offscreen compositor are in place. **Final brush-dab rendering
+The worker/queue, nonblocking barriers, generation cancellation, serial save,
+detached offscreen compositor, isolated brush session, command painter, and
+revision-guarded detached tile writer are in place. **Final brush-dab rendering
 is still performed on the main thread** to preserve existing pixel behavior,
 masks, color pickup, and undo. The next migration is to extract the brush
 renderer into an isolated raster session with immutable commands and a
@@ -118,3 +154,18 @@ improvement is claimed from static code review or functional test success.
   serialization concern. No claim of perfect crash/parallel-edit isolation yet.
 - Undo/redo and final brush rendering remain UI-serialized. Existing project
   formats are unchanged and no unvalidated GPU backend is enabled.
+
+## Proposed M2-C activation gate
+
+- Record input, stroke command, selected layer ID, surface ID, original tile
+  revision, clipping geometry and document generation into a standalone work item.
+- Keep each finished stroke's front-buffer overlay visible until *successful*
+  raster publication; cancel and rebuild only when a newer command supersedes it.
+- On the UI thread: publish detached tiles, append history entry, notify layers,
+  advance committed revision and release the preview overlay **as one ordered
+  transaction**. Undo/redo and saves must queue behind in-flight stroke commits.
+- If a background raster batch is stale, exceeds the tile budget, has color
+  pickup, or fails parity validation, replay it synchronously with the existing
+  CPU backend before dropping the overlay.
+- Instrument p50/p95/p99 input-to-commit latency and pixel equivalence on an
+  actual S Pen tablet before enabling worker raster for regular drawing.

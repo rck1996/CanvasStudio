@@ -111,7 +111,7 @@ internal class PreviewCompositor {
                 LayerBlendMode.COLOR_BURN -> BlendMode.COLOR_BURN
             }
         } else {
-            layerPaint.blendMode = null
+            // Do not call Paint.setBlendMode on API 26-28.
             layerPaint.xfermode = when (layer.blendMode) {
                 LayerBlendMode.NORMAL -> null
                 LayerBlendMode.MULTIPLY -> PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)

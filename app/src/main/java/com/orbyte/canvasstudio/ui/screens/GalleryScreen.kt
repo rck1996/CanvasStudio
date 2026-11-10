@@ -64,6 +64,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -74,6 +75,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
@@ -864,6 +866,14 @@ fun NewCanvasDialog(
                             NumberField("Alto", height, Modifier.weight(1f)) { height = it }
                             NumberField("DPI", dpi, Modifier.weight(1f)) { dpi = it }
                         }
+                        TextButton(
+                            modifier = Modifier.testTag("canvas_swap_orientation"),
+                            onClick = {
+                                val previousWidth = width
+                                width = height
+                                height = previousWidth
+                            },
+                        ) { Text("Intercambiar ancho y alto") }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             buildString {
@@ -1023,11 +1033,22 @@ private fun PresetCard(
 }
 
 @Composable
-private fun NumberField(label: String, value: Int, modifier: Modifier, onValueChange: (Int) -> Unit) {
+internal fun NumberField(label: String, value: Int, modifier: Modifier, onValueChange: (Int) -> Unit) {
+    // Keep the draft text locally: the field must allow the user to clear 4096
+    // before typing 2048, without the first backspace being rejected.
+    var draft by remember { mutableStateOf(value.toString()) }
+    LaunchedEffect(value) {
+        if (draft.toIntOrNull() != value) draft = value.toString()
+    }
     androidx.compose.material3.OutlinedTextField(
-        value = value.toString(),
-        onValueChange = { text -> text.filter(Char::isDigit).toIntOrNull()?.let(onValueChange) },
-        modifier = modifier,
+        value = draft,
+        onValueChange = { text ->
+            draft = text.filter(Char::isDigit).take(5)
+            draft.toIntOrNull()?.let(onValueChange)
+        },
+        modifier = modifier
+            .testTag("canvas_field_${label.lowercase()}")
+            .onFocusChanged { if (!it.isFocused) draft = value.toString() },
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),

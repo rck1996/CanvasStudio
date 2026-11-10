@@ -362,6 +362,9 @@ fun EditorScreen(
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
     }
+    var quickShapeEnabled by remember(tutorialMode) {
+        mutableStateOf(!tutorialMode && workspacePreferences.getBoolean("quick_shape_enabled", false))
+    }
     var recentColors by remember { mutableStateOf(RecentColorRepository.load(context)) }
     var lastRecordedColor by remember { mutableIntStateOf(brushSettings.color) }
     // Color-wheel and HSV sliders can emit dozens of changes per second. Persist the
@@ -870,6 +873,16 @@ fun EditorScreen(
                 angleSnappingEnabled = !angleSnappingEnabled
                 drawingView?.setAngleSnappingEnabled(angleSnappingEnabled)
             },
+            quickShapeEnabled = quickShapeEnabled,
+            onToggleQuickShape = {
+                quickShapeEnabled = !quickShapeEnabled
+                drawingView?.quickShapeEnabled = quickShapeEnabled
+                if (!tutorialMode) {
+                    workspacePreferences.edit()
+                        .putBoolean("quick_shape_enabled", quickShapeEnabled)
+                        .apply()
+                }
+            },
             symmetryLabel = when (symmetryMode) {
                 1 -> "Simetría vertical"
                 2 -> "Simetría radial 4"
@@ -958,6 +971,7 @@ fun EditorScreen(
                             }
                             tool = selectedTool
                             brushSettings = brushSettings
+                            quickShapeEnabled = quickShapeEnabled
                             onLayersChanged = { layerModels = it }
                             onLayerGroupsChanged = { layerGroups = it }
                             onDocumentChanged = { changeTick++ }
@@ -1021,6 +1035,7 @@ fun EditorScreen(
                         val view = container.drawingView
                         view.tool = selectedTool
                         view.brushSettings = brushSettings
+                        view.quickShapeEnabled = quickShapeEnabled
                         view.setGridVisible(gridVisible)
                         view.setRulersVisible(rulersVisible)
                         view.setDocumentDpi(document.dpi)
@@ -1471,6 +1486,7 @@ fun EditorScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("S Pen: presión e inclinación controlan el trazo; el botón lateral activa el borrador temporal.")
                     Text("Vista: usa dos dedos para mover, ampliar y girar. Restablecer vista vuelve al encuadre inicial.")
+                    Text("QuickShape: activa la varita de la barra y mantén el lápiz quieto al terminar una línea para enderezarla.")
                     Text("Rendimiento: los tiles visibles permanecen en memoria y se guardan incrementalmente.")
                     Text("Teclado: B pincel, E borrador, H mano, Ctrl+Z deshacer. El perfil puede cambiarse en Ajustes.")
                     Text("La cuadrícula solo es una guía visual y nunca se exporta.")
@@ -1537,6 +1553,8 @@ private fun EditorTopBar(
     onToggleRulerUnits: () -> Unit,
     angleSnappingEnabled: Boolean,
     onToggleAngleSnapping: () -> Unit,
+    quickShapeEnabled: Boolean,
+    onToggleQuickShape: () -> Unit,
     symmetryLabel: String,
     onCycleSymmetry: () -> Unit,
     guideLabel: String,
@@ -1633,6 +1651,17 @@ private fun EditorTopBar(
                     onToggleInspector,
                 )
             }
+            IconButton(
+                onClick = onToggleQuickShape,
+                modifier = Modifier.size(42.dp).testTag("quickshape_toggle"),
+            ) {
+                Icon(
+                    Icons.Outlined.AutoFixNormal,
+                    contentDescription = if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape",
+                    tint = if (quickShapeEnabled) StudioPalette.Accent else StudioPalette.TextMuted,
+                    modifier = Modifier.size(21.dp),
+                )
+            }
             TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", null, onToggleZen)
             Button(
                 onClick = onExport,
@@ -1689,6 +1718,13 @@ private fun EditorTopBar(
                         text = { Text("Tutorial interactivo") },
                         leadingIcon = { Icon(Icons.Outlined.Brush, null) },
                         onClick = { menuExpanded = false; onOpenTutorial() },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape · mantener para enderezar")
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.AutoFixNormal, null) },
+                        onClick = { menuExpanded = false; onToggleQuickShape() },
                     )
                     DropdownMenuItem(
                         text = { Text(if (gridVisible) "Ocultar cuadrícula" else "Mostrar cuadrícula") },

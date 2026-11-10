@@ -97,6 +97,7 @@ import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
+import com.orbyte.canvasstudio.model.LocalProjectVersion
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.TrashedProject
 import com.orbyte.canvasstudio.model.StudioPalette
@@ -119,6 +120,7 @@ fun GalleryScreen(
     onRestoreLatestVersion: (ProjectCard) -> Unit,
     onRestoreTrashedProject: (TrashedProject) -> Unit = {},
     onDeleteTrashedProjectForever: (TrashedProject) -> Unit = {},
+    onRestoreSpecificVersion: (ProjectCard, LocalProjectVersion) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
@@ -209,6 +211,9 @@ fun GalleryScreen(
                             onDuplicate = { onDuplicateProject(project) },
                             onDelete = { onDeleteProject(project) },
                             onRestoreLatestVersion = { onRestoreLatestVersion(project) },
+                            onRestoreSpecificVersion = { version ->
+                                onRestoreSpecificVersion(project, version)
+                            },
                         )
                     }
                 }
@@ -483,14 +488,17 @@ private fun GalleryProjectCard(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onRestoreLatestVersion: () -> Unit,
+    onRestoreSpecificVersion: (LocalProjectVersion) -> Unit,
 ) {
     val context = LocalContext.current
-    val hasLocalVersion = remember(project.id, project.modifiedEpoch) {
-        project.isLocal && ProjectVersionStore.list(context, project.id).isNotEmpty()
+    val localVersions = remember(project.id, project.modifiedEpoch) {
+        if (project.isLocal) ProjectVersionStore.list(context, project.id) else emptyList()
     }
+    val hasLocalVersion = localVersions.isNotEmpty()
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
+    var showVersionHistory by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -554,6 +562,11 @@ private fun GalleryProjectCard(
                                 onClick = { menuExpanded = false; confirmRestore = true },
                             )
                             DropdownMenuItem(
+                                text = { Text("Explorar historial (${localVersions.size})") },
+                                enabled = hasLocalVersion,
+                                onClick = { menuExpanded = false; showVersionHistory = true },
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Mover a papelera") },
                                 onClick = { menuExpanded = false; confirmDelete = true },
                             )
@@ -580,6 +593,15 @@ private fun GalleryProjectCard(
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }
             },
+        )
+    }
+
+    if (showVersionHistory) {
+        ProjectVersionHistoryDialog(
+            project = project,
+            versions = localVersions,
+            onDismiss = { showVersionHistory = false },
+            onRestore = onRestoreSpecificVersion,
         )
     }
 

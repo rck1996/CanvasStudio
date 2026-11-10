@@ -1630,6 +1630,9 @@ class DrawingView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            flushStrokeCommits()
+        }
         performanceMetrics.recordMotionEvent(event.historySize)
         val canceledPalmPointer = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
@@ -3396,6 +3399,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun undo() {
+        flushStrokeCommits()
         val entry = undoStack.removeLastOrNull() ?: return
         val layer = layers.firstOrNull { it.id == entry.layerId } ?: return
         val commandIds = entry.commands.mapTo(mutableSetOf()) { it.id }
@@ -3409,6 +3413,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun redo() {
+        flushStrokeCommits()
         val entry = redoStack.removeLastOrNull() ?: return
         val layer = layers.firstOrNull { it.id == entry.layerId } ?: return
         commandsFor(layer, entry.target) += entry.commands
@@ -3423,6 +3428,7 @@ class DrawingView(context: Context) : View(context) {
     fun refreshLayerState() = notifyLayers()
 
     fun addLayer() {
+        flushStrokeCommits()
         if (!canAllocateAnotherLayer()) {
             onEngineMessage?.invoke("Este documento alcanzó el límite de ${layerLimit()} capas para la memoria disponible.")
             return
@@ -3438,6 +3444,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun duplicateActiveLayer() {
+        flushStrokeCommits()
         if (!canAllocateAnotherLayer()) {
             onEngineMessage?.invoke("Este documento alcanzó el límite de ${layerLimit()} capas para la memoria disponible.")
             return
@@ -3477,6 +3484,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun deleteActiveLayer() {
+        flushStrokeCommits()
         val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
         val removable = layers.filter { it.id in selected }.take((layers.size - 1).coerceAtLeast(0))
         if (removable.isEmpty()) return
@@ -3509,6 +3517,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setActiveLayer(id: String) {
+        flushStrokeCommits()
         if (layers.any { it.id == id }) {
             layers.filter { it.id != id }.forEach { it.editingMask = false }
             selectOnly(id)
@@ -3517,6 +3526,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun toggleLayerSelection(id: String) {
+        flushStrokeCommits()
         if (layers.none { it.id == id }) return
         if (id in selectedLayerIds && selectedLayerIds.size > 1) {
             selectedLayerIds -= id
@@ -3530,6 +3540,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun toggleLayerVisibility(id: String) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id }?.let {
             it.visible = !it.visible
             notifyLayers()
@@ -3538,6 +3549,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setLayerOpacity(id: String, opacity: Float) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id }?.let {
             it.opacity = opacity.coerceIn(0f, 1f)
             notifyLayers()
@@ -3547,6 +3559,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setLayerBlendMode(id: String, blendMode: LayerBlendMode) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id }?.let {
             it.blendMode = blendMode
             notifyLayers()
@@ -3555,6 +3568,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setLayerAlphaLocked(id: String, locked: Boolean) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id }?.let { layer ->
             layer.alphaLocked = locked
             notifyLayers()
@@ -3563,6 +3577,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setLayerClipping(id: String, clipping: Boolean) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id }?.let { layer ->
             layer.clipping = clipping
             notifyLayers()
@@ -3571,6 +3586,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun createGroupFromActiveLayer() {
+        flushStrokeCommits()
         val selected = layers.filter { it.id in selectedLayerIds }.ifEmpty {
             listOfNotNull(activeLayer())
         }
@@ -3587,6 +3603,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun ungroupActiveLayer() {
+        flushStrokeCommits()
         val layer = activeLayer() ?: return
         val groupId = layer.groupId ?: return
         val parentId = layerGroups.firstOrNull { it.id == groupId }?.parentGroupId
@@ -3599,6 +3616,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun toggleGroupVisibility(id: String) {
+        flushStrokeCommits()
         layerGroups.firstOrNull { it.id == id }?.let { group ->
             group.visible = !group.visible
             notifyLayers()
@@ -3607,6 +3625,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun toggleGroupCollapsed(id: String) {
+        flushStrokeCommits()
         layerGroups.firstOrNull { it.id == id }?.let { group ->
             group.collapsed = !group.collapsed
             notifyLayers()
@@ -3614,6 +3633,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setGroupOpacity(id: String, opacity: Float) {
+        flushStrokeCommits()
         layerGroups.firstOrNull { it.id == id }?.let { group ->
             group.opacity = opacity.coerceIn(0f, 1f)
             notifyLayers()
@@ -3622,6 +3642,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun addMaskToActiveLayer() {
+        flushStrokeCommits()
         val layer = activeLayer() ?: return
         if (layer.maskSurface != null) {
             layer.editingMask = true
@@ -3640,12 +3661,14 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun setEditingLayerMask(id: String, editing: Boolean) {
+        flushStrokeCommits()
         layers.forEach { it.editingMask = false }
         layers.firstOrNull { it.id == id && it.maskSurface != null }?.editingMask = editing
         notifyLayers()
     }
 
     fun finishMaskEditing(): Boolean {
+        flushStrokeCommits()
         val changed = layers.any { it.editingMask }
         if (!changed) return false
         layers.forEach { it.editingMask = false }
@@ -3731,6 +3754,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun toggleLayerMaskEnabled(id: String) {
+        flushStrokeCommits()
         layers.firstOrNull { it.id == id && it.maskSurface != null }?.let { layer ->
             layer.maskEnabled = !layer.maskEnabled
             notifyLayers()
@@ -3739,6 +3763,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun deleteActiveLayerMask() {
+        flushStrokeCommits()
         val layer = activeLayer() ?: return
         val mask = layer.maskSurface ?: return
         layer.maskCommands.distinctBy { it.id }.forEach { command ->
@@ -3764,6 +3789,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun moveActiveLayer(up: Boolean) {
+        flushStrokeCommits()
         val selected = selectedLayerIds.ifEmpty { setOf(activeLayerId) }
         if (up) {
             for (index in layers.lastIndex - 1 downTo 0) {
@@ -3784,6 +3810,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun clearActiveLayer() {
+        flushStrokeCommits()
         val layer = activeLayer() ?: return
         val target = activeHistoryTarget(layer)
         commandsFor(layer, target).distinctBy { it.id }.forEach { command ->
@@ -3807,6 +3834,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun renameActiveLayer(name: String) {
+        flushStrokeCommits()
         val cleanName = name.trim().take(48)
         if (cleanName.isBlank()) return
         activeLayer()?.let { layer ->
@@ -4014,6 +4042,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun importBitmapAsLayer(source: Bitmap, name: String = "Imagen importada") {
+        flushStrokeCommits()
         if (!canAllocateAnotherLayer()) {
             onEngineMessage?.invoke("Este documento alcanzó el límite de capas para la memoria disponible.")
             return
@@ -4042,6 +4071,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun commitPendingTransform() {
+        flushStrokeCommits()
         if (transformBitmap != null) commitSelectionTransform()
     }
 
@@ -4161,6 +4191,7 @@ class DrawingView(context: Context) : View(context) {
         dpi: Int,
         includePreview: Boolean = true,
     ) {
+        flushStrokeCommits()
         val saveStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         if (transformBitmap != null) commitSelectionTransform()
 
@@ -4467,6 +4498,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     fun loadProject(projectId: String): Boolean {
+        flushStrokeCommits()
         val directory = ProjectRepository.projectDirectory(context, projectId)
         val metadata = ProjectRepository.metadataFile(context, projectId)
         if (!metadata.isFile) return false

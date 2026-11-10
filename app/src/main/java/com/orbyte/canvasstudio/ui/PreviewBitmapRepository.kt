@@ -6,6 +6,8 @@ import android.util.LruCache
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Bounded, off-main-thread preview decoding shared by gallery and version history.
@@ -16,6 +18,9 @@ import kotlinx.coroutines.withContext
  */
 internal object PreviewBitmapRepository {
     private const val CACHE_BYTES = 12 * 1024 * 1024
+    // Striped locks coalesce simultaneous requests for the same thumbnail without
+    // serializing every gallery card behind one expensive PNG decode.
+    private val decodeLocks = Array(16) { Mutex() }
     private val previews = object : LruCache<String, Bitmap>(CACHE_BYTES) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     }
@@ -29,9 +34,16 @@ internal object PreviewBitmapRepository {
                 previews.get(key)?.takeUnless(Bitmap::isRecycled)
             }?.let { return@withContext it }
 
+            val stripe = (key.hashCode() and Int.MAX_VALUE) % decodeLocks.size
+            decodeLocks[stripe].withLock {
+                // Another card may have populated the cache while this one waited.
+                synchronized(previews) {
+                    previews.get(key)?.takeUnless(Bitmap::isRecycled)
+                }?.let { return@withLock it }
+
             val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(file.absolutePath, options)
-            if (options.outWidth <= 0 || options.outHeight <= 0) return@withContext null
+            if (options.outWidth <= 0 || options.outHeight <= 0) return@withLock null
 
             var sample = 1
             while (options.outWidth / sample > edge || options.outHeight / sample > edge) {
@@ -43,7 +55,7 @@ internal object PreviewBitmapRepository {
                     inSampleSize = sample
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 },
-            ) ?: return@withContext null
+            ) ?: return@withLock null
             if (decoded.width > edge || decoded.height > edge) {
                 // Odd decoder rounding can exceed the requested edge; cap explicitly.
                 val factor = minOf(edge.toFloat() / decoded.width, edge.toFloat() / decoded.height)
@@ -59,6 +71,7 @@ internal object PreviewBitmapRepository {
             } else {
                 synchronized(previews) { previews.put(key, decoded) }
                 decoded
+            }
             }
         }
 }

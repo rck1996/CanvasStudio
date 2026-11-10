@@ -9,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import com.orbyte.canvasstudio.drawing.raster.TileCanvasScope
 import java.io.File
 import java.util.LinkedHashMap
 import kotlin.math.max
@@ -58,6 +59,8 @@ internal class SparseTileSurface(
     private var diskLoads = 0L
     private var residentBytes = 0L
     private val renderDestination = RectF()
+    // Tile drawing is serialized by lock; Canvas, clip and bounds stay reusable.
+    private val tileCanvasScope = TileCanvasScope()
     // One reusable buffer per active surface: alpha-lock used to allocate and GC a full
     // 512x512 ARGB bitmap for every tile touched by every stylus sample.
     private var alphaScratch: Bitmap? = null
@@ -80,89 +83,65 @@ internal class SparseTileSurface(
     }
 
     fun draw(bounds: RectF, block: (Canvas) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
-            val tileCanvas = Canvas(bitmap)
-            tileCanvas.save()
-            tileCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-            tileCanvas.clipRect(
-                RectF(
-                    rect.left.toFloat(),
-                    rect.top.toFloat(),
-                    rect.right.toFloat(),
-                    rect.bottom.toFloat(),
-                ),
-            )
-            block(tileCanvas)
-            tileCanvas.restore()
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEachKeyInBounds
+            tileCanvasScope.drawTile(
+                bitmap,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+            ) { canvas, _ -> block(canvas) }
             markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
     /**
-     * Variant used by command replay so the renderer can reject segments that do
-     * not intersect the current tile instead of replaying a long stroke in full.
+     * Region-limited command replay; the temporary tile bounds belong to the
+     * synchronized callback and must not be retained by a command.
      */
     fun drawPerTile(bounds: RectF, block: (Canvas, RectF) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
-            val tileBounds = RectF(
-                rect.left.toFloat(),
-                rect.top.toFloat(),
-                rect.right.toFloat(),
-                rect.bottom.toFloat(),
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEachKeyInBounds
+            tileCanvasScope.drawTile(
+                bitmap,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+                block,
             )
-            val tileCanvas = Canvas(bitmap)
-            tileCanvas.save()
-            tileCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-            tileCanvas.clipRect(tileBounds)
-            block(tileCanvas, tileBounds)
-            tileCanvas.restore()
             markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
-    /** Draws while preserving the alpha that already exists in each affected tile. */
+    /** Alpha lock uses one reusable scratch tile; no per-dab Canvas allocations. */
     fun drawPreservingAlpha(bounds: RectF, block: (Canvas) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = false) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = false) ?: return@forEachKeyInBounds
             val temporary = alphaScratch?.takeIf {
                 !it.isRecycled && it.width == bitmap.width && it.height == bitmap.height
             } ?: Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also {
                 alphaScratch?.recycle()
                 alphaScratch = it
             }
-            // Transparent scratch is essential: old dabs must never be stamped again.
             temporary.eraseColor(android.graphics.Color.TRANSPARENT)
-            val temporaryCanvas = Canvas(temporary)
-            temporaryCanvas.save()
-            try {
-                temporaryCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-                temporaryCanvas.clipRect(
-                    RectF(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()),
-                )
-                block(temporaryCanvas)
-                Canvas(bitmap).drawBitmap(temporary, 0f, 0f, alphaCompositePaint)
-                markModified(key)
-            } finally {
-                temporaryCanvas.restore()
-            }
+            tileCanvasScope.drawTile(
+                temporary,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+            ) { canvas, _ -> block(canvas) }
+            tileCanvasScope.composite(bitmap, temporary, alphaCompositePaint)
+            markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
     /**
@@ -175,8 +154,8 @@ internal class SparseTileSurface(
         block: (TileStorage.Key, Rect, IntArray) -> Boolean,
     ): Int = synchronized(lock) {
         var changedTiles = 0
-        TileStorage.keysForBounds(bounds, width, height).forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing) ?: return@forEach
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing) ?: return@forEachKeyInBounds
             val rect = TileStorage.tileRect(key, width, height)
             val requiredPixels = bitmap.width * bitmap.height
             if (rasterScratch.size != requiredPixels) rasterScratch = IntArray(requiredPixels)

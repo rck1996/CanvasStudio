@@ -19,6 +19,7 @@ import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
 import com.orbyte.canvasstudio.model.ProjectRepository
+import com.orbyte.canvasstudio.model.ProjectTrashStore
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.defaultProjects
@@ -58,6 +59,9 @@ fun StudioApp() {
     var projects by remember {
         mutableStateOf(ProjectRepository.loadLocalProjects(context) + defaultProjects)
     }
+    var trashedProjects by remember {
+        mutableStateOf(ProjectTrashStore.list(context))
+    }
     var showNewCanvas by rememberSaveable { mutableStateOf(false) }
 
     fun addOrRefreshLocalCard(document: EditorDocument) {
@@ -85,6 +89,7 @@ fun StudioApp() {
         when (destination) {
             Destination.GALLERY -> GalleryScreen(
                 projects = projects,
+                trashedProjects = trashedProjects,
                 onNewCanvas = { showNewCanvas = true },
                 onOpenProject = { project ->
                     if (project.isLocal) {
@@ -132,8 +137,20 @@ fun StudioApp() {
                     }
                 },
                 onDeleteProject = { project ->
-                    if (project.isLocal && ProjectRepository.deleteProject(context, project.id)) {
+                    if (project.isLocal && ProjectTrashStore.moveToTrash(context, project.id)) {
                         projects = projects.filterNot { it.id == project.id }
+                        trashedProjects = ProjectTrashStore.list(context)
+                    }
+                },
+                onRestoreTrashedProject = { trashed ->
+                    if (ProjectTrashStore.restore(context, trashed.id)) {
+                        projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
+                        trashedProjects = ProjectTrashStore.list(context)
+                    }
+                },
+                onDeleteTrashedProjectForever = { trashed ->
+                    if (ProjectTrashStore.deleteForever(context, trashed.id)) {
+                        trashedProjects = ProjectTrashStore.list(context)
                     }
                 },
                 onRestoreLatestVersion = { project ->

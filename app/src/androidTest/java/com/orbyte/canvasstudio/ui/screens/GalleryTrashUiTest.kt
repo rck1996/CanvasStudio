@@ -2,10 +2,9 @@ package com.orbyte.canvasstudio.ui.screens
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import com.orbyte.canvasstudio.model.ProjectTrashStore
 import com.orbyte.canvasstudio.model.TrashedProject
 import com.orbyte.canvasstudio.ui.theme.CanvasStudioTheme
 import org.junit.Assert.assertEquals
@@ -67,7 +66,7 @@ class GalleryTrashUiTest {
         compose.onNodeWithText("Papelera (1)").performClick()
         compose.onNodeWithText("Borrar").performClick()
         compose.runOnIdle { assertEquals(null, permanentlyDeleted) }
-        compose.onAllNodesWithText("Borrar definitivamente").onLast().performClick()
+        compose.onNodeWithTag("gallery_trash_confirm_permanent_delete").performClick()
         compose.runOnIdle { assertEquals(deleted, permanentlyDeleted) }
     }
 }

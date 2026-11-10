@@ -1,7 +1,6 @@
 package com.orbyte.canvasstudio.ui.screens
 
 import android.app.ActivityManager
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -90,6 +89,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.orbyte.canvasstudio.R
+import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import com.orbyte.canvasstudio.drawing.ShortcutPreferences
 import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
@@ -636,8 +636,11 @@ private fun ProjectArtworkPreview(project: ProjectCard, modifier: Modifier = Mod
         repeat(6) {
             val file = File(previewPath)
             if (file.isFile) {
-                previewBitmap = BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
-                if (previewBitmap != null) return@LaunchedEffect
+                val decoded = PreviewBitmapRepository.load(file, project.modifiedEpoch)
+                if (decoded != null) {
+                    previewBitmap = decoded.asImageBitmap()
+                    return@LaunchedEffect
+                }
             }
             delay(250)
         }

@@ -35,6 +35,10 @@ internal class StrokeCommitLane<R : Closeable>(
 
     private val queue = ArrayDeque<Task<R>>()
     private var active: Task<R>? = null
+    // Guards reentrant save/undo callbacks fired during a completed stroke's
+    // own history notification: the publishing stroke is already committed,
+    // and must never be replayed a second time by a nested barrier.
+    private var publishing: Task<R>? = null
     private var generation = 0L
     private var closed = false
 
@@ -56,8 +60,8 @@ internal class StrokeCommitLane<R : Closeable>(
         if (!hasPending) return
         generation++
         val unfinished = ArrayList<Task<R>>(pendingCount)
-        active?.let(unfinished::add)
-        active = null
+        active?.takeUnless { it === publishing }?.let(unfinished::add)
+        if (active !== publishing) active = null
         while (queue.isNotEmpty()) unfinished += queue.removeFirst()
         unfinished.forEach { task ->
             try {
@@ -86,11 +90,14 @@ internal class StrokeCommitLane<R : Closeable>(
     private fun complete(task: Task<R>, ticket: Long, outcome: Result<R?>) {
         try {
             if (!closed && generation == ticket && active === task) {
+                publishing = task
                 try {
                     task.finish(outcome.getOrNull())
                     outcome.exceptionOrNull()?.let(onFailure)
                 } catch (error: Throwable) {
                     onFailure(error)
+                } finally {
+                    publishing = null
                 }
             }
         } finally {

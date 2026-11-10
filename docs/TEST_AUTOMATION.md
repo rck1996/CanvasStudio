@@ -131,3 +131,15 @@ para publicar/revertir guardados completos, recuperar cierres entre renombrados,
 restaurar proyectos desde la papelera y confirmar la eliminación permanente desde
 la interfaz Compose. Una ejecución exitosa en emulador API 35 no verifica por sí sola
 el hardware del S Pen ni la resistencia a cortes de energía.
+
+## Rendimiento y UX (iteración Procreate/Android)
+
+La suite CI normal compila y ejecuta `QuickBrushSizingTest` y
+`ColorWheelGeometryTest` en JVM. El workflow emulado ejecuta además
+`SparseTileScratchTest`, `PreviewBitmapRepositoryTest`,
+`CanvasPresetRepositoryTest`, `RecentColorRepositoryTest`,
+`QuickDialUiTest`, `ColorWheelUiTest` y `CanvasFormatUiTest`.
+
+En QA manual de S Pen, comparar p95 y p99 de frame, asignaciones de Java,
+caché de tiles, ausencia de presión perdida y movimiento de sliders/selector HSV
+sobre un documento con muchas capas. No usar tiempos de CI como cifras de FPS.

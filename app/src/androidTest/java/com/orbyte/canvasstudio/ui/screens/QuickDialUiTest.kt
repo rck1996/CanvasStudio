@@ -8,7 +8,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assert
-import androidx.compose.ui.test.hasSetProgressAction
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
@@ -65,7 +65,7 @@ class QuickDialUiTest {
         // Accessibility is a separate contract from touch gestures:
         // TalkBack and switch access must be able to set the progress directly.
         val slider = compose.onNodeWithTag("quick_slider_opacity")
-        slider.assert(hasSetProgressAction())
+        slider.assert(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
         slider.performSemanticsAction(SemanticsActions.SetProgress) { setProgress ->
             setProgress(.85f)
         }

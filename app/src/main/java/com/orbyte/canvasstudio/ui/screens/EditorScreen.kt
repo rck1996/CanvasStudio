@@ -953,8 +953,9 @@ fun EditorScreen(
                 val maxPaletteX = with(paletteDensity) {
                     (maxWidth - 308.dp - 14.dp).coerceAtLeast(0.dp).roundToPx()
                 }
+                val floatingPaletteMaxHeight = (maxHeight - 90.dp).coerceIn(168.dp, 440.dp)
                 val maxPaletteY = with(paletteDensity) {
-                    (maxHeight - 160.dp - 70.dp).coerceAtLeast(0.dp).roundToPx()
+                    (maxHeight - floatingPaletteMaxHeight - 70.dp).coerceAtLeast(0.dp).roundToPx()
                 }
                 AndroidView(
                     factory = { viewContext ->
@@ -1115,7 +1116,7 @@ fun EditorScreen(
                         selectedPresetId = selectedPreset.id,
                         favoriteBrushIds = favoriteBrushIds,
                         recentBrushIds = recentBrushIds,
-                        maxPanelHeight = (maxHeight - 90.dp).coerceIn(168.dp, 440.dp),
+                        maxPanelHeight = floatingPaletteMaxHeight,
                         onPresetSelected = { preset ->
                             applyBrushPreset(preset)
                             floatingBrushPaletteOpen = false
@@ -1180,10 +1181,9 @@ fun EditorScreen(
                 }
 
                 if (!zenMode) {
-                    Column(
-                        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
+                    // One set of interactive dials. Wide tablets lay them out as
+                    // the reference design; compact screens keep a vertical stack.
+                    val quickDialItems: @Composable () -> Unit = {
                         QuickDial(
                             label = "Tamaño",
                             progress = QuickBrushSizing.sizeProgress(brushSettings.sizePx),
@@ -1222,6 +1222,22 @@ fun EditorScreen(
                             onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
                             color = Color(brushSettings.color),
                         )
+                    }
+                    if (maxWidth >= 780.dp) {
+                        Row(
+                            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            quickDialItems()
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            quickDialItems()
+                        }
                     }
                 }
 

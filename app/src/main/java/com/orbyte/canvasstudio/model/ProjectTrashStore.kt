@@ -39,35 +39,41 @@ object ProjectTrashStore {
 
     @Synchronized
     fun moveToTrash(context: Context, projectId: String): Boolean {
-        if (!projectId.matches(validId) || ProjectSaveTransaction.isActive(projectId)) return false
-        ProjectSaveTransaction.recover(context, projectId)
-        val original = File(ProjectRepository.projectsRoot(context), projectId)
-        if (!original.isDirectory) return false
-        val destination = File(trashRoot(context), projectId)
-        if (destination.exists() || !original.renameTo(destination)) return false
-        destination.setLastModified(System.currentTimeMillis())
-        // Version snapshots deliberately remain linked to the ID so undo survives restore.
-        return true
+        if (!projectId.matches(validId)) return false
+        return ProjectSaveTransaction.runWhenIdle(projectId) {
+            ProjectSaveTransaction.recover(context, projectId)
+            val original = File(ProjectRepository.projectsRoot(context), projectId)
+            val destination = File(trashRoot(context), projectId)
+            if (!original.isDirectory || destination.exists() || !original.renameTo(destination)) {
+                false
+            } else {
+                destination.setLastModified(System.currentTimeMillis())
+                // Version snapshots deliberately remain linked to the ID so undo survives restore.
+                true
+            }
+        }
     }
 
     @Synchronized
     fun restore(context: Context, projectId: String): Boolean {
-        if (!projectId.matches(validId) || ProjectSaveTransaction.isActive(projectId)) return false
-        ProjectSaveTransaction.recover(context, projectId)
-        val trashed = File(trashRoot(context), projectId)
-        val destination = File(ProjectRepository.projectsRoot(context), projectId)
-        if (!trashed.isDirectory || destination.exists()) return false
-        return trashed.renameTo(destination)
+        if (!projectId.matches(validId)) return false
+        return ProjectSaveTransaction.runWhenIdle(projectId) {
+            ProjectSaveTransaction.recover(context, projectId)
+            val trashed = File(trashRoot(context), projectId)
+            val destination = File(ProjectRepository.projectsRoot(context), projectId)
+            trashed.isDirectory && !destination.exists() && trashed.renameTo(destination)
+        }
     }
 
     /** This is the only irreversible user-facing deletion; also purges stored versions. */
     @Synchronized
     fun deleteForever(context: Context, projectId: String): Boolean {
-        if (!projectId.matches(validId) || ProjectSaveTransaction.isActive(projectId)) return false
-        val trashed = File(trashRoot(context), projectId)
-        if (!trashed.isDirectory) return false
-        if (!trashed.deleteRecursively()) return false
-        return ProjectVersionStore.deleteAll(context, projectId)
+        if (!projectId.matches(validId)) return false
+        return ProjectSaveTransaction.runWhenIdle(projectId) {
+            val trashed = File(trashRoot(context), projectId)
+            trashed.isDirectory && trashed.deleteRecursively() &&
+                ProjectVersionStore.deleteAll(context, projectId)
+        }
     }
 
     private fun trashRoot(context: Context): File =

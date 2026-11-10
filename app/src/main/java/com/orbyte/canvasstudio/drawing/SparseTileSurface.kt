@@ -201,15 +201,14 @@ internal class SparseTileSurface(
         TileStorage.forEachKeyInBounds(visibleBounds, width, height) { key ->
             val bitmap = cache[key] ?: return@forEachKeyInBounds
             if (bitmap.isRecycled) return@forEachKeyInBounds
-            val rect = TileStorage.tileRect(key, width, height)
-            // Fractional canvas zoom can rasterize two mathematically adjacent quads with a
-            // sub-pixel gap. Bleed half a document pixel on every side so neighbouring tiles
-            // overlap at the compositor; this is display-only and never changes persisted PNGs.
+            // Inline tile bounds: no Rect allocations during compositing.
+            val left = key.column * TileStorage.TILE_SIZE
+            val top = key.row * TileStorage.TILE_SIZE
             renderDestination.set(
-                rect.left - TILE_EDGE_BLEED_PX,
-                rect.top - TILE_EDGE_BLEED_PX,
-                rect.right + TILE_EDGE_BLEED_PX,
-                rect.bottom + TILE_EDGE_BLEED_PX,
+                left - TILE_EDGE_BLEED_PX,
+                top - TILE_EDGE_BLEED_PX,
+                minOf(width, left + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
+                minOf(height, top + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
             )
             target.drawBitmap(bitmap, null, renderDestination, paint)
         }

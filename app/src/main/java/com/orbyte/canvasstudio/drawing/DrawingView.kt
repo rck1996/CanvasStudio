@@ -132,6 +132,14 @@ class DrawingView(context: Context) : View(context) {
     }
     private val checkerLight = Paint().apply { color = Color.rgb(242, 242, 239) }
     private val checkerDark = Paint().apply { color = Color.rgb(231, 232, 229) }
+    // Repeating 96 px bitmap replaces potentially thousands of rectangle draws per frame.
+    private val checkerboardPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        shader = BitmapShader(
+            CheckerboardTexture.create(checkerLight.color, checkerDark.color),
+            Shader.TileMode.REPEAT,
+            Shader.TileMode.REPEAT,
+        )
+    }
     // Tiles share exact edges. Bilinear sampling blends the transparent outer pixel of a tile
     // with its neighbour at fractional zoom and produces a visible 512 px checker/grid.
     private val layerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -261,6 +269,8 @@ class DrawingView(context: Context) : View(context) {
 
     private val transform = Matrix()
     private val inverse = Matrix()
+    private val viewportInverseCoords = FloatArray(8)
+    private val viewportVisibleBounds = RectF()
     private var currentScale = 1f
     private var currentRotationDegrees = 0f
     private var fittedOnce = false
@@ -287,6 +297,11 @@ class DrawingView(context: Context) : View(context) {
     private var perspectiveSnappingEnabled = false
     private var verticalSymmetry = false
     private var radialSymmetryCount = 1
+    private var cachedSymmetryCount = Int.MIN_VALUE
+    private var cachedVerticalSymmetry = false
+    private var cachedSymmetryWidth = -1
+    private var cachedSymmetryHeight = -1
+    private var cachedSymmetryMatrices: List<Matrix> = emptyList()
     private var guideMode = GuideMode.NONE
     private var perspectiveEditing = false
     private var perspectivePoint1X = documentWidth * 0.5f
@@ -1083,8 +1098,8 @@ class DrawingView(context: Context) : View(context) {
         canvas.concat(transform)
         canvas.save()
         canvas.clipRect(documentBounds)
-        drawCheckerboard(canvas)
         val visibleBounds = visibleDocumentRect()
+        drawCheckerboard(canvas, visibleBounds)
         prefetchedBounds.set(
             (visibleBounds.left - TileStorage.TILE_SIZE).coerceAtLeast(0f),
             (visibleBounds.top - TileStorage.TILE_SIZE).coerceAtLeast(0f),
@@ -1094,7 +1109,7 @@ class DrawingView(context: Context) : View(context) {
         layers.forEachIndexed { index, layer ->
             drawVisibleLayer(canvas, visibleBounds, index, layer)
         }
-        drawGridOverlay(canvas)
+        drawGridOverlay(canvas, visibleBounds)
         drawPerspectiveGuides(canvas)
         drawRulers(canvas)
         drawShapePreview(canvas)
@@ -1113,12 +1128,15 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
-    private fun hasMissingVisibleTiles(bounds: RectF): Boolean = layers
-        .filter(::isLayerEffectivelyVisible)
-        .any { layer ->
-            layer.surface.hasMissingVisibleTiles(bounds) ||
+    private fun hasMissingVisibleTiles(bounds: RectF): Boolean {
+        for (layer in layers) {
+            if (!isLayerEffectivelyVisible(layer)) continue
+            if (layer.surface.hasMissingVisibleTiles(bounds) ||
                 (layer.maskEnabled && layer.maskSurface?.hasMissingVisibleTiles(bounds) == true)
+            ) return true
         }
+        return false
+    }
 
     private fun groupFor(layer: LayerData): LayerGroupData? =
         layer.groupId?.let { groupId -> layerGroups.firstOrNull { it.id == groupId } }
@@ -1163,7 +1181,8 @@ class DrawingView(context: Context) : View(context) {
             return
         }
 
-        val checkpoint = canvas.saveLayer(documentBounds, null)
+        // No need for a document-sized offscreen texture when only the viewport is visible.
+        val checkpoint = canvas.saveLayer(visibleBounds, null)
         configureLayerPaint(layer, effectiveLayerOpacity(layer))
         layer.surface.drawVisible(canvas, visibleBounds, layerPaint)
         if (layer.id == activeLayerId && !layer.editingMask) drawTransformPreview(canvas, layerPaint)
@@ -1344,60 +1363,51 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun visibleDocumentRect(): RectF {
-        if (width <= 0 || height <= 0) return RectF(documentBounds)
-        transform.invert(inverse)
-        val points = floatArrayOf(
-            0f, 0f,
-            width.toFloat(), 0f,
-            width.toFloat(), height.toFloat(),
-            0f, height.toFloat(),
-        )
-        inverse.mapPoints(points)
-        val left = min(min(points[0], points[2]), min(points[4], points[6])).coerceIn(0f, documentWidth.toFloat())
-        val top = min(min(points[1], points[3]), min(points[5], points[7])).coerceIn(0f, documentHeight.toFloat())
-        val right = max(max(points[0], points[2]), max(points[4], points[6])).coerceIn(0f, documentWidth.toFloat())
-        val bottom = max(max(points[1], points[3]), max(points[5], points[7])).coerceIn(0f, documentHeight.toFloat())
-        return RectF(left, top, right, bottom)
-    }
-
-    private fun drawCheckerboard(canvas: Canvas) {
-        canvas.drawRect(documentBounds, pagePaint)
-        val visible = visibleDocumentRect()
-        val tile = 48f
-        val firstColumn = (visible.left / tile).toInt().coerceAtLeast(0)
-        val lastColumn = ceil(visible.right / tile).toInt().coerceAtMost(ceil(documentWidth / tile).toInt())
-        val firstRow = (visible.top / tile).toInt().coerceAtLeast(0)
-        val lastRow = ceil(visible.bottom / tile).toInt().coerceAtMost(ceil(documentHeight / tile).toInt())
-        for (row in firstRow until lastRow) {
-            for (column in firstColumn until lastColumn) {
-                val x = column * tile
-                val y = row * tile
-                canvas.drawRect(
-                    x,
-                    y,
-                    min(x + tile, documentWidth.toFloat()),
-                    min(y + tile, documentHeight.toFloat()),
-                    if ((row + column) % 2 == 0) checkerLight else checkerDark,
-                )
-            }
+        if (width <= 0 || height <= 0) {
+            viewportVisibleBounds.set(documentBounds)
+            return viewportVisibleBounds
         }
+        transform.invert(inverse)
+        val points = viewportInverseCoords
+        points[0] = 0f
+        points[1] = 0f
+        points[2] = width.toFloat()
+        points[3] = 0f
+        points[4] = width.toFloat()
+        points[5] = height.toFloat()
+        points[6] = 0f
+        points[7] = height.toFloat()
+        inverse.mapPoints(points)
+        viewportVisibleBounds.set(
+            min(min(points[0], points[2]), min(points[4], points[6])).coerceIn(0f, documentWidth.toFloat()),
+            min(min(points[1], points[3]), min(points[5], points[7])).coerceIn(0f, documentHeight.toFloat()),
+            max(max(points[0], points[2]), max(points[4], points[6])).coerceIn(0f, documentWidth.toFloat()),
+            max(max(points[1], points[3]), max(points[5], points[7])).coerceIn(0f, documentHeight.toFloat()),
+        )
+        return viewportVisibleBounds
     }
 
-    private fun drawGridOverlay(canvas: Canvas) {
-        if (gridVisible) {
+    private fun drawCheckerboard(canvas: Canvas, visible: RectF) {
+        canvas.drawRect(documentBounds, pagePaint)
+        if (!visible.isEmpty) canvas.drawRect(visible, checkerboardPaint)
+    }
+
+    private fun drawGridOverlay(canvas: Canvas, visible: RectF) {
+        if (gridVisible && !visible.isEmpty) {
             val spacing = when {
                 currentScale >= 1.4f -> 64f
                 currentScale >= 0.65f -> 128f
                 else -> 256f
             }
-            var x = 0f
-            while (x <= documentWidth) {
-                canvas.drawLine(x, 0f, x, documentHeight.toFloat(), gridPaint)
+            // Grid lines outside the visible bounds never need to reach the renderer.
+            var x = kotlin.math.floor(visible.left / spacing) * spacing
+            while (x <= visible.right) {
+                canvas.drawLine(x, visible.top, x, visible.bottom, gridPaint)
                 x += spacing
             }
-            var y = 0f
-            while (y <= documentHeight) {
-                canvas.drawLine(0f, y, documentWidth.toFloat(), y, gridPaint)
+            var y = kotlin.math.floor(visible.top / spacing) * spacing
+            while (y <= visible.bottom) {
+                canvas.drawLine(visible.left, y, visible.right, y, gridPaint)
                 y += spacing
             }
         }
@@ -1594,21 +1604,31 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun symmetryMatrices(): List<Matrix> {
+        if (cachedSymmetryCount == radialSymmetryCount &&
+            cachedVerticalSymmetry == verticalSymmetry &&
+            cachedSymmetryWidth == documentWidth &&
+            cachedSymmetryHeight == documentHeight
+        ) return cachedSymmetryMatrices
         val centerX = documentWidth / 2f
         val centerY = documentHeight / 2f
-        if (radialSymmetryCount > 1) {
-            return List(radialSymmetryCount) { index ->
+        cachedSymmetryMatrices = when {
+            radialSymmetryCount > 1 -> List(radialSymmetryCount) { index ->
                 Matrix().apply { setRotate(360f * index / radialSymmetryCount, centerX, centerY) }
             }
-        }
-        if (verticalSymmetry) {
-            return listOf(
+            verticalSymmetry -> listOf(
                 Matrix(),
                 Matrix().apply { setScale(-1f, 1f, centerX, centerY) },
             )
+            else -> listOf(Matrix())
         }
-        return listOf(Matrix())
+        cachedSymmetryCount = radialSymmetryCount
+        cachedVerticalSymmetry = verticalSymmetry
+        cachedSymmetryWidth = documentWidth
+        cachedSymmetryHeight = documentHeight
+        return cachedSymmetryMatrices
     }
+
+    internal fun debugSymmetryMatricesForTest(): List<Matrix> = symmetryMatrices()
 
     private fun transformPoint(point: StrokePoint, matrix: Matrix): StrokePoint {
         val values = floatArrayOf(point.x, point.y)

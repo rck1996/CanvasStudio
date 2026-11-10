@@ -97,6 +97,7 @@ import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
 import com.orbyte.canvasstudio.model.ProjectVersionStore
+import com.orbyte.canvasstudio.model.TrashedProject
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.canvasPresets
 import com.orbyte.canvasstudio.model.constrainCanvasSize
@@ -109,15 +110,20 @@ import kotlin.math.min
 @Composable
 fun GalleryScreen(
     projects: List<ProjectCard>,
+    trashedProjects: List<TrashedProject>,
     onNewCanvas: () -> Unit,
     onOpenProject: (ProjectCard) -> Unit,
     onDuplicateProject: (ProjectCard) -> Unit,
     onDeleteProject: (ProjectCard) -> Unit,
     onRestoreLatestVersion: (ProjectCard) -> Unit,
+    onRestoreTrashedProject: (TrashedProject) -> Unit,
+    onDeleteTrashedProjectForever: (TrashedProject) -> Unit,
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showTrash by remember { mutableStateOf(false) }
+    var pendingPermanentDelete by remember { mutableStateOf<TrashedProject?>(null) }
     var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
     val filteredProjects = remember(projects, searchQuery) {
         val query = searchQuery.trim()
@@ -177,7 +183,15 @@ fun GalleryScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { showTrash = true }) {
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Papelera (${trashedProjects.size})")
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
                 LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 260.dp),
                     horizontalArrangement = Arrangement.spacedBy(18.dp),
@@ -202,13 +216,78 @@ fun GalleryScreen(
         }
     }
 
+    if (showTrash) {
+        AlertDialog(
+            onDismissRequest = { showTrash = false },
+            title = { Text("Papelera de proyectos") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().height(360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "Los proyectos eliminados se conservan hasta que decidas borrarlos definitivamente.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (trashedProjects.isEmpty()) {
+                        Text("La papelera está vacía.", color = StudioPalette.TextMuted)
+                    }
+                    trashedProjects.forEach { trashed ->
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(
+                                trashed.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(onClick = { onRestoreTrashedProject(trashed) }) {
+                                    Text("Restaurar")
+                                }
+                                TextButton(onClick = { pendingPermanentDelete = trashed }) {
+                                    Text("Borrar")
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTrash = false }) { Text("Cerrar") }
+            },
+        )
+    }
+
+    pendingPermanentDelete?.let { trashed ->
+        AlertDialog(
+            onDismissRequest = { pendingPermanentDelete = null },
+            title = { Text("Borrar definitivamente") },
+            text = { Text("Se eliminarán ${trashed.title}, sus capas y versiones locales. Esta acción no se puede deshacer.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteTrashedProjectForever(trashed)
+                    pendingPermanentDelete = null
+                }) { Text("Borrar definitivamente") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPermanentDelete = null }) { Text("Cancelar") }
+            },
+        )
+    }
+
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { showSettings = false },
             title = { Text("Canvas Studio") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Canvas Studio 1.6", fontWeight = FontWeight.SemiBold)
+                    Text("Canvas Studio 2.5.0", fontWeight = FontWeight.SemiBold)
                     Text("Guardado local, sin cuenta y sin servicios en segundo plano.")
                     Text("Perfil de atajos", fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -471,7 +550,7 @@ private fun GalleryProjectCard(
                                 onClick = { menuExpanded = false; confirmRestore = true },
                             )
                             DropdownMenuItem(
-                                text = { Text("Eliminar del dispositivo") },
+                                text = { Text("Mover a papelera") },
                                 onClick = { menuExpanded = false; confirmDelete = true },
                             )
                         }
@@ -484,15 +563,15 @@ private fun GalleryProjectCard(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Eliminar proyecto") },
-            text = { Text("Se eliminará ${project.title} y sus capas guardadas en este dispositivo.") },
+            title = { Text("Mover a papelera") },
+            text = { Text("${project.title} se guardará en la papelera. Podrás restaurarlo después.") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirmDelete = false
                         onDelete()
                     },
-                ) { Text("Eliminar") }
+                ) { Text("Mover a papelera") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }

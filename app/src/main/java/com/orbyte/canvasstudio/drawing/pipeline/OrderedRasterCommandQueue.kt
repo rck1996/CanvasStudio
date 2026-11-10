@@ -50,9 +50,18 @@ internal class OrderedRasterCommandQueue(
                     val active = synchronized(lock) { !closed && generation == ticket.second }
                     try {
                         if (active) {
-                            result.fold(commit, onError)
-                        } else {
-                            result.getOrNull()?.let(discard)
+                            result.fold(
+                                onSuccess = { output ->
+                                    try {
+                                        commit(output)
+                                    } catch (error: Throwable) {
+                                        onError(error)
+                                    }
+                                },
+                                onFailure = onError,
+                            )
+                        } else if (result.isSuccess) {
+                            discard(result.getOrThrow())
                         }
                     } finally {
                         publishThrough(ticket.first)

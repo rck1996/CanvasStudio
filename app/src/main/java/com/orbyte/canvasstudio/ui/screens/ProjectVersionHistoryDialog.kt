@@ -1,6 +1,5 @@
 package com.orbyte.canvasstudio.ui.screens
 
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -38,12 +37,10 @@ import androidx.compose.ui.unit.dp
 import com.orbyte.canvasstudio.model.LocalProjectVersion
 import com.orbyte.canvasstudio.model.ProjectCard
 import com.orbyte.canvasstudio.model.StudioPalette
+import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import java.io.File
 import java.text.DateFormat
 import java.util.Date
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlin.math.max
 
 /** View and restore any of the project's saved local versions, with a thumbnail when available. */
 @Composable
@@ -126,20 +123,7 @@ internal fun ProjectVersionHistoryDialog(
 private fun VersionThumbnail(file: File) {
     var thumbnail by remember(file.absolutePath) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(file.absolutePath) {
-        thumbnail = withContext(Dispatchers.IO) {
-            if (!file.isFile) return@withContext null
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
-            var sampleSize = 1
-            while (max(bounds.outWidth / sampleSize, bounds.outHeight / sampleSize) > 512) {
-                sampleSize *= 2
-            }
-            BitmapFactory.decodeFile(
-                file.absolutePath,
-                BitmapFactory.Options().apply { inSampleSize = sampleSize },
-            )?.asImageBitmap()
-        }
+        thumbnail = PreviewBitmapRepository.load(file, maxEdge = 512)?.asImageBitmap()
     }
     Box(
         modifier = Modifier.size(width = 100.dp, height = 75.dp)

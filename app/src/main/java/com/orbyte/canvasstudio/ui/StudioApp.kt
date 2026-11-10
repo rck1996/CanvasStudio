@@ -159,6 +159,13 @@ fun StudioApp() {
                         projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
                     }
                 },
+                onRestoreSpecificVersion = { project, version ->
+                    if (project.id == version.projectId &&
+                        ProjectVersionStore.restore(context, version)
+                    ) {
+                        projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
+                    }
+                },
             )
 
             Destination.EDITOR -> EditorScreen(

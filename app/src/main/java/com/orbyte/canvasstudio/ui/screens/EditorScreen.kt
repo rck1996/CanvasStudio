@@ -3542,7 +3542,7 @@ private fun ColorDock(
 }
 
 @Composable
-private fun HueWheel(
+internal fun HueWheel(
     hue: Float,
     saturation: Float,
     value: Float,

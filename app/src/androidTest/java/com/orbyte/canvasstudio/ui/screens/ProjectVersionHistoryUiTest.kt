@@ -2,6 +2,7 @@ package com.orbyte.canvasstudio.ui.screens
 
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.orbyte.canvasstudio.model.LocalProjectVersion
 import com.orbyte.canvasstudio.model.PreviewStyle
@@ -63,7 +64,7 @@ class ProjectVersionHistoryUiTest {
             }
         }
         compose.onNodeWithTag("restore_version_2000").performClick()
-        compose.onNodeWithTag("confirm_restore_version").assertExists()
+        compose.onNodeWithText("Cancelar").performClick()
         compose.runOnIdle { assertNull(restored) }
     }
 }

@@ -126,6 +126,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -176,6 +177,7 @@ import com.orbyte.canvasstudio.ui.tutorial.freshEditorTutorialState
 import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
 import com.orbyte.canvasstudio.ui.tutorial.tutorialRuntimePolicy
 import com.orbyte.canvasstudio.ui.tutorial.tutorialShouldExitMaskEditing
+import com.orbyte.canvasstudio.ui.workspace.QuickBrushSizing
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
@@ -1098,8 +1100,18 @@ fun EditorScreen(
                     ) {
                         QuickDial(
                             label = "Tamaño",
-                            progress = brushSettings.sizePx / 180f,
+                            progress = QuickBrushSizing.sizeProgress(brushSettings.sizePx),
                             value = "${brushSettings.sizePx.toInt()} px",
+                            onProgressChanged = { progress ->
+                                val before = brushSettings.sizePx
+                                val after = QuickBrushSizing.sizeFromProgress(progress)
+                                brushSettings = brushSettings.copy(sizePx = after)
+                                if (abs(after - before) >= 0.1f) {
+                                    tutorialSession?.observe(
+                                        StudioTutorialEvent.BrushParameterChanged("size", before, after),
+                                    )
+                                }
+                            },
                             onDecrease = {
                                 val before = brushSettings.sizePx
                                 brushSettings = brushSettings.copy(sizePx = (before / 1.16f).coerceAtLeast(2f))
@@ -1113,8 +1125,13 @@ fun EditorScreen(
                         )
                         QuickDial(
                             label = "Opacidad",
-                            progress = brushSettings.opacity,
+                            progress = QuickBrushSizing.opacityProgress(brushSettings.opacity),
                             value = "${(brushSettings.opacity * 100).toInt()}%",
+                            onProgressChanged = { progress ->
+                                brushSettings = brushSettings.copy(
+                                    opacity = QuickBrushSizing.opacityFromProgress(progress),
+                                )
+                            },
                             onDecrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity - .1f).coerceAtLeast(.05f)) },
                             onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
                             color = Color(brushSettings.color),
@@ -1758,46 +1775,72 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
 }
 
 @Composable
-private fun QuickDial(
+internal fun QuickDial(
     label: String,
     progress: Float,
     value: String,
     onDecrease: () -> Unit,
     onIncrease: () -> Unit,
+    onProgressChanged: (Float) -> Unit,
     color: Color? = null,
 ) {
     Surface(
-        modifier = Modifier.editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
+        modifier = Modifier
+            .width(252.dp)
+            .editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
         color = Color(0xEA171A1F),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
-        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxSize(),
-                    strokeWidth = 3.dp,
-                    color = StudioPalette.Accent,
-                    trackColor = StudioPalette.SurfaceHover,
-                )
-                Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 9.sp)
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxSize(),
+                        strokeWidth = 3.dp,
+                        color = StudioPalette.Accent,
+                        trackColor = StudioPalette.SurfaceHover,
+                    )
+                    Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 9.sp)
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
+                    Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                }
+                color?.let {
+                    Box(
+                        Modifier.size(22.dp)
+                            .background(it, CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = .6f), CircleShape),
+                    )
+                }
+                IconButton(onClick = onDecrease, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
+                }
+                IconButton(onClick = onIncrease, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
+                }
             }
-            Spacer(Modifier.width(9.dp))
-            Column {
-                Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
-                Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
-            }
-            color?.let {
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.size(22.dp).background(it, CircleShape).border(1.dp, Color.White.copy(alpha = .6f), CircleShape))
-            }
-            IconButton(onClick = onDecrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
-            }
-            IconButton(onClick = onIncrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
-            }
+            // Continuous adjustment avoids opening Brush Studio while painting.
+            Slider(
+                value = progress.coerceIn(0f, 1f),
+                onValueChange = onProgressChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .testTag(if (label == "Tamaño") "quick_slider_size" else "quick_slider_opacity")
+                    .semantics {
+                        contentDescription = "Deslizar $label"
+                        stateDescription = value
+                    },
+                colors = SliderDefaults.colors(
+                    thumbColor = StudioPalette.Accent,
+                    activeTrackColor = StudioPalette.Accent,
+                    inactiveTrackColor = StudioPalette.SurfaceHover,
+                ),
+            )
         }
     }
 }

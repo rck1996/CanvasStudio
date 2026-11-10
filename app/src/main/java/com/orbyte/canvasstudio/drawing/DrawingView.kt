@@ -36,6 +36,7 @@ import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.drawing.brush.BrushDabBatchBuilder
 import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
 import com.orbyte.canvasstudio.drawing.input.StrokeSampler
+import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
 import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
 import com.orbyte.canvasstudio.drawing.history.HistorySurfaceKey
@@ -356,6 +357,8 @@ class DrawingView(context: Context) : View(context) {
     private val quickMenuHalfSize = 165f * resources.displayMetrics.density
 
     var tool: DrawingTool = DrawingTool.BRUSH
+    /** Opt-in; disabled by default so regular stylus strokes retain the fastest raster path. */
+    var quickShapeEnabled: Boolean = false
     var brushSettings: BrushSettings = BrushSettings()
         set(value) {
             field = value.sanitized()
@@ -427,7 +430,7 @@ class DrawingView(context: Context) : View(context) {
 
     fun supportsPlatformLowLatencyPreview(): Boolean =
         tool == DrawingTool.BRUSH &&
-            shouldDeferActiveRaster(brushSettings) &&
+            (shouldDeferActiveRaster(brushSettings) || quickShapeEnabled) &&
             platformInkPreviewCompatible(brushSettings.kind)
 
     private fun hasCompatiblePlatformPreview(settings: BrushSettings): Boolean =
@@ -1723,7 +1726,7 @@ class DrawingView(context: Context) : View(context) {
                         tilt = tilt,
                         orientation = orientation,
                         time = event.eventTime,
-                        deferUntilCommit = !stylusPresent,
+                        deferUntilCommit = !stylusPresent || (quickShapeEnabled && eventTool == DrawingTool.BRUSH),
                     )
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE, DrawingTool.GRADIENT -> {
                         shapeStart = StrokePoint(current[0], current[1], pressure, tilt, event.eventTime)
@@ -1812,7 +1815,8 @@ class DrawingView(context: Context) : View(context) {
 
             MotionEvent.ACTION_UP -> {
                 when (activeInputTool ?: eventTool) {
-                    DrawingTool.BRUSH, DrawingTool.ERASER -> finishStroke()
+                    DrawingTool.BRUSH, DrawingTool.ERASER ->
+                        finishStroke(event.eventTime, current[0], current[1])
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE -> finishShape()
                     DrawingTool.GRADIENT -> finishGradient()
                     DrawingTool.SELECT_RECTANGLE -> finishRectangleSelection()
@@ -2128,15 +2132,55 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
-    private fun finishStroke() {
+    private fun finishStroke(releaseTimeMillis: Long, releaseX: Float, releaseY: Float) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
         val settings = activeStrokeSettings ?: brushSettings
         val deferredRaster = activeStrokeDefersRaster || shouldDeferActiveRaster(settings)
         if (!deferredRaster) renderActiveStrokePending(Int.MAX_VALUE)
         val completedPoints = points.toList()
+        val quickLine = if (quickShapeEnabled && completedTool == DrawingTool.BRUSH && deferredRaster) {
+            QuickShapeRecognizer.detectLine(
+                points = completedPoints,
+                releaseX = releaseX,
+                releaseY = releaseY,
+                releaseTimeMillis = releaseTimeMillis,
+                releaseTolerancePx = 6f / currentScale.coerceAtLeast(.1f),
+            )
+        } else null
         clearActiveStrokeState()
         if (completedPoints.isEmpty()) return
+        if (quickLine != null) {
+            val shape = ShapeCommand(
+                tool = DrawingTool.LINE,
+                startX = quickLine.startX,
+                startY = quickLine.startY,
+                endX = quickLine.endX,
+                endY = quickLine.endY,
+                settings = settings,
+                clipPoints = persistentSelectionPoints(),
+                clipInverted = selectionInverted,
+                clipFeatherPx = selectionFeatherPx,
+            )
+            activeLayer()?.let { layer ->
+                val commands = symmetryCommands(shape)
+                val surface = surfaceFor(layer, activeHistoryTarget(layer))
+                commands.forEach { drawCommand(surface, it) }
+                recordCommands(layer, commands)
+            }
+            onInteraction?.invoke(
+                DrawingInteractionEvent.ShapeCommitted(
+                    DrawingTool.LINE,
+                    abs(quickLine.endX - quickLine.startX),
+                    abs(quickLine.endY - quickLine.startY),
+                ),
+            )
+            commitDocumentChange()
+            if (activeStrokeInputStartedNanos != 0L) {
+                performanceMetrics.addInputToCommit(System.nanoTime() - activeStrokeInputStartedNanos)
+            }
+            return
+        }
         val command = StrokeCommand(
             points = completedPoints,
             tool = completedTool,

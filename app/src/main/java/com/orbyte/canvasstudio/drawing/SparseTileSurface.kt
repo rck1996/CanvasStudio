@@ -58,6 +58,14 @@ internal class SparseTileSurface(
     private var diskLoads = 0L
     private var residentBytes = 0L
     private val renderDestination = RectF()
+    // One reusable buffer per active surface: alpha-lock used to allocate and GC a full
+    // 512x512 ARGB bitmap for every tile touched by every stylus sample.
+    private var alphaScratch: Bitmap? = null
+    private val alphaCompositePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+    }
+    // Keep an exactly-sized JNI-compatible pixel buffer for the common tile dimensions.
+    private var rasterScratch = IntArray(0)
     // Rendering deliberately never decodes PNGs on the UI thread. Keep tiles from the last
     // rendered viewport resident so an autosave/cache trim cannot turn visible strokes blank.
     private val retainedVisibleBounds = RectF()
@@ -131,22 +139,26 @@ internal class SparseTileSurface(
         keys.forEach { key ->
             val bitmap = obtainTile(key, createIfMissing = false) ?: return@forEach
             val rect = TileStorage.tileRect(key, width, height)
-            val temporary = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+            val temporary = alphaScratch?.takeIf {
+                !it.isRecycled && it.width == bitmap.width && it.height == bitmap.height
+            } ?: Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also {
+                alphaScratch?.recycle()
+                alphaScratch = it
+            }
+            // Transparent scratch is essential: old dabs must never be stamped again.
+            temporary.eraseColor(android.graphics.Color.TRANSPARENT)
+            val temporaryCanvas = Canvas(temporary)
+            temporaryCanvas.save()
             try {
-                val temporaryCanvas = Canvas(temporary)
                 temporaryCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
                 temporaryCanvas.clipRect(
                     RectF(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()),
                 )
                 block(temporaryCanvas)
-                val alphaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
-                }
-                Canvas(bitmap).drawBitmap(temporary, 0f, 0f, alphaPaint)
-                alphaPaint.xfermode = null
+                Canvas(bitmap).drawBitmap(temporary, 0f, 0f, alphaCompositePaint)
                 markModified(key)
             } finally {
-                temporary.recycle()
+                temporaryCanvas.restore()
             }
         }
         trimCache(emptySet())
@@ -166,7 +178,9 @@ internal class SparseTileSurface(
         TileStorage.keysForBounds(bounds, width, height).forEach { key ->
             val bitmap = obtainTile(key, createIfMissing) ?: return@forEach
             val rect = TileStorage.tileRect(key, width, height)
-            val pixels = IntArray(bitmap.width * bitmap.height)
+            val requiredPixels = bitmap.width * bitmap.height
+            if (rasterScratch.size != requiredPixels) rasterScratch = IntArray(requiredPixels)
+            val pixels = rasterScratch
             bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
             if (block(key, rect, pixels)) {
                 bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
@@ -572,6 +586,9 @@ internal class SparseTileSurface(
             cache.clear()
             residentBytes = 0L
             pendingWriteKeys.clear()
+            alphaScratch?.recycle()
+            alphaScratch = null
+            rasterScratch = IntArray(0)
         }
     }
 

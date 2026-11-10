@@ -3811,8 +3811,8 @@ private fun LayersDock(
     var propertiesExpanded by remember { mutableStateOf(false) }
     var inspectorPage by remember { mutableIntStateOf(0) }
     var actionsMenuExpanded by remember { mutableStateOf(false) }
-    val visibleLayers = layers.filter { layer ->
-        layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
+    val layerOutline = remember(layers, groups, layerQuery) {
+        buildLayerOutline(layers, groups, layerQuery)
     }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(14.dp)) {
@@ -4030,36 +4030,20 @@ private fun LayersDock(
             }
         }
         HorizontalDivider(color = StudioPalette.Border)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(10.dp)) {
-            val emittedGroups = mutableSetOf<String>()
-            val groupsById = groups.associateBy { it.id }
-            fun ancestry(groupId: String?): List<LayerGroupUiModel> {
-                val result = mutableListOf<LayerGroupUiModel>()
-                val visited = mutableSetOf<String>()
-                var currentId = groupId
-                while (currentId != null && visited.add(currentId)) {
-                    val group = groupsById[currentId] ?: break
-                    result += group
-                    currentId = group.parentGroupId
-                }
-                return result.asReversed()
-            }
-            visibleLayers.forEach { layer ->
-                val group = layer.groupId?.let { id -> groups.firstOrNull { it.id == id } }
-                val ancestors = ancestry(layer.groupId)
-                ancestors.forEach { ancestor ->
-                    if (emittedGroups.add(ancestor.id)) {
-                        LayerGroupRow(
-                            group = ancestor,
-                            onToggleVisibility = onToggleGroupVisibility,
-                            onToggleCollapsed = onToggleGroupCollapsed,
-                        )
-                        Spacer(Modifier.height(7.dp))
-                    }
-                }
-                if (ancestors.none { it.collapsed }) {
-                    LayerRow(
-                        layer = layer,
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            items(layerOutline, key = { it.key }) { entry ->
+                when (entry) {
+                    is LayerOutlineEntry.Group -> LayerGroupRow(
+                        group = entry.group,
+                        onToggleVisibility = onToggleGroupVisibility,
+                        onToggleCollapsed = onToggleGroupCollapsed,
+                    )
+                    is LayerOutlineEntry.Layer -> LayerRow(
+                        layer = entry.layer,
                         onSelect = onSelectLayer,
                         onToggleSelection = onToggleLayerSelection,
                         onToggleVisibility = onToggleVisibility,
@@ -4068,19 +4052,21 @@ private fun LayersDock(
                             onSelectLayer(id)
                             if (up) onMoveUp() else onMoveDown()
                         },
-                        indentDepth = ancestors.size,
+                        indentDepth = entry.indentDepth,
                     )
-                    Spacer(Modifier.height(7.dp))
                 }
             }
-            if (visibleLayers.isEmpty()) {
-                Text(
-                    "No hay capas que coincidan con la búsqueda.",
-                    color = StudioPalette.TextMuted,
-                    modifier = Modifier.padding(12.dp),
-                )
+            if (layerOutline.isEmpty()) {
+                item("empty") {
+                    Text(
+                        "No hay capas que coincidan con la búsqueda.",
+                        color = StudioPalette.TextMuted,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
-            Surface(
+            item("paper") {
+                Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(11.dp),
@@ -4096,6 +4082,7 @@ private fun LayersDock(
                         Text("Blanco · bloqueado", color = StudioPalette.TextMuted, fontSize = 10.sp)
                     }
                 }
+            }
             }
         }
         HorizontalDivider(color = StudioPalette.Border)

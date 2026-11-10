@@ -320,6 +320,9 @@ class DrawingView(context: Context) : View(context) {
     private val prefetchedBounds = RectF()
     private val saveLock = Any()
     @Volatile private var saveGeneration = 0
+    // Gallery demo rasterization happens on another thread. Autosave must not
+    // snapshot files until demo tile generation has fully completed.
+    @Volatile private var demoSeedThread: Thread? = null
     private var lastEngineStatus = ""
     private var engineStatusUpdatePosted = false
     private var lastEngineStatusUpdateUptime = 0L
@@ -495,7 +498,7 @@ class DrawingView(context: Context) : View(context) {
 
         // A 4K demo seeds and persists many tiles. Keeping this off the UI thread avoids a
         // multi-second stall when a gallery example is opened on a tablet.
-        Thread {
+        val seedWorker = Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
             if (generation != documentGeneration) return@Thread
             val w = documentWidth.toFloat()
@@ -641,8 +644,9 @@ class DrawingView(context: Context) : View(context) {
         }.apply {
             name = "canvas-demo-seed"
             priority = Thread.NORM_PRIORITY - 1
-            start()
         }
+        demoSeedThread = seedWorker
+        seedWorker.start()
     }
 
     private fun createEmptyDocument(width: Int, height: Int) {
@@ -4994,11 +4998,25 @@ class DrawingView(context: Context) : View(context) {
         }
         val savedWidth = documentWidth
         val savedHeight = documentHeight
+        val documentAtSave = documentGeneration
+        val seedToAwait = demoSeedThread
         val generation = ++saveGeneration
 
         Thread {
             synchronized(saveLock) {
-                if (generation != saveGeneration) {
+                // Never block UI input: join happens only on this save worker.
+                // Otherwise a demo can rebuild its working tile folder after
+                // saveSnapshot but before the transactional copy begins.
+                if (seedToAwait != null && seedToAwait !== Thread.currentThread()) {
+                    try {
+                        seedToAwait.join()
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        previewBitmap?.recycle()
+                        return@synchronized
+                    }
+                }
+                if (generation != saveGeneration || documentAtSave != documentGeneration) {
                     previewBitmap?.recycle()
                     return@synchronized
                 }

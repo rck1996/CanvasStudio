@@ -2155,6 +2155,90 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    /**
+     * Experimental debug-only asynchronous publication. Only a single
+     * unmasked, unmirrored brush command without wet color pickup is eligible.
+     *
+     * The immutable stroke is rendered on detached worker-owned bitmaps.
+     * History and document revision change only from the owner-thread
+     * transaction which publishes the complete tile batch. All other editor
+     * mutations first flush the lane and replay its fallback synchronously.
+     */
+    private fun enqueueDetachedStrokeIfEligible(
+        layer: LayerData,
+        commands: List<DrawCommand>,
+        completedPoints: List<StrokePoint>,
+        completedTool: DrawingTool,
+        deferredRaster: Boolean,
+    ): Boolean {
+        if (!BuildConfig.DEBUG || !debugAsyncStrokeRasterEnabled ||
+            !deferredRaster || completedTool != DrawingTool.BRUSH ||
+            layer.editingMask || commands.size != 1) return false
+        val stroke = commands.single() as? StrokeCommand ?: return false
+        if (stroke.clipPoints.isNotEmpty() || stroke.clipFeatherPx > .01f ||
+            stroke.settings.renderProfile.colorPickup > .001f ||
+            stroke.settings.tipAssetPath != null) return false
+        val bounds = commandBounds(stroke)
+        if (TileStorage.keysForBounds(bounds, documentWidth, documentHeight).size > 24) return false
+        val surface = layer.surface
+        val preserveAlpha = layer.alphaLocked
+        val generation = documentGeneration
+        val preview = QueuedStrokePreview(stroke)
+        val length = completedPoints.zipWithNext().sumOf { (first, second) ->
+            hypot(second.x - first.x, second.y - first.y).toDouble()
+        }.toFloat()
+        val event = DrawingInteractionEvent.StrokeCommitted(
+            layerId = layer.id,
+            lengthPx = length,
+            minimumPressure = completedPoints.minOf(StrokePoint::pressure),
+            maximumPressure = completedPoints.maxOf(StrokePoint::pressure),
+            maximumTiltRadians = completedPoints.maxOf { abs(it.tilt) },
+            eraser = false,
+            editingMask = false,
+            symmetryCopies = 1,
+        )
+        val inputStartedNanos = activeStrokeInputStartedNanos
+
+        queuedStrokePreviews += preview
+        val accepted = strokeCommitLane.enqueue(
+            prepare = {
+                DetachedStrokeRasterizer().use { renderer ->
+                    renderer.prepare(surface, stroke, preserveAlpha)
+                }
+            },
+            finish = { prepared ->
+                queuedStrokePreviews.remove(preview)
+                deferredStrokeOverlay.invalidateSelf()
+                val layerStillActive = documentGeneration == generation &&
+                    layers.any { it === layer }
+                if (layerStillActive) {
+                    if (prepared?.publish() != true) {
+                        // A concurrent document edit invalidates detached tiles,
+                        // so replay exactly once using the known-good renderer.
+                        drawCommand(surface, stroke)
+                    }
+                    recordCommands(layer, commands)
+                    onInteraction?.invoke(event)
+                    commitDocumentChange()
+                    if (inputStartedNanos != 0L) {
+                        performanceMetrics.addInputToCommit(
+                            System.nanoTime() - inputStartedNanos,
+                        )
+                    }
+                }
+                postInvalidateOnAnimation()
+            },
+        )
+        if (!accepted) {
+            queuedStrokePreviews.remove(preview)
+            deferredStrokeOverlay.invalidateSelf()
+        } else {
+            deferredStrokeOverlay.invalidateSelf()
+            postInvalidateOnAnimation()
+        }
+        return accepted
+    }
+
     private fun finishStroke(releaseTimeMillis: Long, releaseX: Float, releaseY: Float) {
         val points = activeStrokePoints ?: return
         val completedTool = activeInputTool ?: tool
@@ -2213,6 +2297,10 @@ class DrawingView(context: Context) : View(context) {
         )
         activeLayer()?.let { layer ->
             val commands = symmetryCommands(command)
+            if (enqueueDetachedStrokeIfEligible(
+                    layer, commands, completedPoints, completedTool, deferredRaster,
+                )
+            ) return
             recordCommands(layer, commands)
             if (deferredRaster) {
                 val surface = surfaceFor(layer, activeHistoryTarget(layer))

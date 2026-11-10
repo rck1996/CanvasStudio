@@ -328,6 +328,9 @@ class DrawingView(context: Context) : View(context) {
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
     private var activeStrokeDefersRaster: Boolean = false
+    private var activeStrokeLastMotionTimeMillis: Long = 0L
+    private var activeStrokeLastRawX: Float = 0f
+    private var activeStrokeLastRawY: Float = 0f
     private var activeRenderedPointCount: Int = 0
     private var strokeFramePosted: Boolean = false
     private var shapeStart: StrokePoint? = null
@@ -1821,8 +1824,12 @@ class DrawingView(context: Context) : View(context) {
 
             MotionEvent.ACTION_UP -> {
                 when (activeInputTool ?: eventTool) {
-                    DrawingTool.BRUSH, DrawingTool.ERASER ->
+                    DrawingTool.BRUSH, DrawingTool.ERASER -> {
+                        if (quickShapeEnabled && activeInputTool == DrawingTool.BRUSH) {
+                            trackQuickShapeMotion(current[0], current[1], event.eventTime)
+                        }
                         finishStroke(event.eventTime, current[0], current[1])
+                    }
                     DrawingTool.LINE, DrawingTool.RECTANGLE, DrawingTool.ELLIPSE -> finishShape()
                     DrawingTool.GRADIENT -> finishGradient()
                     DrawingTool.SELECT_RECTANGLE -> finishRectangleSelection()
@@ -1915,6 +1922,7 @@ class DrawingView(context: Context) : View(context) {
         activeInputTool = null
         activeStrokeSettings = null
         activeStrokeDefersRaster = false
+        activeStrokeLastMotionTimeMillis = 0L
         activeRenderedPointCount = 0
         strokeFramePosted = false
         deferredStrokeOverlay.invalidateSelf()
@@ -1939,6 +1947,9 @@ class DrawingView(context: Context) : View(context) {
         activeInputTool = drawingTool
         activeStrokeSettings = settings
         activeStrokeDefersRaster = deferUntilCommit
+        activeStrokeLastRawX = x
+        activeStrokeLastRawY = y
+        activeStrokeLastMotionTimeMillis = time
         activeRenderedPointCount = 1
         val layer = activeLayer() ?: run {
             clearActiveStrokeState()
@@ -1977,6 +1988,17 @@ class DrawingView(context: Context) : View(context) {
         invalidate()
     }
 
+    private fun trackQuickShapeMotion(x: Float, y: Float, timeMillis: Long) {
+        // Track the unsmoothed contact, not the rendered StrokeSampler position.
+        // Small S Pen jitter is ignored without allocating any gesture objects.
+        val deadZone = (3f / currentScale.coerceAtLeast(.1f)).coerceIn(2f, 24f)
+        if (hypot(x - activeStrokeLastRawX, y - activeStrokeLastRawY) > deadZone) {
+            activeStrokeLastRawX = x
+            activeStrokeLastRawY = y
+            activeStrokeLastMotionTimeMillis = timeMillis
+        }
+    }
+
     private fun appendStrokePoint(
         points: MutableList<StrokePoint>,
         rawX: Float,
@@ -1986,6 +2008,9 @@ class DrawingView(context: Context) : View(context) {
         orientation: Float,
         time: Long,
     ) {
+        if (quickShapeEnabled && activeInputTool == DrawingTool.BRUSH) {
+            trackQuickShapeMotion(rawX, rawY, time)
+        }
         val previous = points.lastOrNull() ?: return
         val settings = activeStrokeSettings ?: brushSettings
         val sampled = StrokeSampler.sample(
@@ -2147,8 +2172,7 @@ class DrawingView(context: Context) : View(context) {
                 points = completedPoints,
                 releaseX = releaseX,
                 releaseY = releaseY,
-                releaseTimeMillis = releaseTimeMillis,
-                releaseTolerancePx = 6f / currentScale.coerceAtLeast(.1f),
+                heldDurationMillis = (releaseTimeMillis - activeStrokeLastMotionTimeMillis).coerceAtLeast(0L),
             )
         } else null
         clearActiveStrokeState()

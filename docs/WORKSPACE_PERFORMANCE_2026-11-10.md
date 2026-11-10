@@ -58,3 +58,24 @@ no se extrapolan porcentajes de velocidad a partir de pruebas funcionales.
 3. ORA import con capas, TIFF/PSD por capas y exportación tiled.
 4. Separar `DrawingView.kt` y `EditorScreen.kt` mediante límites testeados.
 5. Pruebas de rendimiento y estrés sobre Galaxy Tab / S Pen.
+
+## Iteración: navegación fluida de galería
+
+- La galería usa una cuadrícula adaptativa más densa en pantallas compactas, con
+  márgenes reducidos sin afectar el lienzo ni el editor.
+- Se agregaron filtros de ordenación por recientes, nombre y cantidad de píxeles
+  (comparación `Long` para evitar overflow), y estado vacío con limpieza rápida.
+- `PreviewBitmapRepository` incorpora 16 locks suspendibles por hash de clave;
+  las solicitudes concurrentes del mismo PNG reutilizan la miniatura decodificada,
+  mientras otras claves pueden decodificarse en paralelo. Conserva el caché LRU
+  de 12 MiB y la decodificación en IO.
+- Se añadieron pruebas para ordenación, búsqueda de resolución y solicitudes
+  concurrentes de miniaturas. No se atribuyen mejoras porcentuales de FPS sin
+  medición sobre dispositivo físico.
+
+### Pendientes para acercarse a Procreate
+
+QuickShape, transformación por perspectiva/warp, gestión avanzada de color y
+compatibilidad PSD con capas requieren etapas separadas y pruebas de documentos
+reales. Prioridad inmediata: perfilar latencia de trazo, p95/p99 de frame y
+presión de memoria en tablet Android con stylus.

@@ -260,6 +260,7 @@ class DrawingView(context: Context) : View(context) {
     private var documentHeight = 1200
     private var documentBounds = RectF(0f, 0f, documentWidth.toFloat(), documentHeight.toFloat())
     @Volatile private var documentGeneration = 0L
+    @Volatile private var committedRevision = 0L
     private val layers = mutableListOf<LayerData>()
     private val layerGroups = mutableListOf<LayerGroupData>()
     private var activeLayerId: String = ""
@@ -4992,6 +4993,7 @@ class DrawingView(context: Context) : View(context) {
         val savedWidth = documentWidth
         val savedHeight = documentHeight
         val documentAtSave = documentGeneration
+        val revisionAtSave = committedRevision
         val seedToAwait = demoSeedThread
         val generation = ++saveGeneration
 
@@ -5008,7 +5010,8 @@ class DrawingView(context: Context) : View(context) {
                         return@synchronized
                     }
                 }
-                if (generation != saveGeneration || documentAtSave != documentGeneration) {
+                if (generation != saveGeneration || documentAtSave != documentGeneration ||
+                    revisionAtSave != committedRevision) {
                     return@synchronized
                 }
 
@@ -5057,7 +5060,8 @@ class DrawingView(context: Context) : View(context) {
                     return@synchronized
                 }
 
-                if (generation != saveGeneration) {
+                if (generation != saveGeneration || documentAtSave != documentGeneration ||
+                    revisionAtSave != committedRevision) {
                     previewBitmap?.recycle()
                     return@synchronized
                 }
@@ -5185,7 +5189,12 @@ class DrawingView(context: Context) : View(context) {
                     }.orEmpty().forEach(File::delete)
                     File(directory, "flattened.png").delete()
                     File(directory, "flattened.tmp").delete()
-                    // Publish all layers, masks, preview and metadata as one project revision.
+                    // Do not publish a mixed-generation revision when the user draws,
+                    // undoes, or changes project during thumbnail/PNG generation.
+                    // Finally will abort the staged directory without touching the
+                    // previous valid project revision.
+                    if (generation != saveGeneration || documentAtSave != documentGeneration ||
+                        revisionAtSave != committedRevision) return@synchronized
                     transaction.commit()
                     ProjectVersionStore.maybeSnapshot(
                         context,
@@ -5604,6 +5613,7 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun commitDocumentChange() {
+        committedRevision++
         notifyLayers()
         onDocumentChanged?.invoke()
         invalidate()

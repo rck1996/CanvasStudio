@@ -155,6 +155,42 @@ improvement is claimed from static code review or functional test success.
 - Undo/redo and final brush rendering remain UI-serialized. Existing project
   formats are unchanged and no unvalidated GPU backend is enabled.
 
+## M2-C — experimental end-to-end stroke lifecycle (debug only)
+
+New in this branch:
+
+- `StrokeCommitLane` provides a strict one-stroke-at-a-time transaction
+  pipeline. Crucially, subsequent worker preparation is not allowed to start
+  until the previous tile publication and history update completes on UI.
+- `DrawingView` supports a DEBUG-only, explicitly opt-in
+  `debugAsyncStrokeRasterEnabled` flag; the default is **false** in both debug
+  and release builds. This prevents exposing the new stroke engine to end users
+  before certification.
+- Eligible deferred BRUSH strokes have no symmetry copies, selection mask,
+  custom bitmap tips or wet color pickup, and touch at most 24 sparse tiles.
+  Every other path uses the established synchronous CPU renderer.
+- An immutable completed stroke remains visible through
+  `queuedStrokePreviews` until its detached tiles are committed; AndroidX Ink
+  handoff is paused until no stroke transaction is pending.
+- On the owner/UI thread, an accepted batch is atomically published; then its
+  history entry and document revision are advanced and a stroke-completed
+  event is delivered. The worker never mutates the command history.
+- Undo/redo, save/load, layer mutation and the next pointer-down introduce
+  synchronous *safety barriers*: all pending strokes are replayed in submission
+  order on the verified CPU path before the operation proceeds. This fallback
+  may cause UI stalls; it is conservative until fully asynchronous history
+  transactions are built.
+- Stale worker outputs are discarded, with bitmap buffers released once.
+  A failed or rejected detached batch falls back to synchronous CPU replay.
+- JVM tests exercise lane ordering, invalidation, barriers, worker failures and
+  lifecycle cleanup; emulator tests drive actual touch events through
+  asynchronous commit, undo/redo, repeat strokes and project save.
+
+**Release gate remains CLOSED.** The debug-only option is not exposed in
+settings, no FPS claims have been measured, and CPU fallback during rapid
+sequential strokes is intentionally possible. Further refactoring is required
+to eliminate fallback stalls while retaining exact document history semantics.
+
 ## Proposed M2-C activation gate
 
 - Record input, stroke command, selected layer ID, surface ID, original tile

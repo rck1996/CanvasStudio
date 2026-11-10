@@ -1557,6 +1557,7 @@ private fun EditorTopBar(
             .border(1.dp, StudioPalette.Border),
     ) {
         val compact = maxWidth < 1120.dp
+        val narrow = maxWidth < 760.dp
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1581,7 +1582,7 @@ private fun EditorTopBar(
             TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", "undo", onUndo)
             TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", "redo", onRedo)
             Spacer(Modifier.width(6.dp))
-            if (maxWidth < 760.dp) {
+            if (narrow) {
                 TopIconButton(
                     Icons.Outlined.CenterFocusStrong,
                     "Restablecer vista",

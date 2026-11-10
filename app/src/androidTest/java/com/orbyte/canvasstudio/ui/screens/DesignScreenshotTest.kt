@@ -41,14 +41,14 @@ class DesignScreenshotTest {
                 )
             }
         }
-        compose.onNodeWithText("Mis proyectos").assertExists()
+        compose.onNodeWithText("Tu estudio local de ilustración y pintura digital").assertExists()
         capture("01-galeria")
     }
 
     @Test
     fun captureEditorAndInspector() {
         showEditor()
-        compose.onNodeWithText("Capas").assertExists()
+        compose.onNodeWithContentDescription("Panel Capas, seleccionado").assertExists()
         capture("02-editor-capas")
     }
 
@@ -63,7 +63,7 @@ class DesignScreenshotTest {
     @Test
     fun captureColorInspector() {
         showEditor()
-        compose.onNodeWithText("Color").performClick()
+        compose.onNodeWithContentDescription("Panel Color").performClick()
         capture("04-editor-color")
     }
 

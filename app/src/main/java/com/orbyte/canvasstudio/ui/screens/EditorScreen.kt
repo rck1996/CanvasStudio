@@ -194,6 +194,7 @@ import com.orbyte.canvasstudio.ui.workspace.quickAccessActionsFor
 import com.orbyte.canvasstudio.ui.workspace.quickAccessItems
 import com.orbyte.canvasstudio.ui.workspace.quickMenuTopLeft
 import com.orbyte.canvasstudio.ui.workspace.reassignQuickAccessAction
+import com.orbyte.canvasstudio.ui.workspace.shouldShowInspector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1214,7 +1215,7 @@ fun EditorScreen(
                 )
             }
 
-            if (!zenMode && (!compactWorkspace || inspectorExpanded)) {
+            if (shouldShowInspector(compactWorkspace, inspectorExpanded, zenMode)) {
                 RightDock(
                     dockWidth = if (compactWorkspace) 316.dp else 360.dp,
                     selectedTab = selectedDock,

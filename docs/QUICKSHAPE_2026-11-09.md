@@ -21,3 +21,10 @@ El modo está desactivado inicialmente para minimizar sorpresas y conservar la r
 `QuickShapeRecognizerTest` comprueba líneas mantenidas, jitter, curvas, retrazos, lifts normales y coordenadas inválidas.
 
 No incluye todavía elipses, rectángulos, ajuste a 15°, edición posterior de nodos ni transformaciones de perspectiva. No se presenta como paridad con Procreate.
+
+### Vista previa de baja asignación
+
+En la misma iteración, la vista previa diferida se optimizó con una instancia de
+`Paint` y un buffer de cuatro floats reutilizados por todos los segmentos de un
+fotograma. Se evita crear arreglos y objetos de muestras transformadas por punto,
+conservando las operaciones `Matrix.mapPoints` y el cálculo de presión originales.

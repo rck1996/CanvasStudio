@@ -2,7 +2,7 @@
 
 | Área | Estado 2.5.0 | Evolución futura |
 |---|---|---|
-| Galería | Adaptativa, búsqueda, duplicado, papelera recuperable, borrado permanente confirmado y restauración local | Colecciones e historial visual |
+| Galería | Adaptativa, búsqueda, duplicado, papelera recuperable, restauración local e historial visual de versiones con vistas previas | Colecciones |
 | Lienzos | Presets, personalizados, DPI, estimación de memoria y límite dinámico 12/26/40 Mpx | Presets del usuario |
 | Pinceles | 14 presets profesionales, 4 experimentales opcionales, presión, inclinación, taper, grano, dispersión, velocidad, puntas bitmap y migración de IDs históricos | Texturas multicanal |
 | Biblioteca | Tres paneles, preview reactivo, curva de presión, favoritos, recientes y JSON portable | Orden manual |
@@ -15,7 +15,7 @@
 | Guías | Cuadrícula opcional, reglas px/cm, guías arrastrables, simetría y perspectiva | Rejillas personalizadas |
 | Importación | Imagen como capa, biblioteca de pinceles y PSD compuesto | ORA de entrada y PSD por capas |
 | Exportación | PNG, OpenRaster por capas y PSD compuesto hasta 40 Mpx | TIFF, PDF y exportación tiled |
-| Persistencia | Autoguardado incremental, publicación transaccional recuperable y tres versiones locales | Historial visual y certificación ante cortes de energía |
+| Persistencia | Autoguardado incremental, publicación transaccional recuperable y tres versiones locales seleccionables | Certificación ante cortes de energía |
 | Color | HSV, paleta rápida y ARGB 8-bit | ICC, CMYK, gamut y 16-bit |
 | Tutorial | 14 lecciones dentro del editor real, documento temporal, foco contextual, progreso por evidencia, pistas y tarjeta minimizable | Tutoriales especializados adicionales |
 | Distribución | APK/AAB firmables, CI y requisito `sw600dp` | Publicación Play Store |

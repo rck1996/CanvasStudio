@@ -38,6 +38,7 @@ import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
 import com.orbyte.canvasstudio.drawing.input.StrokeSampler
 import com.orbyte.canvasstudio.drawing.input.StrokeInputBatch
 import com.orbyte.canvasstudio.drawing.pipeline.StrokeFrameBudget
+import com.orbyte.canvasstudio.drawing.pipeline.StrokePreviewRenderer
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
 import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
@@ -342,15 +343,7 @@ class DrawingView(context: Context) : View(context) {
             .toLong()
             .coerceIn(20L * 1024L * 1024L, 80L * 1024L * 1024L)
 
-    // This path can redraw on every stylus frame; reuse Paint instead of creating one per frame.
-    private val deferredStrokePreviewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    // Two reused point pairs for Matrix.mapPoints: avoids a FloatArray and
-    // a copied StrokePoint for each preview sample on every stylus frame.
-    private val deferredStrokePreviewCoords = FloatArray(4)
+    private val strokePreviewRenderer = StrokePreviewRenderer()
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
@@ -2078,43 +2071,13 @@ class DrawingView(context: Context) : View(context) {
         val points = activeStrokePoints ?: return
         val settings = activeStrokeSettings ?: return
         if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return
-        val drawingTool = activeInputTool ?: tool
-        val previewPaint = deferredStrokePreviewPaint.apply {
-            color = if (drawingTool == DrawingTool.ERASER) Color.WHITE else settings.color
-            alpha = if (drawingTool == DrawingTool.ERASER) {
-                150
-            } else {
-                (settings.opacity.coerceIn(0.15f, 1f) * 220f).toInt()
-            }
-        }
-        val coords = deferredStrokePreviewCoords
-        symmetryMatrices().forEach { matrix ->
-            var previous = points.first()
-            if (points.size == 1) {
-                coords[0] = previous.x
-                coords[1] = previous.y
-                coords[2] = previous.x
-                coords[3] = previous.y
-                matrix.mapPoints(coords)
-                previewPaint.strokeWidth =
-                    settings.sizePx * previous.pressure.coerceIn(settings.minSize, 1f)
-                canvas.drawPoint(coords[0], coords[1], previewPaint)
-            } else {
-                for (index in 1 until points.size) {
-                    val current = points[index]
-                    coords[0] = previous.x
-                    coords[1] = previous.y
-                    coords[2] = current.x
-                    coords[3] = current.y
-                    matrix.mapPoints(coords)
-                    previewPaint.strokeWidth = settings.sizePx *
-                        ((previous.pressure + current.pressure) * 0.5f)
-                            .coerceIn(settings.minSize, 1f)
-                    canvas.drawLine(coords[0], coords[1], coords[2], coords[3], previewPaint)
-                    previous = current
-                }
-            }
-        }
+        strokePreviewRenderer.draw(
+            canvas = canvas,
+            points = points,
+            settings = settings,
+            tool = activeInputTool ?: tool,
+            symmetryMatrices = symmetryMatrices(),
+        )
     }
 
     private fun scheduleActiveStrokeRender() {

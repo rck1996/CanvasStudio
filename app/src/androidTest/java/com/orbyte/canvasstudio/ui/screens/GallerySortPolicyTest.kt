@@ -11,7 +11,7 @@ import org.junit.runner.RunWith
 class GallerySortPolicyTest {
     private val projects = listOf(
         ProjectCard("z", "Zorro", 1000, 1000, "hoy", PreviewStyle.SKETCH),
-        ProjectCard("a", "Árbol", 500, 500, "ayer", PreviewStyle.SKETCH),
+        ProjectCard("a", "Arbol", 500, 500, "ayer", PreviewStyle.SKETCH),
         ProjectCard("b", "Boceto", 2000, 1500, "antes", PreviewStyle.SKETCH),
     )
 

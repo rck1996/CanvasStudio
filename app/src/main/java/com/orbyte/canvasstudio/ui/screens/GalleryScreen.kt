@@ -75,6 +75,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -270,10 +271,13 @@ fun GalleryScreen(
             title = { Text("Borrar definitivamente") },
             text = { Text("Se eliminarán ${trashed.title}, sus capas y versiones locales. Esta acción no se puede deshacer.") },
             confirmButton = {
-                TextButton(onClick = {
-                    onDeleteTrashedProjectForever(trashed)
-                    pendingPermanentDelete = null
-                }) { Text("Borrar definitivamente") }
+                TextButton(
+                    modifier = Modifier.testTag("gallery_trash_confirm_permanent_delete"),
+                    onClick = {
+                        onDeleteTrashedProjectForever(trashed)
+                        pendingPermanentDelete = null
+                    },
+                ) { Text("Borrar definitivamente") }
             },
             dismissButton = {
                 TextButton(onClick = { pendingPermanentDelete = null }) { Text("Cancelar") }

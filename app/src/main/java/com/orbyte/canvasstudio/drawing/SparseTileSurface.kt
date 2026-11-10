@@ -572,6 +572,49 @@ internal class SparseTileSurface(
         obtainTile(key, createIfMissing = false)?.copy(Bitmap.Config.ARGB_8888, false)
     }
 
+    /** Monotonic version of this surface's authoritative raster. */
+    fun rasterRevision(): Long = synchronized(lock) { revision }
+
+    /**
+     * Atomically publishes a complete immutable-stroke tile batch.
+     *
+     * The caller retains ownership of every bitmap when false is returned.
+     * On success, ownership of the mutable tile bitmaps transfers to this
+     * surface; callers must NOT recycle or mutate them afterwards.
+     *
+     * Revision check and all replacements share a lock, so undo/redo,
+     * concurrent inking, and background snapshots cannot partially overwrite
+     * a newer revision. Tile encoding remains deferred.
+     */
+    fun publishDetachedTiles(
+        expectedRevision: Long,
+        patches: List<Pair<TileStorage.Key, Bitmap>>,
+    ): Boolean = synchronized(lock) {
+        if (revision != expectedRevision) return@synchronized false
+        if (patches.isEmpty()) return@synchronized true
+        val unique = HashSet<TileStorage.Key>(patches.size)
+        for ((key, bitmap) in patches) {
+            if (!unique.add(key) || bitmap.isRecycled || !bitmap.isMutable ||
+                bitmap.config != Bitmap.Config.ARGB_8888) return@synchronized false
+            val rect = TileStorage.tileRect(key, width, height)
+            if (rect.isEmpty || bitmap.width != rect.width() || bitmap.height != rect.height()) {
+                return@synchronized false
+            }
+        }
+        patches.forEach { (key, bitmap) ->
+            cache.remove(key)?.let { old ->
+                residentBytes = (residentBytes - bitmapBytes(old)).coerceAtLeast(0L)
+                if (old !== bitmap) old.recycle()
+            }
+            cache[key] = bitmap
+            residentBytes += bitmapBytes(bitmap)
+            knownKeys += key
+            markModified(key)
+        }
+        trimCache(unique)
+        true
+    }
+
     /** Replaces exactly one tile from a detached checkpoint copy. */
     fun restoreTile(key: TileStorage.Key, snapshot: Bitmap?) = synchronized(lock) {
         cache.remove(key)?.let { residentBytes = (residentBytes - bitmapBytes(it)).coerceAtLeast(0L); it.recycle() }

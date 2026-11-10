@@ -357,7 +357,7 @@ fun EditorScreen(
     var zenMode by remember { mutableStateOf(false) }
     // Portrait tablets should open on the canvas, not a 316dp side inspector.
     // Landscape keeps the dock visible by default; compact layouts expose a toggle.
-    var inspectorExpanded by remember { mutableStateOf(false) }
+    var inspectorExpanded by remember(tutorialMode) { mutableStateOf(tutorialMode) }
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
     }
@@ -917,7 +917,7 @@ fun EditorScreen(
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val compactWorkspace = maxWidth < 1080.dp
+            val compactWorkspace = maxWidth < 1120.dp
             Row(Modifier.fillMaxSize()) {
             if (!zenMode) {
                 EditorToolRail(

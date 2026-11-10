@@ -123,3 +123,11 @@ PNG se guardan mediante `AtomicFile` y el codec PSD valida estrictamente los dat
 Las pruebas `androidTest` de persistencia, tiles y PSD **requieren emulador o dispositivo**
 y no se ejecutan con el paso JVM del CI. La certificación completa sigue usando
 `scripts/run-tablet-instrumentation.ps1`; una compilación no reemplaza esa validación.
+
+## Nuevas regresiones del guardado completo y papelera
+
+El workflow `.github/workflows/android-emulator.yml` incluye pruebas instrumentadas
+para publicar/revertir guardados completos, recuperar cierres entre renombrados,
+restaurar proyectos desde la papelera y confirmar la eliminación permanente desde
+la interfaz Compose. Una ejecución exitosa en emulador API 35 no verifica por sí sola
+el hardware del S Pen ni la resistencia a cortes de energía.

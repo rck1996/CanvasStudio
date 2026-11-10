@@ -349,6 +349,7 @@ class DrawingView(context: Context) : View(context) {
     )
     private val queuedStrokePreviews = mutableListOf<QueuedStrokePreview>()
     internal fun debugPendingStrokeCommits(): Int = strokeCommitLane.pendingCount
+    internal fun debugFlushPendingStrokeCommits() = flushStrokeCommits()
     private fun flushStrokeCommits() {
         if (strokeCommitLane.hasPending) strokeCommitLane.flushSynchronously()
     }

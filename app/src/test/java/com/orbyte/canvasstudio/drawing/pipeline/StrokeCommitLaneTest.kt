@@ -123,6 +123,56 @@ class StrokeCommitLaneTest {
     }
 
     @Test
+    fun nestedSaveBarrierCannotReplayStrokeAlreadyBeingPublished() {
+        val worker = ManualExecutor()
+        val ui = ManualExecutor()
+        val events = mutableListOf<String>()
+        val lane = StrokeCommitLane<ResultTile>(worker, ui::execute) { events += "error" }
+        lane.enqueue(
+            prepare = { ResultTile("one", events) },
+            finish = {
+                events += "publish-one"
+                // Simulates synchronous save called by onDocumentChanged() while
+                // the same transaction's owner-thread callback is still running.
+                lane.flushSynchronously()
+                events += "saved"
+            },
+        )
+        worker.drain()
+        ui.drain()
+        assertEquals(listOf("publish-one", "saved", "release-one"), events)
+        assertFalse(lane.hasPending)
+    }
+
+    @Test
+    fun reentrantBarrierFlushesOnlyLaterStrokesInOrder() {
+        val worker = ManualExecutor()
+        val ui = ManualExecutor()
+        val events = mutableListOf<String>()
+        val lane = StrokeCommitLane<ResultTile>(worker, ui::execute) { events += "error" }
+        lane.enqueue(
+            prepare = { ResultTile("one", events) },
+            finish = {
+                events += "publish-one"
+                lane.flushSynchronously()
+            },
+        )
+        lane.enqueue(
+            prepare = { ResultTile("two", events) },
+            finish = { result ->
+                events += if (result == null) "fallback-two" else "publish-two"
+            },
+        )
+        worker.drain()
+        ui.drain()
+        assertEquals(
+            listOf("publish-one", "fallback-two", "release-one"),
+            events,
+        )
+        assertFalse(lane.hasPending)
+    }
+
+    @Test
     fun closeFlushesBeforeRejectingNewStrokes() {
         val worker = ManualExecutor()
         val ui = ManualExecutor()

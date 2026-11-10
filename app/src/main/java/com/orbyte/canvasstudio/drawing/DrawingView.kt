@@ -318,6 +318,12 @@ class DrawingView(context: Context) : View(context) {
             .toLong()
             .coerceIn(20L * 1024L * 1024L, 80L * 1024L * 1024L)
 
+    // This path can redraw on every stylus frame; reuse Paint instead of creating one per frame.
+    private val deferredStrokePreviewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
@@ -2017,10 +2023,7 @@ class DrawingView(context: Context) : View(context) {
         val settings = activeStrokeSettings ?: return
         if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return
         val drawingTool = activeInputTool ?: tool
-        val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
+        val previewPaint = deferredStrokePreviewPaint.apply {
             color = if (drawingTool == DrawingTool.ERASER) Color.WHITE else settings.color
             alpha = if (drawingTool == DrawingTool.ERASER) {
                 150

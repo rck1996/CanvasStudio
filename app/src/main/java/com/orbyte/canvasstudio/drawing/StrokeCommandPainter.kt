@@ -26,72 +26,72 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
 
     fun draw(canvas: Canvas, command: StrokeCommand, documentBounds: RectF, pickupColors: IntArray? = null, renderClipBounds: RectF? = null) {
         this.documentBounds.set(documentBounds)
-                val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
-                    ?.let { pathFromPoints(it, close = true) }
-                val clipSave = clipPath?.let {
-                    beginSelectionMask(
-                        canvas,
-                        it,
-                        command.clipInverted,
-                        command.clipFeatherPx,
-                    )
-                }
-                command.points.firstOrNull()?.takeIf { first ->
-                    renderClipBounds == null ||
-                        RectF.intersects(
-                            BrushStrokeGeometry.segmentBounds(first, first, command.settings),
-                            renderClipBounds,
-                        )
-                }?.let { first ->
-                    brushRasterSession.brushes.drawBrushStamp(
-                        canvas = canvas,
-                        x = first.x,
-                        y = first.y,
-                        pressure = first.pressure * brushRasterSession.taperFactor(command.settings, 0f),
-                        tilt = first.tilt,
-                        drawingTool = command.tool,
-                        settings = command.settings,
-                        stampIndex = 0,
-                        angleRadians = 0f,
-                        orientation = first.orientation,
-                    )
-                }
-                val segmentCount = (command.points.size - 1).coerceAtLeast(0)
-                for (index in 0 until segmentCount) {
-                    if (
-                        renderClipBounds != null &&
-                        !RectF.intersects(
-                            BrushStrokeGeometry.segmentBounds(
-                                command.points[index],
-                                command.points[index + 1],
-                                command.settings,
-                            ),
-                            renderClipBounds,
-                        )
-                    ) {
-                        continue
-                    }
-                    val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
-                    brushRasterSession.brushes.drawStrokeSegment(
-                        canvas,
+        val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
+            ?.let { pathFromPoints(it, close = true) }
+        val clipSave = clipPath?.let {
+            beginSelectionMask(
+                canvas,
+                it,
+                command.clipInverted,
+                command.clipFeatherPx,
+            )
+        }
+        command.points.firstOrNull()?.takeIf { first ->
+            renderClipBounds == null ||
+                RectF.intersects(
+                    BrushStrokeGeometry.segmentBounds(first, first, command.settings),
+                    renderClipBounds,
+                )
+        }?.let { first ->
+            brushes.drawBrushStamp(
+                canvas = canvas,
+                x = first.x,
+                y = first.y,
+                pressure = first.pressure * brushes.taperFactor(command.settings, 0f),
+                tilt = first.tilt,
+                drawingTool = command.tool,
+                settings = command.settings,
+                stampIndex = 0,
+                angleRadians = 0f,
+                orientation = first.orientation,
+            )
+        }
+        val segmentCount = (command.points.size - 1).coerceAtLeast(0)
+        for (index in 0 until segmentCount) {
+            if (
+                renderClipBounds != null &&
+                !RectF.intersects(
+                    BrushStrokeGeometry.segmentBounds(
                         command.points[index],
                         command.points[index + 1],
-                        command.tool,
                         command.settings,
-                        progress,
-                        index,
-                        pickupColors?.getOrNull(index),
-                    )
-                }
-                if (clipPath != null && clipSave != null) {
-                    endSelectionMask(
-                        canvas,
-                        clipSave,
-                        clipPath,
-                        command.clipInverted,
-                        command.clipFeatherPx,
-                    )
-                }
+                    ),
+                    renderClipBounds,
+                )
+            ) {
+                continue
+            }
+            val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
+            brushes.drawStrokeSegment(
+                canvas,
+                command.points[index],
+                command.points[index + 1],
+                command.tool,
+                command.settings,
+                progress,
+                index,
+                pickupColors?.getOrNull(index),
+            )
+        }
+        if (clipPath != null && clipSave != null) {
+            endSelectionMask(
+                canvas,
+                clipSave,
+                clipPath,
+                command.clipInverted,
+                command.clipFeatherPx,
+            )
+        }
     }
 
     private fun pathFromPoints(points: List<StrokePoint>, close: Boolean): Path = Path().apply {

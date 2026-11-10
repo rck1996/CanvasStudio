@@ -106,6 +106,32 @@ class DetachedStrokeRasterizerTest {
     }
 
     @Test
+    fun resetOrClearAlwaysInvalidatesPreparedPixelsEvenOnBlankCanvas() {
+        val dir = directory("reset-generation")
+        val surface = SparseTileSurface(512, 512, dir, 2L * 1024L * 1024L)
+        val stroke = StrokeCommand(
+            points = listOf(StrokePoint(200f, 200f, 1f, 0f, 1L)),
+            tool = DrawingTool.BRUSH,
+            settings = BrushSettings(kind = BrushKind.INK, sizePx = 36f),
+        )
+        try {
+            DetachedStrokeRasterizer().use { renderer ->
+                requireNotNull(renderer.prepare(surface, stroke)).use { prepared ->
+                    surface.clearAll()
+                    assertFalse("Clearing an empty document must still reject stale work", prepared.publish())
+                }
+                requireNotNull(renderer.prepare(surface, stroke)).use { prepared ->
+                    surface.resetWorkingFrom(null)
+                    assertFalse("An undo/rebuild must invalidate the pending batch", prepared.publish())
+                }
+            }
+        } finally {
+            surface.recycle()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
     fun alphaLockedBatchLeavesTransparentRegionsUnchanged() {
         val dir = directory("alpha-lock")
         val surface = SparseTileSurface(512, 512, dir, 2L * 1024L * 1024L)

@@ -128,3 +128,12 @@ Se amplía de 36 a 48 dp el alto táctil de ambos sliders y se amplían los boto
 - Nuevo `RenderPathOptimizationTest`: patrón de 48 px y reutilización / invalidación de matrices de simetría.
 - Nuevo `FloatingBrushPaletteUiTest`: selección de preset sin modal, navegación a biblioteca avanzada, búsqueda que conserva abierta la paleta.
 - Ejecutar CI Android, instrumentación Android 15 y regresiones de clipping/máscaras. No se declaran mejoras cuantitativas de FPS, latencia o memoria sin medición física con S Pen.
+
+## Iteración de trazo y composición, 10 de noviembre
+
+- `StrokeBatchTransform` transforma las coordenadas de un lote en una sola llamada a `Matrix.mapPoints`; reutiliza su `FloatArray`, `ArrayList` y `RectF` entre lotes, sin compartir datos entre vistas.
+- La estimación de bounds por lote usa min/max de muestras y una expansión con `maximumBrushExtent` calculada una sola vez, idéntica a la unión de rectángulos por segmento.
+- La búsqueda de pigmento de la capa se resuelve una sola vez por lote, si está activada. La información de presión, inclinación, orientación y tiempo de las muestras se mantiene.
+- El selector flotante de pinceles puede desplazarse tomando su encabezado. La posición está acotada al área del lienzo y no interfiere con la búsqueda ni la elección del pincel.
+- El panel lateral de inspector ocupa 286/320 dp en lugar de 316/360 dp, recuperando lienzo.
+- Añadidas pruebas de transformación, reutilización y equivalencia de límites. La reducción esperada de asignaciones no sustituye el perfilado de latencia y frame time en un S Pen físico.

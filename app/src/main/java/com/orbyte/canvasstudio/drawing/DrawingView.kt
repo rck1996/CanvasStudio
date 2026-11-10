@@ -270,6 +270,8 @@ class DrawingView(context: Context) : View(context) {
     private val transform = Matrix()
     private val inverse = Matrix()
     private val viewportInverseCoords = FloatArray(8)
+    // Reused only on the UI thread during active ink rasterization.
+    private val strokeTransformBatch = StrokeBatchTransform()
     private val viewportVisibleBounds = RectF()
     private var currentScale = 1f
     private var currentRotationDegrees = 0f
@@ -2142,23 +2144,29 @@ class DrawingView(context: Context) : View(context) {
             firstEndPointIndex + requestedSegments
         }
         val matrices = symmetryMatrices()
+        // A single brush extent is sufficient for the whole batch; consecutive
+        // segment rectangles union to the same min/max point bounds.
+        val extent = maximumBrushExtent(settings)
+        val pickupSurface = if (settings.renderProfile.colorPickup > .001f) {
+            surfaceFor(layer, activeHistoryTarget(layer))
+        } else null
 
         matrices.forEach { matrix ->
-            val transformedCapacity = (endExclusive - firstEndPointIndex + 1).coerceAtLeast(2)
-            val transformed = ArrayList<StrokePoint>(transformedCapacity)
-            for (pointIndex in (firstEndPointIndex - 1) until endExclusive) {
-                transformed += transformPoint(points[pointIndex], matrix)
-            }
+            // Matrix.mapPoints transforms a reusable float buffer in one JNI call.
+            // Copies of immutable StrokePoint values remain local to this batch;
+            // no float arrays, lists, or RectF are created per segment.
+            val transformed = strokeTransformBatch.map(
+                points,
+                firstEndPointIndex - 1,
+                endExclusive,
+                matrix,
+            )
             if (transformed.size < 2) return@forEach
-
-            val bounds = strokeSegmentBounds(transformed[0], transformed[1], settings)
-            for (index in 2 until transformed.size) {
-                bounds.union(strokeSegmentBounds(transformed[index - 1], transformed[index], settings))
-            }
-            val pickupSurface = surfaceFor(layer, activeHistoryTarget(layer))
-            val pickupColors = if (settings.renderProfile.colorPickup > .001f) {
+            val bounds = strokeTransformBatch.bounds(extent)
+            val pickupSurfaceForMatrix = pickupSurface
+            val pickupColors = if (pickupSurfaceForMatrix != null) {
                 IntArray(transformed.size - 1) { localIndex ->
-                    pickupSurface.samplePixel(
+                    pickupSurfaceForMatrix.samplePixel(
                         transformed[localIndex + 1].x,
                         transformed[localIndex + 1].y,
                     ) ?: 0

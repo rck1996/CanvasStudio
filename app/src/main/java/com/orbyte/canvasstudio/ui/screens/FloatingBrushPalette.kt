@@ -1,5 +1,6 @@
 package com.orbyte.canvasstudio.ui.screens
 
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +13,8 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
@@ -31,9 +34,11 @@ internal fun FloatingBrushPalette(
     onOpenAdvanced: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    onDragBy: (Offset) -> Unit = {},
 ) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf("Todos") }
+    val currentOnDragBy by rememberUpdatedState(onDragBy)
     val recentOrder = remember(recentBrushIds) {
         recentBrushIds.withIndex().associate { it.value to it.index }
     }
@@ -59,7 +64,17 @@ internal fun FloatingBrushPalette(
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth()
+                    .testTag("floating_brush_drag_handle")
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, distance ->
+                            change.consume()
+                            currentOnDragBy(distance)
+                        }
+                    },
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
                 Text("Pinceles", modifier = Modifier.weight(1f), color = StudioPalette.Text,
                     style = MaterialTheme.typography.titleMedium)
                 Text(visible.size.toString(), color = StudioPalette.TextMuted)

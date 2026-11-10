@@ -409,6 +409,7 @@ fun EditorScreen(
     var showHelp by remember { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
     var floatingBrushPaletteOpen by remember { mutableStateOf(false) }
+    var floatingBrushPaletteOffset by remember { mutableStateOf(IntOffset.Zero) }
     var brushDockResetTick by remember { mutableIntStateOf(0) }
     var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
     var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
@@ -948,6 +949,13 @@ fun EditorScreen(
             }
 
             BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
+                val paletteDensity = LocalDensity.current
+                val maxPaletteX = with(paletteDensity) {
+                    (maxWidth - 308.dp - 14.dp).coerceAtLeast(0.dp).roundToPx()
+                }
+                val maxPaletteY = with(paletteDensity) {
+                    (maxHeight - 160.dp - 70.dp).coerceAtLeast(0.dp).roundToPx()
+                }
                 AndroidView(
                     factory = { viewContext ->
                         InkDrawingContainer(viewContext).also { container ->
@@ -1117,7 +1125,19 @@ fun EditorScreen(
                             brushLibraryOpen = true
                         },
                         onDismiss = { floatingBrushPaletteOpen = false },
-                        modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 70.dp),
+                        onDragBy = { amount ->
+                            floatingBrushPaletteOffset = IntOffset(
+                                (floatingBrushPaletteOffset.x + amount.x.toInt()).coerceIn(0, maxPaletteX),
+                                (floatingBrushPaletteOffset.y + amount.y.toInt()).coerceIn(0, maxPaletteY),
+                            )
+                        },
+                        modifier = Modifier.align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    with(paletteDensity) { 14.dp.roundToPx() } + floatingBrushPaletteOffset.x,
+                                    with(paletteDensity) { 70.dp.roundToPx() } + floatingBrushPaletteOffset.y,
+                                )
+                            },
                     )
                 }
 
@@ -1257,7 +1277,7 @@ fun EditorScreen(
 
             if (shouldShowInspector(compactWorkspace, inspectorExpanded, zenMode)) {
                 RightDock(
-                    dockWidth = if (compactWorkspace) 316.dp else 360.dp,
+                    dockWidth = if (compactWorkspace) 286.dp else 320.dp,
                     selectedTab = selectedDock,
                     onSelectTab = {
                         selectedDock = it

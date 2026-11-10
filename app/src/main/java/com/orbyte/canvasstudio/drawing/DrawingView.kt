@@ -64,6 +64,7 @@ import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import com.orbyte.canvasstudio.model.ProjectRepository
+import com.orbyte.canvasstudio.model.ProjectSaveTransaction
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.constrainCanvasSize
 import kotlin.math.abs
@@ -4910,8 +4911,10 @@ class DrawingView(context: Context) : View(context) {
                     return@synchronized
                 }
 
-                val directory = ProjectRepository.projectDirectory(context, projectId)
+                var transaction: ProjectSaveTransaction? = null
                 try {
+                    transaction = ProjectSaveTransaction.begin(context, projectId)
+                    val directory = transaction.workingDirectory
                     val layersRoot = File(directory, "layers").apply { mkdirs() }
                     val activeLayerIds = layerSnapshots.mapTo(mutableSetOf()) { it.reference.id }
                     layersRoot.listFiles().orEmpty()
@@ -5031,7 +5034,13 @@ class DrawingView(context: Context) : View(context) {
                     }.orEmpty().forEach(File::delete)
                     File(directory, "flattened.png").delete()
                     File(directory, "flattened.tmp").delete()
-                    ProjectVersionStore.maybeSnapshot(context, projectId, directory)
+                    // Publish all layers, masks, preview and metadata as one project revision.
+                    transaction.commit()
+                    ProjectVersionStore.maybeSnapshot(
+                        context,
+                        projectId,
+                        ProjectRepository.projectDirectory(context, projectId),
+                    )
 
                     mainHandler.post {
                         layerSnapshots.forEach { snapshot ->
@@ -5059,6 +5068,7 @@ class DrawingView(context: Context) : View(context) {
                         )
                     }
                 } finally {
+                    transaction?.abort()
                     previewBitmap?.recycle()
                 }
             }

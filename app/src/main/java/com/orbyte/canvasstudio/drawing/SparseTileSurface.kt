@@ -54,6 +54,8 @@ internal class SparseTileSurface(
     private val dirtyVersions = mutableMapOf<TileStorage.Key, Long>()
     private val deletedVersions = mutableMapOf<TileStorage.Key, Long>()
     private var revision = 0L
+    // Once disposed, no asynchronous batch may resurrect raster pixels.
+    private var disposed = false
     private var cacheBudgetBytes = cacheBudgetBytes.coerceAtLeast(MIN_CACHE_BYTES)
     private var evictions = 0L
     private var diskLoads = 0L
@@ -372,6 +374,7 @@ internal class SparseTileSurface(
     }
 
     fun clearAll() = synchronized(lock) {
+        revision += 1L // Invalidate detached work even if no tiles existed.
         val affected = allCurrentKeys()
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
@@ -389,6 +392,7 @@ internal class SparseTileSurface(
 
     /** Restores the working raster while preserving project-dirty bookkeeping for undo/redo. */
     fun resetWorkingFrom(sourceDirectory: File?) = synchronized(lock) {
+        revision += 1L // Undo/rebuild must invalidate snapshots made before reset.
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
         residentBytes = 0L
@@ -434,6 +438,7 @@ internal class SparseTileSurface(
     }
 
     fun replaceFromBitmap(bitmap: Bitmap, markProjectDirty: Boolean) = synchronized(lock) {
+        revision += 1L // Imports invalidate pending raster regardless of project-dirty flag.
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
         residentBytes = 0L
@@ -590,7 +595,7 @@ internal class SparseTileSurface(
         expectedRevision: Long,
         patches: List<Pair<TileStorage.Key, Bitmap>>,
     ): Boolean = synchronized(lock) {
-        if (revision != expectedRevision) return@synchronized false
+        if (disposed || revision != expectedRevision) return@synchronized false
         if (patches.isEmpty()) return@synchronized true
         val unique = HashSet<TileStorage.Key>(patches.size)
         for ((key, bitmap) in patches) {
@@ -646,6 +651,8 @@ internal class SparseTileSurface(
     fun recycle() {
         flushPending()
         synchronized(lock) {
+            disposed = true
+            revision += 1L
             cache.values.forEach(Bitmap::recycle)
             cache.clear()
             residentBytes = 0L

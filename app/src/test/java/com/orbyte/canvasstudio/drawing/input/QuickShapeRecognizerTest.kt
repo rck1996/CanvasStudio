@@ -21,6 +21,21 @@ class QuickShapeRecognizerTest {
         assertEquals(120f, detected.endX, .01f)
     }
 
+    @Test fun smoothedEndpointLagStillSnapsWhenRawPenIsStationary() {
+        val filtered = (0..12).map { n ->
+            val raw = n * 40f
+            val lag = if (n == 0) 0f else 14f
+            point(raw - lag, 180f, n * 16L)
+        }
+        val detected = QuickShapeRecognizer.detectLine(filtered, 480f, 180f, 700L)
+        assertNotNull(detected)
+        assertEquals(480f, detected!!.endX, .01f)
+    }
+
+    @Test fun insufficientRawHoldDurationRejectsEvenLongStrokes() {
+        assertNull(QuickShapeRecognizer.detectLine(straight(), 120f, 1f, 60L))
+    }
+
     @Test fun normalPenLiftNeverSnaps() {
         assertNull(QuickShapeRecognizer.detectLine(straight(), 120f, 1f, 200L))
     }

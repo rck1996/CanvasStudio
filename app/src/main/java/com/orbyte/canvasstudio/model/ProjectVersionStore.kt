@@ -63,6 +63,8 @@ object ProjectVersionStore {
 
     @Synchronized
     fun restore(context: Context, version: LocalProjectVersion): Boolean {
+        if (ProjectSaveTransaction.isActive(version.projectId)) return false
+        ProjectSaveTransaction.recover(context, version.projectId)
         if (!isRestorableVersion(version)) return false
         // projectDirectory() would create an empty destination before recovery.
         val destination = File(ProjectRepository.projectsRoot(context), safeId(version.projectId))

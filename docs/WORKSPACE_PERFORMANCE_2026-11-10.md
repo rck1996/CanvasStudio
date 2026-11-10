@@ -79,3 +79,15 @@ QuickShape, transformación por perspectiva/warp, gestión avanzada de color y
 compatibilidad PSD con capas requieren etapas separadas y pruebas de documentos
 reales. Prioridad inmediata: perfilar latencia de trazo, p95/p99 de frame y
 presión de memoria en tablet Android con stylus.
+
+## QuickShape de bajo riesgo · 9 de noviembre, continuación
+
+- Reconocimiento conservador de línea mantenida, activable desde la barra del editor y persistente por preferencias.
+- Desactivado de forma predeterminada: la ruta de dibujo en tiempo real no cambia si no se usa.
+- Usa la vista previa diferida existente durante el gesto activo; los pinceles compatibles conservan AndroidX Ink.
+- La vista previa diferida reutiliza su instancia de `Paint`, evitando crearla en cada fotograma.
+- La detección solo se ejecuta en `ACTION_UP`, con coste lineal respecto de las muestras almacenadas.
+- Casos de prueba JVM y de instrumentación: línea válida, pausa insuficiente, jitter, retrazos y curvas.
+- Para validar rendimiento real siguen pendientes métricas de FPS, p95/p99, memoria y latencia en tablet con S Pen.
+
+Documentación de la función: [QUICKSHAPE_2026-11-09.md](QUICKSHAPE_2026-11-09.md).

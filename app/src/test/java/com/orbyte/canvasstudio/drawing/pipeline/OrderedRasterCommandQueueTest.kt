@@ -86,6 +86,24 @@ class OrderedRasterCommandQueueTest {
     }
 
     @Test
+    fun commitExceptionIsReportedAndDoesNotTrapPendingBarrier() {
+        val worker = ManualExecutor()
+        val main = ManualExecutor()
+        val events = mutableListOf<String>()
+        val queue = OrderedRasterCommandQueue(worker) { main.execute(it) }
+        queue.enqueue(
+            prepare = { 4 },
+            commit = { _: Int -> error("commit failed") },
+            onError = { events += it.message.orEmpty() },
+        )
+        queue.afterPrior { events += "barrier" }
+        worker.drain()
+        main.drain()
+        assertEquals(listOf("commit failed", "barrier"), events)
+        assertFalse(queue.hasPending)
+    }
+
+    @Test
     fun closeDropsPendingPublicationAndRejectsNewWork() {
         val worker = ManualExecutor()
         val main = ManualExecutor()

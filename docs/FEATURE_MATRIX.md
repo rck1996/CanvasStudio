@@ -8,6 +8,7 @@
 | Biblioteca | Tres paneles, preview reactivo, curva de presión, favoritos, recientes y JSON portable | Orden manual |
 | Renderer | Sparse tiles 512, viewport-only, LRU, prefetch, replay regional, entrada táctil diferida, buffers reutilizados en alpha-lock y raster JNI | Backend gráfico especializado |
 | Multitouch | Zoom/pan/rotación sin borrar ni reconstruir temporalmente el compuesto | Gestos configurables |
+| QuickShape | Enderezado optativo de líneas al mantener el lápiz quieto al terminar; no modifica trazos normales | Círculos, rectángulos y edición posterior de figuras |
 | Selección | Rectángulo, elipse, lazo, invertir, expandir, contraer y feather 0–64 px | Operaciones booleanas |
 | Transformación | Mover, escalar, rotar y voltear | Perspectiva, warp y valores numéricos |
 | Capas | Multiselección, orden, clipping, bloqueo alfa, grupos anidados y máscaras raster | Composición aislada |

@@ -6,7 +6,7 @@ Canvas Studio incorpora un primer paso optativo hacia la interacción de figuras
 
 - Activar/desactivar en la barra del editor con varita; persiste en las preferencias del espacio de trabajo.
 - Dibujar una línea con el pincel y **mantener el lápiz quieto al terminar durante ≥420 ms**; al levantarlo, el trazo se convierte en un comando de línea preciso y editable mediante el historial de deshacer/rehacer.
-- Reconocimiento conservador con umbral de distancia, desviación máxima y penalización a trazos recorridos de ida y vuelta; los arcos, zigzags y trazos liberados normalmente quedan como pincel.
+- Reconocimiento conservador con pausa medida sobre coordenadas **reales** del lápiz, no sobre muestras suavizadas: soporta jitter y el retraso geométrico introducido por estabilización. Usa umbral de distancia, desviación máxima y penalización de retrazos; los arcos, zigzags y trazos liberados normalmente quedan como pincel.
 - El motor usa el preview diferido existente mientras QuickShape está activo para no dejar píxeles rasterizados del trazo original antes de la conversión. Si el pincel es compatible, mantiene la vista previa de baja latencia con AndroidX Ink.
 - Los ajustes de simetría, selección, máscara y tamaño de pincel pasan al comando final.
 

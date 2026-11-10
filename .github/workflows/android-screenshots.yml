@@ -7,6 +7,10 @@ on:
     paths:
       - ".github/workflows/android-screenshots.yml"
       - "app/src/androidTest/java/com/orbyte/canvasstudio/ui/screens/DesignScreenshotTest.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/EditorScreen.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/GalleryScreen.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/LayerOutlinePolicy.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/drawing/DrawingView.kt"
 
 concurrency:
   group: canvas-design-capture-${{ github.ref }}

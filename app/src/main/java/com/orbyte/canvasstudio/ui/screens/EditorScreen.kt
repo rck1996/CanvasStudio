@@ -408,6 +408,7 @@ fun EditorScreen(
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
+    var floatingBrushPaletteOpen by remember { mutableStateOf(false) }
     var brushDockResetTick by remember { mutableIntStateOf(0) }
     var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
     var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
@@ -720,6 +721,7 @@ fun EditorScreen(
         if (policy.closeTransientUi) {
             quickMenuOpen = false
             brushLibraryOpen = false
+            floatingBrushPaletteOpen = false
             quickMenuEditSlot = null
             zenMode = false
         }
@@ -938,11 +940,14 @@ fun EditorScreen(
                     selectedTool = selectedTool,
                     compact = compactWorkspace,
                     onSelect = { selectedTool = it },
-                    onTune = { brushLibraryOpen = true },
+                    onTune = {
+                        if (tutorialMode) brushLibraryOpen = true
+                        else floatingBrushPaletteOpen = !floatingBrushPaletteOpen
+                    },
                 )
             }
 
-            Box(Modifier.weight(1f).fillMaxHeight()) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
                 AndroidView(
                     factory = { viewContext ->
                         InkDrawingContainer(viewContext).also { container ->
@@ -1095,6 +1100,26 @@ fun EditorScreen(
                     },
                     modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
                 )
+
+                if (floatingBrushPaletteOpen && !zenMode) {
+                    FloatingBrushPalette(
+                        brushes = availableBrushes,
+                        selectedPresetId = selectedPreset.id,
+                        favoriteBrushIds = favoriteBrushIds,
+                        recentBrushIds = recentBrushIds,
+                        maxPanelHeight = (maxHeight - 90.dp).coerceIn(168.dp, 440.dp),
+                        onPresetSelected = { preset ->
+                            applyBrushPreset(preset)
+                            floatingBrushPaletteOpen = false
+                        },
+                        onOpenAdvanced = {
+                            floatingBrushPaletteOpen = false
+                            brushLibraryOpen = true
+                        },
+                        onDismiss = { floatingBrushPaletteOpen = false },
+                        modifier = Modifier.align(Alignment.TopStart).padding(start = 14.dp, top = 70.dp),
+                    )
+                }
 
                 if (quickMenuOpen) {
                     RadialQuickMenu(
@@ -1795,11 +1820,11 @@ private fun EditorToolRail(
 ) {
     Column(
         modifier = Modifier
-            .width(if (compact) 72.dp else 92.dp)
+            .width(if (compact) 64.dp else 76.dp)
             .fillMaxHeight()
             .background(StudioPalette.Surface)
             .border(1.dp, StudioPalette.Border)
-            .padding(horizontal = if (compact) 6.dp else 9.dp, vertical = 12.dp),
+            .padding(horizontal = if (compact) 4.dp else 6.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
@@ -3291,7 +3316,7 @@ private fun BrushToggle(label: String, checked: Boolean, onCheckedChange: (Boole
 }
 
 @Composable
-private fun BrushPresetRow(
+internal fun BrushPresetRow(
     preset: BrushPreset,
     selected: Boolean,
     favorite: Boolean = false,

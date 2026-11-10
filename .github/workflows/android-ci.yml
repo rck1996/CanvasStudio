@@ -2,7 +2,7 @@ name: Android certification
 
 on:
   push:
-    branches: ["main", "agent/**", "audit/**"]
+    branches: ["main", "agent/**", "audit/**", "engine/**"]
   pull_request:
   workflow_dispatch:
 

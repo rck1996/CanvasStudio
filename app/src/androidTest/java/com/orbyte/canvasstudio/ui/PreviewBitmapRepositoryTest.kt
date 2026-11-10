@@ -5,6 +5,9 @@ import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -32,6 +35,28 @@ class PreviewBitmapRepositoryTest {
             assertEquals(Color.BLUE, first.getPixel(first.width / 2, first.height / 2))
         } finally {
             if (!source.isRecycled) source.recycle()
+            preview.delete()
+        }
+    }
+
+
+    @Test
+    fun simultaneousGalleryRequestsShareOneDecodedBitmap() = runBlocking {
+        val preview = File(context.cacheDir, "parallel-thumbnail-${System.nanoTime()}.png")
+        val source = Bitmap.createBitmap(1200, 1200, Bitmap.Config.ARGB_8888)
+        try {
+            source.eraseColor(Color.GREEN)
+            preview.outputStream().use { source.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val results = (1..12).map {
+                async(Dispatchers.Default) {
+                    PreviewBitmapRepository.load(preview, revision = 42L, maxEdge = 256)
+                }
+            }.awaitAll()
+            val first = requireNotNull(results.first())
+            assertTrue(results.all { it === first })
+            assertTrue(first.width <= 256 && first.height <= 256)
+        } finally {
+            source.recycle()
             preview.delete()
         }
     }

@@ -80,6 +80,41 @@ class SparseTileSurfaceTest {
         directory.deleteRecursively()
     }
 
+    @Test
+    fun detachedBackgroundCompositeMatchesResidentRasterWithoutGrowingTileCache() {
+        val directory = freshDirectory("detached-preview")
+        val area = RectF(470f, 470f, 570f, 570f)
+        val surface = SparseTileSurface(1024, 1024, directory, 2L * 1024L * 1024L)
+        val reference = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+        val detached = Bitmap.createBitmap(1024, 1024, Bitmap.Config.ARGB_8888)
+        try {
+            assertTrue(surface.draw(area) { canvas ->
+                canvas.drawRect(area, Paint().apply { color = Color.CYAN })
+            })
+            surface.drawAll(Canvas(reference), null)
+            assertTrue(surface.flushPending())
+            surface.recycle()
+
+            val reopened = SparseTileSurface(1024, 1024, directory, 2L * 1024L * 1024L)
+            try {
+                reopened.drawAllDetached(Canvas(detached), null)
+                assertEquals(0, reopened.stats().residentTiles)
+                for (y in listOf(0, 469, 470, 511, 512, 569, 570, 900)) {
+                    for (x in listOf(0, 469, 470, 511, 512, 569, 570, 900)) {
+                        assertEquals("Mismatch at $x,$y",
+                            reference.getPixel(x, y), detached.getPixel(x, y))
+                    }
+                }
+            } finally {
+                reopened.recycle()
+            }
+        } finally {
+            reference.recycle()
+            detached.recycle()
+            directory.deleteRecursively()
+        }
+    }
+
     private fun SparseTileSurface.isOpaqueAt(x: Float, y: Float): Boolean {
         val sample = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
         return try {

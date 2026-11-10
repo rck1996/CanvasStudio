@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -112,11 +113,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -178,6 +181,8 @@ import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
 import com.orbyte.canvasstudio.ui.tutorial.tutorialRuntimePolicy
 import com.orbyte.canvasstudio.ui.tutorial.tutorialShouldExitMaskEditing
 import com.orbyte.canvasstudio.ui.workspace.QuickBrushSizing
+import com.orbyte.canvasstudio.ui.workspace.ColorWheelSelection
+import com.orbyte.canvasstudio.ui.workspace.colorWheelSelection
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
@@ -3484,67 +3489,98 @@ private fun HueWheel(
     onHueChanged: (Float) -> Unit,
     onSaturationValueChanged: (Float, Float) -> Unit,
 ) {
+    val latestOnHueChanged by rememberUpdatedState(onHueChanged)
+    val latestOnSaturationValueChanged by rememberUpdatedState(onSaturationValueChanged)
+    // Three gradient draws replace the old 120 arcs + 576 swatch rectangles per frame.
+    // The two composited gradients are mathematically equivalent to HSV(saturation, value).
+    val hueRing = remember {
+        Brush.sweepGradient((0..6).map { step ->
+            Color(AndroidColor.HSVToColor(floatArrayOf(step * 60f, 1f, 1f)))
+        })
+    }
+    val saturationBrush = remember(hue) {
+        Brush.horizontalGradient(
+            listOf(Color.White, Color(AndroidColor.HSVToColor(floatArrayOf(hue, 1f, 1f)))),
+        )
+    }
+    val valueBrush = remember { Brush.verticalGradient(listOf(Color.Transparent, Color.Black)) }
+
     Canvas(
         modifier = modifier
+            .testTag("hsv_color_wheel")
             .pointerInput(Unit) {
                 detectTapGestures { point ->
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val dx = point.x - center.x
-                    val dy = point.y - center.y
-                    val radius = min(size.width, size.height) / 2f
-                    val distanceSquared = dx * dx + dy * dy
-                    if (distanceSquared > (radius * .62f) * (radius * .62f)) {
-                        val angle = (atan2(dy.toDouble(), dx.toDouble()).toFloat() * 180f / PI.toFloat() + 360f) % 360f
-                        onHueChanged(angle)
-                    } else {
-                        val squareHalf = radius * .42f
-                        val sat = ((point.x - (center.x - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        val v = (1f - (point.y - (center.y - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        onSaturationValueChanged(sat, v)
+                    when (val selection = colorWheelSelection(
+                        point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                    )) {
+                        is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                        is ColorWheelSelection.SaturationValue ->
+                            latestOnSaturationValueChanged(selection.saturation, selection.value)
+                        null -> Unit
                     }
                 }
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { point ->
+                        when (val selection = colorWheelSelection(
+                            point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        when (val selection = colorWheelSelection(
+                            change.position.x,
+                            change.position.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                        change.consume()
+                    },
+                )
             },
     ) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val outerRadius = min(size.width, size.height) / 2f
         val ringWidth = outerRadius * .19f
-        repeat(120) { index ->
-            drawArc(
-                color = Color(AndroidColor.HSVToColor(floatArrayOf(index * 3f, 1f, 1f))),
-                startAngle = index * 3f,
-                sweepAngle = 3.4f,
-                useCenter = false,
-                topLeft = Offset(center.x - outerRadius + ringWidth / 2f, center.y - outerRadius + ringWidth / 2f),
-                size = Size((outerRadius - ringWidth / 2f) * 2f, (outerRadius - ringWidth / 2f) * 2f),
-                style = Stroke(ringWidth),
-            )
-        }
+        val ringRadius = outerRadius - ringWidth / 2f
+        drawCircle(
+            brush = hueRing,
+            radius = ringRadius,
+            center = center,
+            style = Stroke(width = ringWidth),
+        )
         val squareHalf = outerRadius * .42f
-        val steps = 24
-        val cell = squareHalf * 2f / steps
-        repeat(steps) { xIndex ->
-            repeat(steps) { yIndex ->
-                val sat = xIndex / (steps - 1f)
-                val v = 1f - yIndex / (steps - 1f)
-                drawRect(
-                    Color(AndroidColor.HSVToColor(floatArrayOf(hue, sat, v))),
-                    topLeft = Offset(center.x - squareHalf + xIndex * cell, center.y - squareHalf + yIndex * cell),
-                    size = Size(cell + 1f, cell + 1f),
-                )
-            }
-        }
+        val topLeft = Offset(center.x - squareHalf, center.y - squareHalf)
+        val squareSize = Size(squareHalf * 2f, squareHalf * 2f)
+        drawRect(brush = saturationBrush, topLeft = topLeft, size = squareSize)
+        drawRect(brush = valueBrush, topLeft = topLeft, size = squareSize)
         val pointerAngle = hue * PI.toFloat() / 180f
-        val pointerRadius = outerRadius - ringWidth / 2f
         drawCircle(
             color = Color.White,
             radius = 6f,
-            center = Offset(center.x + cos(pointerAngle.toDouble()).toFloat() * pointerRadius, center.y + sin(pointerAngle.toDouble()).toFloat() * pointerRadius),
+            center = Offset(
+                center.x + cos(pointerAngle.toDouble()).toFloat() * ringRadius,
+                center.y + sin(pointerAngle.toDouble()).toFloat() * ringRadius,
+            ),
             style = Stroke(2.5f),
         )
         drawCircle(
             color = Color.White,
             radius = 5f,
-            center = Offset(center.x - squareHalf + saturation * squareHalf * 2f, center.y + squareHalf - value * squareHalf * 2f),
+            center = Offset(
+                center.x - squareHalf + saturation * squareHalf * 2f,
+                center.y + squareHalf - value * squareHalf * 2f,
+            ),
             style = Stroke(2f),
         )
     }

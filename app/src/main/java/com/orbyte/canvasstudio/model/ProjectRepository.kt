@@ -16,8 +16,11 @@ object ProjectRepository {
     /** UUIDs prevent accidental collisions between rapid project creations. */
     fun newProjectId(): String = "project-${UUID.randomUUID()}"
 
-    fun projectDirectory(context: Context, projectId: String): File =
-        File(projectsRoot(context), safeId(projectId)).apply { mkdirs() }
+    fun projectDirectory(context: Context, projectId: String): File {
+        val id = safeId(projectId)
+        ProjectSaveTransaction.recover(context, id)
+        return File(projectsRoot(context), id).apply { mkdirs() }
+    }
 
     fun previewPath(context: Context, projectId: String): String =
         File(projectDirectory(context, projectId), "preview.png").absolutePath
@@ -26,6 +29,7 @@ object ProjectRepository {
         recoverMetadata(projectDirectory(context, projectId))
 
     fun loadLocalProjects(context: Context): List<ProjectCard> {
+        ProjectSaveTransaction.recoverPending(context)
         val root = projectsRoot(context)
         return root.listFiles()
             .orEmpty()
@@ -34,6 +38,9 @@ object ProjectRepository {
                     !directory.name.endsWith(".partial") &&
                     !directory.name.endsWith(".restore") &&
                     !directory.name.endsWith(".before-restore") &&
+                    !directory.name.endsWith(".save-stage") &&
+                    !directory.name.endsWith(".before-save") &&
+                    !directory.name.contains(".failed-save-") &&
                     recoverMetadata(directory).isFile
             }
             .mapNotNull(::readProjectCard)
@@ -41,14 +48,20 @@ object ProjectRepository {
     }
 
     fun deleteProject(context: Context, projectId: String): Boolean {
-        val directory = File(projectsRoot(context), safeId(projectId))
+        val id = safeId(projectId)
+        if (ProjectSaveTransaction.isActive(id)) return false
+        ProjectSaveTransaction.recover(context, id)
+        val directory = File(projectsRoot(context), id)
         val deleted = !directory.exists() || directory.deleteRecursively()
         if (deleted) ProjectVersionStore.deleteAll(context, projectId)
         return deleted
     }
 
     fun duplicateProject(context: Context, sourceId: String, newTitle: String? = null): ProjectCard? {
-        val source = File(projectsRoot(context), safeId(sourceId))
+        val safeSourceId = safeId(sourceId)
+        if (ProjectSaveTransaction.isActive(safeSourceId)) return null
+        ProjectSaveTransaction.recover(context, safeSourceId)
+        val source = File(projectsRoot(context), safeSourceId)
         if (!source.isDirectory || !isUsableMetadata(recoverMetadata(source))) return null
 
         val destinationId = newProjectId()

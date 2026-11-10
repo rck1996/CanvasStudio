@@ -5,7 +5,7 @@
 | Galería | Adaptativa, búsqueda, duplicado, papelera recuperable, historial visual y miniaturas asíncronas con caché LRU | Colecciones |
 | Lienzos | Presets incluidos y hasta 24 formatos personales persistentes, orientación reversible, DPI, estimación de memoria y límite dinámico 12/26/40 Mpx | Colecciones de formatos |
 | Pinceles | 14 presets profesionales, 4 experimentales opcionales, control flotante táctil de tamaño/opacidad, presión, inclinación, taper, grano, dispersión, velocidad, puntas bitmap y migración de IDs históricos | Texturas multicanal |
-| Biblioteca | Tres paneles, preview reactivo, curva de presión, favoritos, recientes y JSON portable | Orden manual |
+| Biblioteca | Tres paneles, paleta flotante no modal, búsqueda y preview reactivo, curva de presión, favoritos, recientes y JSON portable | Orden manual |
 | Renderer | Sparse tiles 512, viewport-only, LRU, prefetch, replay regional, entrada táctil diferida, buffers reutilizados en alpha-lock y raster JNI | Backend gráfico especializado |
 | Multitouch | Zoom/pan/rotación sin borrar ni reconstruir temporalmente el compuesto | Gestos configurables |
 | QuickShape | Enderezado optativo de líneas al mantener el lápiz quieto al terminar; no modifica trazos normales | Círculos, rectángulos y edición posterior de figuras |

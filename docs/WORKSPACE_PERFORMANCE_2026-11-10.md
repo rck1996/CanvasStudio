@@ -105,3 +105,26 @@ Las mejoras de FPS requieren medición en dispositivo real.
 ## Controles rápidos · corrección de certificación (noviembre 2026)
 
 Se amplía de 36 a 48 dp el alto táctil de ambos sliders y se amplían los botones +/- a 42 dp para facilitar la interacción con dedos y stylus. El valor del aro central pasa a 11 sp. Las pruebas de regresión separan un gesto de arrastre originado sobre el pulgar real de la acción de accesibilidad `SemanticsActions.SetProgress`; la prueba anterior usaba `swipeRight()` desde 10% del ancho aunque el pulgar empezaba en 15%. No se oculta el fallo anterior: consultar el run 42748420295 (63/65).
+
+## Iteración viewport y editor · 10 noviembre 2026
+
+**Motor de dibujo, ruta de renderizado visible**
+
+- El tablero de transparencia pasa de miles de rectángulos por fotograma a un único draw del área visible con shader de una textura repetida de 96 × 96 px. Se conservan las celdas originales de 48 px y la alternancia cromática.
+- El viewport inverso se calcula **una vez por fotograma** sobre un FloatArray de ocho números y un RectF reutilizados. El resultado se comparte entre tablero, tiles, grilla y prefetch. La grilla dibuja solo segmentos visibles.
+- Los `saveLayer` para clipping y máscaras usan `visibleBounds` y no la extensión total del documento. Beneficio esperado especialmente en lienzos grandes con poco zoom; la máscara persistida no cambia.
+- El render visible por tile calcula directamente sus cuatro coordenadas y evita asignar un `Rect` por tile visible en cada capa/fotograma.
+- La función de simetría mantiene matrices cacheadas mientras no cambien el tipo de simetría o la geometría del documento; la rutina de previsualización reusa esos objetos.
+- La detección de tiles no residentes evita crear una lista intermedia por fotograma y termina en la primera falta.
+
+**Workspace / acercamiento al concepto visual**
+
+- La opción Ajustes de pincel de la barra izquierda abre una paleta flotante sobre el lienzo, con previews existentes, búsqueda, filtros de favoritos/recientes y selección inmediata. No abre un diálogo de pantalla completa. Se mantiene el botón para abrir la biblioteca avanzada, además del acceso antiguo de la rueda rápida.
+- Barra de herramientas lateral más estrecha (64 dp compacta / 76 dp normal, desde 72/92), recuperando espacio útil del documento.
+- Los previews de pincel permanecen virtualizados con `LazyColumn`, con cálculos de vista previa memorizados por preset.
+
+**Validación**
+
+- Nuevo `RenderPathOptimizationTest`: patrón de 48 px y reutilización / invalidación de matrices de simetría.
+- Nuevo `FloatingBrushPaletteUiTest`: selección de preset sin modal, navegación a biblioteca avanzada, búsqueda que conserva abierta la paleta.
+- Ejecutar CI Android, instrumentación Android 15 y regresiones de clipping/máscaras. No se declaran mejoras cuantitativas de FPS, latencia o memoria sin medición física con S Pen.

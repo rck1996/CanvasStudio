@@ -324,6 +324,9 @@ class DrawingView(context: Context) : View(context) {
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+    // Two reused point pairs for Matrix.mapPoints: avoids a FloatArray and
+    // a copied StrokePoint for each preview sample on every stylus frame.
+    private val deferredStrokePreviewCoords = FloatArray(4)
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
@@ -2056,19 +2059,30 @@ class DrawingView(context: Context) : View(context) {
                 (settings.opacity.coerceIn(0.15f, 1f) * 220f).toInt()
             }
         }
+        val coords = deferredStrokePreviewCoords
         symmetryMatrices().forEach { matrix ->
-            var previous = transformPoint(points.first(), matrix)
+            var previous = points.first()
             if (points.size == 1) {
+                coords[0] = previous.x
+                coords[1] = previous.y
+                coords[2] = previous.x
+                coords[3] = previous.y
+                matrix.mapPoints(coords)
                 previewPaint.strokeWidth =
                     settings.sizePx * previous.pressure.coerceIn(settings.minSize, 1f)
-                canvas.drawPoint(previous.x, previous.y, previewPaint)
+                canvas.drawPoint(coords[0], coords[1], previewPaint)
             } else {
                 for (index in 1 until points.size) {
-                    val current = transformPoint(points[index], matrix)
+                    val current = points[index]
+                    coords[0] = previous.x
+                    coords[1] = previous.y
+                    coords[2] = current.x
+                    coords[3] = current.y
+                    matrix.mapPoints(coords)
                     previewPaint.strokeWidth = settings.sizePx *
                         ((previous.pressure + current.pressure) * 0.5f)
                             .coerceIn(settings.minSize, 1f)
-                    canvas.drawLine(previous.x, previous.y, current.x, current.y, previewPaint)
+                    canvas.drawLine(coords[0], coords[1], coords[2], coords[3], previewPaint)
                     previous = current
                 }
             }

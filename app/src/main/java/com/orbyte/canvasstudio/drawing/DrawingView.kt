@@ -40,6 +40,7 @@ import com.orbyte.canvasstudio.drawing.input.StrokeInputBatch
 import com.orbyte.canvasstudio.drawing.pipeline.StrokeFrameBudget
 import com.orbyte.canvasstudio.drawing.pipeline.StrokePreviewRenderer
 import com.orbyte.canvasstudio.drawing.pipeline.CoalescingSerialWorker
+import com.orbyte.canvasstudio.drawing.pipeline.OrderedRasterCommandQueue
 import com.orbyte.canvasstudio.drawing.raster.PreviewCompositor
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
@@ -322,6 +323,11 @@ class DrawingView(context: Context) : View(context) {
         Thread(runnable, "canvas-tile-prefetch").apply { isDaemon = true }
     }
     private val prefetchGeneration = AtomicInteger(0)
+    // Background prefetch is prepared serially, then published on the main
+    // thread; stale generations cannot update the editor.
+    private val rasterWorkQueue = OrderedRasterCommandQueue(prefetchExecutor) { callback ->
+        mainHandler.post(callback)
+    }
     @Volatile private var prefetchInFlight = false
     private var lastPrefetchBounds = RectF()
     private val prefetchedBounds = RectF()
@@ -666,6 +672,8 @@ class DrawingView(context: Context) : View(context) {
         selectionEnd = null
         onSelectionChanged?.invoke(false)
         prefetchGeneration.incrementAndGet()
+        rasterWorkQueue.invalidate()
+        prefetchInFlight = false
         layers.flatMap { it.commands + it.maskCommands }.distinctBy { it.id }.forEach(::recycleCommand)
         layers.forEach { layer ->
             layer.surface.recycle()
@@ -1086,6 +1094,7 @@ class DrawingView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         prefetchGeneration.incrementAndGet()
+        rasterWorkQueue.close()
         prefetchExecutor.shutdownNow()
         // Complete the active durable save rather than interrupting an atomic swap.
         saveWorker.close()
@@ -1245,28 +1254,32 @@ class DrawingView(context: Context) : View(context) {
                 if (layer.maskEnabled) layer.maskSurface?.let { add(it) }
             } }
         val requestedBounds = RectF(bounds)
-        prefetchExecutor.execute {
-            val prefetchStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
-            try {
+        val accepted = rasterWorkQueue.enqueue(
+            prepare = {
+                val started = if (performanceMetrics.isActive) System.nanoTime() else 0L
                 var loadedTiles = 0
-                snapshot.forEach { surface ->
-                    if (generation != prefetchGeneration.get()) return@execute
+                for (surface in snapshot) {
+                    if (generation != prefetchGeneration.get()) break
                     loadedTiles += surface.prefetch(requestedBounds)
                 }
-                performanceMetrics.recordPrefetch(loadedTiles)
-                if (prefetchStartedNanos != 0L) {
-                    performanceMetrics.addTilePrefetch(System.nanoTime() - prefetchStartedNanos)
-                }
+                val duration = if (started != 0L) System.nanoTime() - started else 0L
+                loadedTiles to duration
+            },
+            commit = { (loadedTiles, elapsedNanos) ->
+                prefetchInFlight = false
                 if (generation == prefetchGeneration.get()) {
-                    post {
-                        updateEngineStatus()
-                        postInvalidateOnAnimation()
-                    }
+                    performanceMetrics.recordPrefetch(loadedTiles)
+                    if (elapsedNanos != 0L) performanceMetrics.addTilePrefetch(elapsedNanos)
+                    updateEngineStatus()
+                    postInvalidateOnAnimation()
                 }
-            } finally {
-                post { prefetchInFlight = false }
-            }
-        }
+            },
+            onError = { error ->
+                prefetchInFlight = false
+                android.util.Log.w("CanvasStudio", "Tile prefetch failed", error)
+            },
+        )
+        if (!accepted) prefetchInFlight = false
     }
 
     private fun drawPerspectiveGuides(canvas: Canvas) {

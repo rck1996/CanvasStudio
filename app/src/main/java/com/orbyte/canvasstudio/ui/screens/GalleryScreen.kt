@@ -93,6 +93,7 @@ import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import com.orbyte.canvasstudio.drawing.ShortcutPreferences
 import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
+import com.orbyte.canvasstudio.model.CanvasPresetRepository
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
@@ -739,8 +740,10 @@ fun NewCanvasDialog(
         context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 256
     }
     val maxCanvasPixels = remember(memoryClassMb) { recommendedNewCanvasPixels(memoryClassMb) }
-    val availablePresets = remember(maxCanvasPixels) {
-        canvasPresets.filter { it.width.toLong() * it.height <= maxCanvasPixels }
+    var userPresets by remember { mutableStateOf(CanvasPresetRepository.load(context)) }
+    val availablePresets = remember(maxCanvasPixels, userPresets) {
+        (canvasPresets + userPresets)
+            .filter { it.width.toLong() * it.height <= maxCanvasPixels }
     }
     var selectedPreset by remember(maxCanvasPixels) {
         mutableStateOf(
@@ -752,6 +755,9 @@ fun NewCanvasDialog(
     var height by remember { mutableIntStateOf(selectedPreset.height) }
     var dpi by remember { mutableIntStateOf(selectedPreset.dpi) }
     var title by remember { mutableStateOf("Ilustración sin título") }
+    var showSavePreset by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
+    var presetError by remember { mutableStateOf<String?>(null) }
     val constrainedSize = constrainCanvasSize(
         width = width,
         height = height,
@@ -806,7 +812,20 @@ fun NewCanvasDialog(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             availablePresets.forEach { preset ->
-                                PresetCard(preset, selected = preset == selectedPreset) {
+                                PresetCard(
+                                    preset = preset,
+                                    selected = preset == selectedPreset,
+                                    onDelete = if (userPresets.any { it.title == preset.title }) {
+                                        {
+                                            if (CanvasPresetRepository.remove(context, preset.title)) {
+                                                userPresets = CanvasPresetRepository.load(context)
+                                                if (selectedPreset.title == preset.title) {
+                                                    selectedPreset = canvasPresets.first()
+                                                }
+                                            }
+                                        }
+                                    } else null,
+                                ) {
                                     selectedPreset = preset
                                     width = preset.width
                                     height = preset.height
@@ -815,6 +834,22 @@ fun NewCanvasDialog(
                             }
                         }
 
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${userPresets.size} formatos personales · máximo ${CanvasPresetRepository.MAX_CUSTOM_PRESETS}",
+                                color = StudioPalette.TextMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = {
+                                presetName = ""
+                                presetError = null
+                                showSavePreset = true
+                            }) { Text("Guardar formato") }
+                        }
                         Spacer(Modifier.height(if (compactLandscape) 12.dp else 20.dp))
                         androidx.compose.material3.OutlinedTextField(
                             value = title,
@@ -890,10 +925,68 @@ fun NewCanvasDialog(
             }
         }
     }
+
+    if (showSavePreset) {
+        AlertDialog(
+            onDismissRequest = { showSavePreset = false },
+            title = { Text("Guardar formato de lienzo") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Se guardarán ${constrainedSize.first} × ${constrainedSize.second} px a ${dpi.coerceIn(72, 600)} DPI. No se creará un dibujo.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = presetName,
+                        onValueChange = { presetName = it.take(40); presetError = null },
+                        label = { Text("Nombre del formato") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    presetError?.let {
+                        Text(it, color = StudioPalette.Warning, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = presetName.isNotBlank(),
+                    onClick = {
+                        if (CanvasPresetRepository.upsert(
+                                context,
+                                presetName,
+                                constrainedSize.first,
+                                constrainedSize.second,
+                                dpi.coerceIn(72, 600),
+                            )
+                        ) {
+                            userPresets = CanvasPresetRepository.load(context)
+                            selectedPreset = userPresets.firstOrNull {
+                                it.title.equals(presetName.trim(), ignoreCase = true)
+                            } ?: selectedPreset
+                            width = constrainedSize.first
+                            height = constrainedSize.second
+                            showSavePreset = false
+                        } else {
+                            presetError = "Nombre reservado, medidas inválidas o límite alcanzado."
+                        }
+                    },
+                ) { Text("Guardar formato") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSavePreset = false }) { Text("Cancelar") }
+            },
+        )
+    }
 }
 
 @Composable
-private fun PresetCard(preset: CanvasPreset, selected: Boolean, onClick: () -> Unit) {
+private fun PresetCard(
+    preset: CanvasPreset,
+    selected: Boolean,
+    onDelete: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Surface(
         modifier = Modifier.width(170.dp).clickable(onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
@@ -901,7 +994,26 @@ private fun PresetCard(preset: CanvasPreset, selected: Boolean, onClick: () -> U
         border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) StudioPalette.Accent else StudioPalette.Border),
     ) {
         Column(Modifier.padding(13.dp)) {
-            Text(preset.title, color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    preset.title,
+                    modifier = Modifier.weight(1f),
+                    color = StudioPalette.Text,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                onDelete?.let { delete ->
+                    IconButton(onClick = delete, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Outlined.DeleteOutline,
+                            contentDescription = "Eliminar formato ${preset.title}",
+                            tint = StudioPalette.TextMuted,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Text(preset.subtitle, color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(9.dp))

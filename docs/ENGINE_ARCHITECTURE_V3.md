@@ -14,6 +14,8 @@ a claim that the application has achieved GPU or Procreate parity.
 | Document commands | Keep history, masks and serialized brush semantics authoritative | `DrawingModels.kt`, `DrawingView.kt` (migration pending) |
 | Raster adapter | Reusable, serialized Canvas and clip for each tile mutation; no state escapes callback | `raster/TileCanvasScope.kt` |
 | Sparse surface | Own tiles, LRU, dirty revisions and atomic saves | `SparseTileSurface.kt` |
+| Background raster tasks | Ordered prepare/commit callbacks with cancellation and nonblocking barriers; currently used for prefetch, not authoritative strokes | `pipeline/OrderedRasterCommandQueue.kt` |
+| Project IO | Coalesces obsolete saves; thumbnail composited off the UI thread | `pipeline/CoalescingSerialWorker.kt`, `raster/PreviewCompositor.kt` |
 | GPU prototype | Restricted to debug; must pass CPU compatibility and overhead gates | `raster/TileRasterBackend.kt` |
 
 ## Implemented in this iteration
@@ -32,8 +34,23 @@ a claim that the application has achieved GPU or Procreate parity.
    a hint: an individual segment can still exceed the frame budget.
 5. `StrokePreviewRenderer` isolates transient stroke display from
    `DrawingView`; it never persists preview pixels.
-6. Both Android JVM and emulator regression workflows include the engine
-   branch, with specific new unit/instrumentation tests.
+6. `OrderedRasterCommandQueue` executes background tile prefetch and publishes
+   status updates in order on the UI thread. It supports generation invalidation
+   and nonblocking publication barriers, but does NOT run authoritative
+   brush-raster commands yet.
+7. `CoalescingSerialWorker` keeps one active save and at most one waiting
+   autosave; repeated requests no longer spawn unbounded encoding threads.
+8. `PreviewCompositor` composites the project's exact layer blend/mask
+   structure in the save worker. `SparseTileSurface.drawAllDetached` reads
+   individual tile copies without holding a surface lock across PNG IO or
+   Canvas rendering. The API 26-28 blend fallback is preserved.
+9. Save publication checks a committed content revision and document/save
+   generation before the atomic directory commit. A changed document aborts
+   the staged save, avoiding known stale-save replacement cases. This is not
+   yet a fully serialized transaction with all concurrent editor mutations.
+10. Both Android JVM and emulator regression workflows include the engine
+   branch; tests cover layer/mask thumbnails, detached cached/disk tiles,
+   save coalescing, queue ordering, barriers, and cancellation.
 
 ## Invariants that the replacement must preserve
 
@@ -50,12 +67,16 @@ a claim that the application has achieved GPU or Procreate parity.
 
 ## Remaining architecture milestones (NOT yet implemented)
 
-**M2 — asynchronous authoritative raster.** Separate the remaining command
-executor and document state from the 5k-line view. Use immutable command
-snapshots, a single ordered writer per raster surface, generation tokens, and
-explicit save/undo/preview synchronization barriers. Do not move the current
-mutable `DrawingView` code to a background executor directly: callbacks,
-tiles and command history currently assume UI-thread coordination.
+**M2 — asynchronous authoritative raster (partially implemented).**
+The worker/queue, nonblocking barriers, generation cancellation, serial save
+and detached offscreen compositor are in place. **Final brush-dab rendering
+is still performed on the main thread** to preserve existing pixel behavior,
+masks, color pickup, and undo. The next migration is to extract the brush
+renderer into an isolated raster session with immutable commands and a
+single ordered writer for each destination tile/surface. Commit and failure
+handling must join the existing history, save and preview handoff through
+explicit barriers. Do NOT simply execute `DrawingView.drawCommand` from a
+worker: its Paint/cache state is mutable and View-thread confined.
 
 **M3 — lower-copy GPU path.** Today's Vulkan implementation does per-tile
 CPU->GPU upload, synchronization, and GPU->CPU readback; it is debug-only and
@@ -83,3 +104,17 @@ are diagnostic and do NOT substitute for full display-presentation latency.
 CPU compatibility tests; no unsynchronized saves; emulator/JVM/CI green;
 real-device p95/p99 and stylus behavior checked. No FPS or percentage
 improvement is claimed from static code review or functional test success.
+
+## Background save safety notes
+
+- The new save worker serializes active saves, coalesces only waiting requests,
+  and completes active publication on view detachment (graceful shutdown).
+- Preview layer metadata is captured on the UI thread; only immutable values and
+  thread-safe raster surfaces cross the worker boundary.
+- The compositor uses individual **detached** tile bitmaps, releasing each copy
+  after drawing. It does not increase the live sparse-tile cache.
+- Committed-document revision guards reject stale save attempts before commit;
+  the short interval between its final check and atomic swap remains a future
+  serialization concern. No claim of perfect crash/parallel-edit isolation yet.
+- Undo/redo and final brush rendering remain UI-serialized. Existing project
+  formats are unchanged and no unvalidated GPU backend is enabled.

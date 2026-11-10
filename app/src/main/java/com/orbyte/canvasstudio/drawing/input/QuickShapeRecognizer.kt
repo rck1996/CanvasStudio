@@ -24,27 +24,21 @@ internal object QuickShapeRecognizer {
         points: List<StrokePoint>,
         releaseX: Float,
         releaseY: Float,
-        releaseTimeMillis: Long,
-        releaseTolerancePx: Float = 6f,
+        heldDurationMillis: Long,
     ): Line? {
         if (points.size < 4) return null
         if (!releaseX.isFinite() || !releaseY.isFinite()) return null
         val first = points.first()
         val endpoint = points.last()
-        val length = hypot(endpoint.x - first.x, endpoint.y - first.y)
+        if (heldDurationMillis < HOLD_MILLIS) return null
+        val length = hypot(releaseX - first.x, releaseY - first.y)
         if (!length.isFinite() || length < 30f) return null
-
-        // Find when the pen first became stationary at its final location; small
-        // pressure jitter during the hold must not restart the timer.
-        val tolerance = releaseTolerancePx.coerceIn(2f, 30f)
-        if (hypot(releaseX - endpoint.x, releaseY - endpoint.y) > tolerance) return null
-        var stationarySince = endpoint.timestampMillis
-        for (index in points.lastIndex downTo 0) {
-            val point = points[index]
-            if (hypot(point.x - releaseX, point.y - releaseY) > tolerance) break
-            stationarySince = point.timestampMillis
-        }
-        if (releaseTimeMillis - stationarySince < HOLD_MILLIS) return null
+        // StrokeSampler smooths incoming points, so its final point may lag
+        // behind the real pen coordinate. Permit that bounded lag, while the
+        // view separately verifies that the raw pointer has truly been held.
+        val filteredLength = hypot(endpoint.x - first.x, endpoint.y - first.y)
+        val smoothingLag = hypot(releaseX - endpoint.x, releaseY - endpoint.y)
+        if (!filteredLength.isFinite() || smoothingLag > (12f + length * .055f).coerceAtMost(60f)) return null
 
         // Reject wide arcs and retracing/zigzags. Use cross-product distance,
         // avoiding expensive curve fitting, and bound length/endpoint ratio.
@@ -56,8 +50,8 @@ internal object QuickShapeRecognizer {
             if (!curr.x.isFinite() || !curr.y.isFinite()) return null
             walked += hypot(curr.x - prev.x, curr.y - prev.y)
             val cross = abs(
-                (endpoint.x - first.x) * (curr.y - first.y) -
-                (endpoint.y - first.y) * (curr.x - first.x),
+                (releaseX - first.x) * (curr.y - first.y) -
+                (releaseY - first.y) * (curr.x - first.x),
             )
             maxDeviation = max(maxDeviation, cross / length)
         }

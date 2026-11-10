@@ -169,6 +169,7 @@ import com.orbyte.canvasstudio.drawing.sanitized
 import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
+import com.orbyte.canvasstudio.model.RecentColorRepository
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialFocusProvider
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialOverlay
@@ -356,6 +357,16 @@ fun EditorScreen(
     var zenMode by remember { mutableStateOf(false) }
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
+    }
+    var recentColors by remember { mutableStateOf(RecentColorRepository.load(context)) }
+    var lastRecordedColor by remember { mutableIntStateOf(brushSettings.color) }
+    // Color-wheel and HSV sliders can emit dozens of changes per second. Persist the
+    // final selected color only after the gesture settles instead of doing disk I/O per move.
+    LaunchedEffect(brushSettings.color, tutorialMode) {
+        if (tutorialMode || brushSettings.color == lastRecordedColor) return@LaunchedEffect
+        delay(550)
+        recentColors = RecentColorRepository.record(context, brushSettings.color)
+        lastRecordedColor = brushSettings.color
     }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var quickMenuAnchor by remember { mutableStateOf<Offset?>(null) }
@@ -1206,6 +1217,11 @@ fun EditorScreen(
                     selectedPreset = selectedPreset,
                     brushes = availableBrushes,
                     brushSettings = brushSettings,
+                    recentColors = recentColors,
+                    onClearRecentColors = {
+                        RecentColorRepository.clear(context)
+                        recentColors = emptyList()
+                    },
                     onPresetSelected = applyBrushPreset,
                     onBrushSettingsChanged = { updated ->
                         val before = brushSettings.sizePx
@@ -2152,6 +2168,8 @@ private fun RightDock(
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
     brushSettings: BrushSettings,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
     onPresetSelected: (BrushPreset) -> Unit,
     onBrushSettingsChanged: (BrushSettings) -> Unit,
     onSaveCustomBrush: (String) -> Unit,
@@ -2223,6 +2241,8 @@ private fun RightDock(
             )
             DockTab.COLOR -> ColorDock(
                 currentColor = brushSettings.color,
+                recentColors = recentColors,
+                onClearRecentColors = onClearRecentColors,
                 onColorChanged = { onBrushSettingsChanged(brushSettings.copy(color = it)) },
             )
             DockTab.LAYERS -> LayersDock(
@@ -3405,7 +3425,12 @@ private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPoin
 }
 
 @Composable
-private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
+private fun ColorDock(
+    currentColor: Int,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
+    onColorChanged: (Int) -> Unit,
+) {
     val hsv = remember(currentColor) {
         FloatArray(3).also { AndroidColor.colorToHSV(currentColor, it) }
     }
@@ -3455,8 +3480,42 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             emitColor(newValue = it)
         }
         Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Colores recientes", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            if (recentColors.isNotEmpty()) {
+                TextButton(onClick = onClearRecentColors) { Text("Limpiar") }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (recentColors.isEmpty()) {
+            Text(
+                "Aquí aparecerán los colores que uses al pintar.",
+                color = StudioPalette.TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                recentColors.forEach { swatch ->
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .background(Color(swatch), RoundedCornerShape(8.dp))
+                            .border(1.dp, StudioPalette.Border, RoundedCornerShape(8.dp))
+                            .semantics {
+                                contentDescription = String.format(Locale.US, "Color reciente #%06X", swatch and 0xFFFFFF)
+                            }
+                            .clickable { onColorChanged(swatch) },
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth()) {
-            Text("Paleta reciente", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Text("Paleta básica", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
             Text(
                 String.format(Locale.US, "#%06X", 0xFFFFFF and currentColor),
@@ -3465,9 +3524,11 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             )
         }
         Spacer(Modifier.height(10.dp))
-        val swatches = listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        val baseSwatches = remember {
+            listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            swatches.forEach { swatch ->
+            baseSwatches.forEach { swatch ->
                 Box(
                     Modifier
                         .size(25.dp)

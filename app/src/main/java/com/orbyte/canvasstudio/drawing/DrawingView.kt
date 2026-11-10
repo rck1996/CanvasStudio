@@ -39,6 +39,8 @@ import com.orbyte.canvasstudio.drawing.input.StrokeSampler
 import com.orbyte.canvasstudio.drawing.input.StrokeInputBatch
 import com.orbyte.canvasstudio.drawing.pipeline.StrokeFrameBudget
 import com.orbyte.canvasstudio.drawing.pipeline.StrokePreviewRenderer
+import com.orbyte.canvasstudio.drawing.pipeline.CoalescingSerialWorker
+import com.orbyte.canvasstudio.drawing.raster.PreviewCompositor
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
 import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
@@ -324,6 +326,12 @@ class DrawingView(context: Context) : View(context) {
     private var lastPrefetchBounds = RectF()
     private val prefetchedBounds = RectF()
     private val saveLock = Any()
+    // One running project save + at most one queued latest save. Older debounced
+    // autosaves never spawn overlapping encode threads or exhaust the queue.
+    private val saveWorker = CoalescingSerialWorker.background("canvas-project-save") { error ->
+        android.util.Log.e("CanvasStudio", "Project save worker failed", error)
+        mainHandler.post { onProjectSaved?.invoke(false) }
+    }
     @Volatile private var saveGeneration = 0
     // Gallery demo rasterization happens on another thread. Autosave must not
     // snapshot files until demo tile generation has fully completed.
@@ -1079,6 +1087,8 @@ class DrawingView(context: Context) : View(context) {
     override fun onDetachedFromWindow() {
         prefetchGeneration.incrementAndGet()
         prefetchExecutor.shutdownNow()
+        // Complete the active durable save rather than interrupting an atomic swap.
+        saveWorker.close()
         tileCheckpointStore.clear()
         vulkanRasterBackend?.close()
         super.onDetachedFromWindow()
@@ -4924,6 +4934,8 @@ class DrawingView(context: Context) : View(context) {
             val maskEnabled: Boolean,
             val surface: SparseTileSurface,
             val maskSurface: SparseTileSurface?,
+            val effectiveVisible: Boolean,
+            val effectiveOpacity: Float,
         )
 
         data class LayerSnapshot(
@@ -4947,6 +4959,8 @@ class DrawingView(context: Context) : View(context) {
                 maskEnabled = layer.maskEnabled,
                 surface = layer.surface,
                 maskSurface = layer.maskSurface,
+                effectiveVisible = isLayerEffectivelyVisible(layer),
+                effectiveOpacity = effectiveLayerOpacity(layer),
             )
         }
         val groupReferences = layerGroups.map { group -> group.copy() }
@@ -4962,21 +4976,13 @@ class DrawingView(context: Context) : View(context) {
         val savedPerspectivePoint1Y = perspectivePoint1Y
         val savedPerspectivePoint2X = perspectivePoint2X
         val savedPerspectivePoint2Y = perspectivePoint2Y
-        val previewBitmap = if (includePreview) {
-            runCatching { renderCompositePreview() }.getOrElse {
-                onProjectSaved?.invoke(false)
-                return
-            }
-        } else {
-            null
-        }
         val savedWidth = documentWidth
         val savedHeight = documentHeight
         val documentAtSave = documentGeneration
         val seedToAwait = demoSeedThread
         val generation = ++saveGeneration
 
-        Thread {
+        val enqueued = saveWorker.submitLatest {
             synchronized(saveLock) {
                 // Never block UI input: join happens only on this save worker.
                 // Otherwise a demo can rebuild its working tile folder after
@@ -4986,14 +4992,41 @@ class DrawingView(context: Context) : View(context) {
                         seedToAwait.join()
                     } catch (_: InterruptedException) {
                         Thread.currentThread().interrupt()
-                        previewBitmap?.recycle()
                         return@synchronized
                     }
                 }
                 if (generation != saveGeneration || documentAtSave != documentGeneration) {
-                    previewBitmap?.recycle()
                     return@synchronized
                 }
+
+                // Compose the thumbnail from immutable layer metadata on the save
+                // worker, never on the stylus/UI thread. Only the sparse surfaces
+                // are referenced and each protects its own tile cache.
+                val previewBitmap = if (includePreview) {
+                    runCatching {
+                        PreviewCompositor().render(
+                            savedWidth,
+                            savedHeight,
+                            layerReferences.map { layer ->
+                                PreviewCompositor.Layer(
+                                    surface = layer.surface,
+                                    maskSurface = layer.maskSurface,
+                                    visible = layer.effectiveVisible,
+                                    opacity = layer.effectiveOpacity,
+                                    blendMode = layer.blendMode,
+                                    clipping = layer.clipping,
+                                    maskEnabled = layer.maskEnabled,
+                                )
+                            },
+                        )
+                    }.getOrElse { error ->
+                        mainHandler.post {
+                            onEngineMessage?.invoke("No se pudo generar la miniatura del proyecto.")
+                            onProjectSaved?.invoke(false)
+                        }
+                        return@synchronized
+                    }
+                } else null
 
                 // Snapshot and project copy share one worker lock. This prevents two debounced
                 // saves from encoding the same tile and competing for its atomic .tmp file.
@@ -5177,10 +5210,9 @@ class DrawingView(context: Context) : View(context) {
                     previewBitmap?.recycle()
                 }
             }
-        }.apply {
-            name = "canvas-project-save"
-            priority = Thread.NORM_PRIORITY - 1
-            start()
+        }
+        if (!enqueued) {
+            onProjectSaved?.invoke(false)
         }
     }
 

@@ -1879,7 +1879,7 @@ internal fun QuickDial(
     ) {
         Column(Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(
                         progress = { progress.coerceIn(0f, 1f) },
                         modifier = Modifier.fillMaxSize(),
@@ -1887,7 +1887,7 @@ internal fun QuickDial(
                         color = StudioPalette.Accent,
                         trackColor = StudioPalette.SurfaceHover,
                     )
-                    Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 9.sp)
+                    Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 11.sp)
                 }
                 Spacer(Modifier.width(9.dp))
                 Column(Modifier.weight(1f)) {
@@ -1901,20 +1901,22 @@ internal fun QuickDial(
                             .border(1.dp, Color.White.copy(alpha = .6f), CircleShape),
                     )
                 }
-                IconButton(onClick = onDecrease, modifier = Modifier.size(36.dp)) {
+                IconButton(onClick = onDecrease, modifier = Modifier.size(42.dp)) {
                     Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
                 }
-                IconButton(onClick = onIncrease, modifier = Modifier.size(36.dp)) {
+                IconButton(onClick = onIncrease, modifier = Modifier.size(42.dp)) {
                     Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
                 }
             }
-            // Continuous adjustment avoids opening Brush Studio while painting.
+            // Keep an actual 48dp touch target: a smaller slider is hard to grab
+            // accurately with a finger and can miss a test drag at its edges.
+            // Material3 preserves its native SetProgress accessibility action.
             Slider(
                 value = progress.coerceIn(0f, 1f),
                 onValueChange = onProgressChanged,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(36.dp)
+                    .height(48.dp)
                     .testTag(if (label == "Tamaño") "quick_slider_size" else "quick_slider_opacity")
                     .semantics {
                         contentDescription = "Deslizar $label"

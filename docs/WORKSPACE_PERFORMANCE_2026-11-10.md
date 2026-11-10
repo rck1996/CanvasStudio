@@ -101,3 +101,7 @@ por `DrawingView` mediante `Matrix.mapPoints`; también conserva una instancia
 persistente de `Paint`. Las coordenadas y la presión dibujadas mantienen el mismo
 algoritmo; el objetivo es reducir pausas de GC con trazos largos y simetría activa.
 Las mejoras de FPS requieren medición en dispositivo real.
+
+## Controles rápidos · corrección de certificación (noviembre 2026)
+
+Se amplía de 36 a 48 dp el alto táctil de ambos sliders y se amplían los botones +/- a 42 dp para facilitar la interacción con dedos y stylus. El valor del aro central pasa a 11 sp. Las pruebas de regresión separan un gesto de arrastre originado sobre el pulgar real de la acción de accesibilidad `SemanticsActions.SetProgress`; la prueba anterior usaba `swipeRight()` desde 10% del ancho aunque el pulgar empezaba en 15%. No se oculta el fallo anterior: consultar el run 42748420295 (63/65).

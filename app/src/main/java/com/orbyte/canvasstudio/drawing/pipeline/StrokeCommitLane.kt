@@ -41,9 +41,41 @@ internal class StrokeCommitLane<R : Closeable>(
     private var publishing: Task<R>? = null
     private var generation = 0L
     private var closed = false
+    // Latest-wins idle callback is reserved for debounced autosave, not undo.
+    private var idleAutosave: (() -> Unit)? = null
 
     val hasPending: Boolean get() = active != null || queue.isNotEmpty()
     val pendingCount: Int get() = queue.size + if (active == null) 0 else 1
+
+    /**
+     * Schedule at most one deferred autosave after all queued strokes commit.
+     * The latest request replaces an older pending autosave. This never runs
+     * on the background raster worker, only on the document owner thread.
+     */
+    fun whenIdleForAutosave(action: () -> Unit) {
+        if (closed) return
+        if (!hasPending) {
+            action()
+        } else {
+            idleAutosave = action
+        }
+    }
+
+    /** Explicit or lifecycle save supersedes an obsolete deferred autosave. */
+    fun cancelDeferredAutosave() {
+        idleAutosave = null
+    }
+
+    private fun deliverIdleAutosave() {
+        if (closed || hasPending) return
+        val callback = idleAutosave ?: return
+        idleAutosave = null
+        try {
+            callback()
+        } catch (error: Throwable) {
+            onFailure(error)
+        }
+    }
 
     fun enqueue(prepare: () -> R?, finish: (R?) -> Unit): Boolean {
         if (closed) return false
@@ -70,6 +102,7 @@ internal class StrokeCommitLane<R : Closeable>(
                 onFailure(error)
             }
         }
+        deliverIdleAutosave()
     }
 
     private fun startNext() {
@@ -110,12 +143,14 @@ internal class StrokeCommitLane<R : Closeable>(
                 active = null
                 startNext()
             }
+            deliverIdleAutosave()
         }
     }
 
     override fun close() {
         flushSynchronously()
         closed = true
+        idleAutosave = null
         generation++
     }
 }

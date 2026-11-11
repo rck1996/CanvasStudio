@@ -36,13 +36,14 @@ internal class StrokePreviewRenderer {
             (settings.opacity.coerceIn(0.15f, 1f) * 220f).toInt()
         }
         symmetryMatrices.forEach { matrix ->
+            val identityTransform = matrix.isIdentity
             var previous = points.first()
             if (points.size == 1) {
                 endpoints[0] = previous.x
                 endpoints[1] = previous.y
                 endpoints[2] = previous.x
                 endpoints[3] = previous.y
-                matrix.mapPoints(endpoints)
+                if (!identityTransform) matrix.mapPoints(endpoints)
                 paint.strokeWidth = settings.sizePx *
                     previous.pressure.coerceIn(settings.minSize, 1f)
                 canvas.drawPoint(endpoints[0], endpoints[1], paint)
@@ -53,7 +54,7 @@ internal class StrokePreviewRenderer {
                     endpoints[1] = previous.y
                     endpoints[2] = current.x
                     endpoints[3] = current.y
-                    matrix.mapPoints(endpoints)
+                    if (!identityTransform) matrix.mapPoints(endpoints)
                     paint.strokeWidth = settings.sizePx *
                         ((previous.pressure + current.pressure) * 0.5f)
                             .coerceIn(settings.minSize, 1f)

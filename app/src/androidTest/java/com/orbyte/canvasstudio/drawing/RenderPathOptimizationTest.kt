@@ -29,6 +29,35 @@ class RenderPathOptimizationTest {
         }
     }
 
+    @Test fun defaultSymmetryDoesNotCopyTheStrokeOrItsInputPoints() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            val view = DrawingView(context)
+            view.configureDocument(1024, 1024)
+            val points = List(1_000) { index ->
+                StrokePoint(
+                    30f + index * 0.25f,
+                    80f + index * 0.1f,
+                    .6f, .15f, index.toLong() * 12L,
+                )
+            }
+            val original = StrokeCommand(
+                points = points,
+                tool = DrawingTool.BRUSH,
+                settings = BrushSettings(kind = BrushKind.INK),
+            )
+            val unmodified = view.debugSymmetryCommandsForTest(original)
+            assertEquals(1, unmodified.size)
+            assertSame("Identity symmetry should not clone commands", original, unmodified[0])
+            assertSame("Input point list must be retained", points, (unmodified[0] as StrokeCommand).points)
+            view.setRadialSymmetry(4)
+            val radial = view.debugSymmetryCommandsForTest(original)
+            assertEquals(4, radial.size)
+            assertNotSame(original, radial[0])
+            assertEquals(original.id, (radial[0] as StrokeCommand).id)
+        }
+    }
+
     @Test fun symmetryCacheIsInvalidatedOnlyWhenGeometryOrModeChanges() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         InstrumentationRegistry.getInstrumentation().runOnMainSync {

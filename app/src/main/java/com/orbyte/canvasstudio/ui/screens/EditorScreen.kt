@@ -498,71 +498,7 @@ fun EditorScreen(
         }
     }
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/png"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            val snapshot = runCatching { view.captureExportSnapshot() }
-                .getOrElse { error ->
-                    Toast.makeText(
-                        context,
-                        error.message ?: "No se pudo preparar la exportación.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@rememberLauncherForActivityResult
-                }
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    snapshot.writePngTo({
-                        context.contentResolver.openOutputStream(uri)
-                            ?: error("No se pudo abrir el archivo de destino.")
-                    }, includePaper = true)
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PNG exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar PNG.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
-
-    val openRasterLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/openraster"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            val snapshot = runCatching { view.captureExportSnapshot() }
-                .getOrElse { error ->
-                    Toast.makeText(
-                        context,
-                        error.message ?: "No se pudo preparar OpenRaster.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@rememberLauncherForActivityResult
-                }
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    snapshot.writeOpenRasterTo {
-                        context.contentResolver.openOutputStream(uri)
-                            ?: error("No se pudo abrir el archivo de destino.")
-                    }
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "OpenRaster exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar OpenRaster.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
+    val exportActions = rememberEditorExportActions(drawingView)
 
     val importImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -583,39 +519,6 @@ fun EditorScreen(
                     } else {
                         Toast.makeText(context, "No se pudo abrir la imagen.", Toast.LENGTH_LONG).show()
                     }
-                }
-            }
-        }
-    }
-
-    val exportPsdLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/vnd.adobe.photoshop"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            val snapshot = runCatching { view.captureExportSnapshot() }
-                .getOrElse { error ->
-                    Toast.makeText(
-                        context,
-                        error.message ?: "No se pudo preparar PSD.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@rememberLauncherForActivityResult
-                }
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    snapshot.writeBasicPsdTo {
-                        context.contentResolver.openOutputStream(uri)
-                            ?: error("No se pudo abrir el archivo de destino.")
-                    }
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PSD compuesto exportado"
-                        else result.exceptionOrNull()?.message ?: "No se pudo exportar PSD.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
                 }
             }
         }
@@ -858,19 +761,16 @@ fun EditorScreen(
                     tutorialSession?.observe(StudioTutorialEvent.ExportFormatSelected("PNG"))
                     tutorialSession?.observe(StudioTutorialEvent.ExportPreviewGenerated("PNG", document.width, document.height))
                 } else {
-                    val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                    exportLauncher.launch("$safeName.png")
+                    exportActions.png(document.title)
                 }
             },
             onExportOpenRaster = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                openRasterLauncher.launch("$safeName.ora")
+                exportActions.openRaster(document.title)
             },
             onExportPsd = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                exportPsdLauncher.launch("$safeName.psd")
+                exportActions.psd(document.title)
             },
             onImportImage = { importImageLauncher.launch("image/*") },
             onImportPsd = { importPsdLauncher.launch(arrayOf("image/vnd.adobe.photoshop", "application/octet-stream")) },

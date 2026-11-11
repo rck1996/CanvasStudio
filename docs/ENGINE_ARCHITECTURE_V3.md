@@ -191,6 +191,43 @@ settings, no FPS claims have been measured, and CPU fallback during rapid
 sequential strokes is intentionally possible. Further refactoring is required
 to eliminate fallback stalls while retaining exact document history semantics.
 
+## M2-D — bounded, nonblocking consecutive stroke input
+
+The earlier M2-C implementation forced a synchronous CPU replay of every
+unpublished worker stroke at the next pointer-down. It maintained correctness
+but blocked rapid sketching and rarely allowed more than one pending stroke.
+
+This iteration changes only the **explicitly opt-in DEBUG raster path**:
+
+- Compatible new brush gestures now join the pending stroke queue **without**
+  waiting for earlier raster jobs. `StrokeCommitLane` still guarantees strict
+  FIFO preparation/publication, so a new stroke snapshots all earlier commits.
+- The active gesture remains an ephemeral overlay. Completed, unpublished
+  strokes remain in the bounded `queuedStrokePreviews` collection.
+- The queue is capped at four pending strokes. When full, or when a gesture
+  has unsupported brush features, a synchronous FIFO fallback drains previous
+  strokes before the next document mutation; an experimental stroke can still
+  be enqueued once that barrier is complete.
+- Candidate detection uses the immutable settings captured at pointer-down
+  (not toolbar changes during the stroke). Extra conditions ensure the
+  background path does not take over masked, symmetrical, wet-color-pickup,
+  custom-tip, quick-shape, or experimental Vulkan gestures.
+- Individual strokes beyond 4096 input samples or 24 affected tiles fall
+  back to the proven CPU renderer to bound transient work and memory.
+- With identity symmetry, history no longer duplicates the entire
+  `StrokePoint` array or allocates per-point transformation buffers.
+  Length calculation no longer creates temporary `Pair` objects per segment.
+- Owner-thread debug counters record enqueues, successful detached publishes
+  and synchronous fallbacks. A deterministic emulator regression blocks the
+  first raster worker and asserts that a second pen-down queues without
+  falling back or violating publication order.
+- A primary stylus-button color sample forces a pending-work barrier so the
+  sampled color includes all earlier strokes.
+
+**Still not a production speed claim.** The conservative synchronous barrier
+remains for history, save, layer operations and queue backpressure. No p95/p99
+stylus latency is claimed without an actual S Pen tablet and Perfetto traces.
+
 ## Proposed M2-C activation gate
 
 - Record input, stroke command, selected layer ID, surface ID, original tile

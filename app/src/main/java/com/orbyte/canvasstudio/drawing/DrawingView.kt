@@ -334,6 +334,13 @@ class DrawingView(context: Context) : View(context) {
     // Strictly experimental. The proven synchronous renderer remains the
     // default until end-to-end stylus latency and pixel parity are certified.
     internal var debugAsyncStrokeRasterEnabled: Boolean = false
+    // Debug instrumentation: counters belong exclusively to the main/owner thread.
+    internal var debugAsyncStrokeEnqueueCount = 0
+        private set
+    internal var debugAsyncStrokePublishedCount = 0
+        private set
+    internal var debugAsyncStrokeFallbackCount = 0
+        private set
     private val strokeCommitWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "canvas-stroke-commit").apply { isDaemon = true }
     }
@@ -350,6 +357,21 @@ class DrawingView(context: Context) : View(context) {
     private val queuedStrokePreviews = mutableListOf<QueuedStrokePreview>()
     internal fun debugPendingStrokeCommits(): Int = strokeCommitLane.pendingCount
     internal fun debugFlushPendingStrokeCommits() = flushStrokeCommits()
+
+    private fun canQueueAsyncStroke(
+        drawingTool: DrawingTool,
+        settings: BrushSettings,
+        layer: LayerData?,
+    ): Boolean =
+        BuildConfig.DEBUG && debugAsyncStrokeRasterEnabled &&
+            drawingTool == DrawingTool.BRUSH &&
+            requestedRendererMode == RendererMode.CANVAS_BITMAP &&
+            !quickShapeEnabled && layer != null && !layer.editingMask &&
+            selectionPath == null && !selectionInverted &&
+            radialSymmetryCount == 1 && !verticalSymmetry &&
+            settings.tipAssetPath == null &&
+            settings.renderProfile.colorPickup <= .001f
+
     private fun flushStrokeCommits() {
         if (strokeCommitLane.hasPending) strokeCommitLane.flushSynchronously()
     }
@@ -1631,7 +1653,12 @@ class DrawingView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+            strokeCommitLane.hasPending &&
+            !canQueueAsyncStroke(tool, brushSettings, activeLayer())
+        ) {
+            // Non-eligible gestures (eraser, selection, shape, mask edits) must
+            // not overtake an unpublished brush command.
             flushStrokeCommits()
         }
         performanceMetrics.recordMotionEvent(event.historySize)
@@ -1927,18 +1954,20 @@ class DrawingView(context: Context) : View(context) {
         time: Long,
         deferUntilCommit: Boolean = false,
     ) {
-        // Preserve history order if the user draws again before the previous
-        // experimental background batch has published.
-        flushStrokeCommits()
-        activeStrokeInputStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         val settings = brushSettings
+        val canQueue = canQueueAsyncStroke(drawingTool, settings, activeLayer()) &&
+            strokeCommitLane.pendingCount < MAX_PENDING_ASYNC_STROKES
+        // Let subsequent eligible strokes queue without forcing their prior
+        // worker to replay on UI. Bounds/cap protect RAM and input latency.
+        if (!canQueue) flushStrokeCommits()
+        activeStrokeInputStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         val points = mutableListOf(
             StrokePoint(x, y, pressure, tilt, time, orientation),
         )
         activeStrokePoints = points
         activeInputTool = drawingTool
         activeStrokeSettings = settings
-        activeStrokeDefersRaster = deferUntilCommit
+        activeStrokeDefersRaster = deferUntilCommit || canQueue
         activeStrokeLastRawX = x
         activeStrokeLastRawY = y
         activeStrokeLastMotionTimeMillis = time
@@ -2175,10 +2204,11 @@ class DrawingView(context: Context) : View(context) {
         completedTool: DrawingTool,
         deferredRaster: Boolean,
     ): Boolean {
-        if (!BuildConfig.DEBUG || !debugAsyncStrokeRasterEnabled ||
-            !deferredRaster || completedTool != DrawingTool.BRUSH ||
-            layer.editingMask || commands.size != 1) return false
+        if (!deferredRaster || commands.size != 1 ||
+            !canQueueAsyncStroke(completedTool, brushSettings, layer)) return false
         val stroke = commands.single() as? StrokeCommand ?: return false
+        if (stroke.points.size > MAX_ASYNC_STROKE_POINTS ||
+            strokeCommitLane.pendingCount >= MAX_PENDING_ASYNC_STROKES) return false
         if (stroke.clipPoints.isNotEmpty() || stroke.clipFeatherPx > .01f ||
             stroke.settings.renderProfile.colorPickup > .001f ||
             stroke.settings.tipAssetPath != null) return false
@@ -2219,11 +2249,14 @@ class DrawingView(context: Context) : View(context) {
                     if (prepared?.publish() != true) {
                         // A concurrent document edit invalidates detached tiles,
                         // so replay exactly once using the known-good renderer.
+                        debugAsyncStrokeFallbackCount++
                         drawCommand(surface, stroke)
+                    } else {
+                        debugAsyncStrokePublishedCount++
                     }
                     recordCommands(layer, commands)
-                    onInteraction?.invoke(event)
                     commitDocumentChange()
+                    onInteraction?.invoke(event)
                     if (inputStartedNanos != 0L) {
                         performanceMetrics.addInputToCommit(
                             System.nanoTime() - inputStartedNanos,
@@ -2237,6 +2270,7 @@ class DrawingView(context: Context) : View(context) {
             queuedStrokePreviews.remove(preview)
             deferredStrokeOverlay.invalidateSelf()
         } else {
+            debugAsyncStrokeEnqueueCount++
             deferredStrokeOverlay.invalidateSelf()
             postInvalidateOnAnimation()
         }
@@ -2305,6 +2339,9 @@ class DrawingView(context: Context) : View(context) {
                     layer, commands, completedPoints, completedTool, deferredRaster,
                 )
             ) return
+            // If a long/unhandled stroke cannot use the detached backend,
+            // publish all previously queued strokes before this CPU replay.
+            flushStrokeCommits()
             recordCommands(layer, commands)
             if (deferredRaster) {
                 val surface = surfaceFor(layer, activeHistoryTarget(layer))
@@ -4898,6 +4935,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private companion object {
+        const val MAX_PENDING_ASYNC_STROKES = 4
+        const val MAX_ASYNC_STROKE_POINTS = 4096
         const val MAX_FLOOD_FILL_PIXELS = 12_000_000L
         const val MAX_ORA_LAYER_PIXELS = 40_000_000L
         const val ENGINE_STATUS_INTERVAL_MS = 650L

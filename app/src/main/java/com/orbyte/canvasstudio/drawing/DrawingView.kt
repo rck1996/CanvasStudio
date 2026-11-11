@@ -341,6 +341,9 @@ class DrawingView(context: Context) : View(context) {
         private set
     internal var debugAsyncStrokeFallbackCount = 0
         private set
+    // Debug-only instrumentation hook, captured on the owner thread before enqueue.
+    // Useful to deterministically verify queue ordering under stalled workers.
+    internal var debugBeforeAsyncStrokePrepare: (() -> Unit)? = null
     private val strokeCommitWorker = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "canvas-stroke-commit").apply { isDaemon = true }
     }
@@ -2236,10 +2239,12 @@ class DrawingView(context: Context) : View(context) {
             symmetryCopies = 1,
         )
         val inputStartedNanos = activeStrokeInputStartedNanos
+        val testBeforePrepare = if (BuildConfig.DEBUG) debugBeforeAsyncStrokePrepare else null
 
         queuedStrokePreviews += preview
         val accepted = strokeCommitLane.enqueue(
             prepare = {
+                testBeforePrepare?.invoke()
                 DetachedStrokeRasterizer().use { renderer ->
                     renderer.prepare(surface, stroke, preserveAlpha)
                 }

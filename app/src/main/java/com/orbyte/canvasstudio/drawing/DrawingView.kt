@@ -1651,6 +1651,9 @@ class DrawingView(context: Context) : View(context) {
         else -> command
     }
 
+    internal fun debugSymmetryCommandsForTest(command: DrawCommand): List<DrawCommand> =
+        symmetryCommands(command)
+
     private fun symmetryCommands(command: DrawCommand): List<DrawCommand> =
         if (radialSymmetryCount == 1 && !verticalSymmetry) {
             // Identity symmetry must never copy every point or create matrices:

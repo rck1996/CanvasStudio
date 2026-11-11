@@ -77,6 +77,15 @@ class MultiTouchNavigationTest {
             send(MotionEvent.ACTION_MOVE, 1060L, arrayOf(pen))
             send(MotionEvent.ACTION_UP, 1080L, arrayOf(pen))
             assertEquals("Palm rejection must preserve the pen stroke", 1, committed)
+
+            send(MotionEvent.ACTION_DOWN, 1200L, arrayOf(pen))
+            send(MotionEvent.ACTION_MOVE, 1220L, arrayOf(pen))
+            send(MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT),
+                1230L, arrayOf(pen, palm))
+            send(MotionEvent.ACTION_POINTER_UP, 1240L, arrayOf(pen, palm))
+            assertEquals("Lifting the pen must commit while the palm is still down", 2, committed)
+            send(MotionEvent.ACTION_UP, 1250L, arrayOf(palm))
+            assertEquals("The remaining contact must not commit a second stroke", 2, committed)
         }
     }
 

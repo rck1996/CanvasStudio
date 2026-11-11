@@ -1869,7 +1869,12 @@ class DrawingView(context: Context) : View(context) {
                 }
             }
 
-            MotionEvent.ACTION_UP -> {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                // A stylus can lift while another contact is still down. Only
+                // the pointer that started the gesture may finish its stroke.
+                val gestureId = activeGesturePointerId ?: return true
+                if (event.getPointerId(event.actionIndex) != gestureId) return true
+                activeGesturePointerId = null
                 when (activeInputTool ?: eventTool) {
                     DrawingTool.BRUSH, DrawingTool.ERASER -> {
                         if (quickShapeEnabled && activeInputTool == DrawingTool.BRUSH) {
@@ -1888,6 +1893,7 @@ class DrawingView(context: Context) : View(context) {
             }
 
             MotionEvent.ACTION_CANCEL -> {
+                activeGesturePointerId = null
                 clearActiveStrokeState()
                 shapeStart = null
                 shapeEnd = null

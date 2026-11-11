@@ -152,6 +152,7 @@ class DrawingView(context: Context) : View(context) {
     // Tiles share exact edges. Bilinear sampling blends the transparent outer pixel of a tile
     // with its neighbour at fractional zoom and produces a visible 512 px checker/grid.
     private val layerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val isolatedLayerContentPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val clippingMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
@@ -1173,10 +1174,10 @@ class DrawingView(context: Context) : View(context) {
         }
 
         // No need for a document-sized offscreen texture when only the viewport is visible.
-        val checkpoint = canvas.saveLayer(visibleBounds, null)
         configureLayerPaint(layer, effectiveLayerOpacity(layer))
-        layer.surface.drawVisible(canvas, visibleBounds, layerPaint)
-        if (layer.id == activeLayerId && !layer.editingMask) drawTransformPreview(canvas, layerPaint)
+        val checkpoint = canvas.saveLayer(visibleBounds, layerPaint)
+        layer.surface.drawVisible(canvas, visibleBounds, isolatedLayerContentPaint)
+        if (layer.id == activeLayerId && !layer.editingMask) drawTransformPreview(canvas, isolatedLayerContentPaint)
         if (hasMask) applyRasterMaskVisible(canvas, layer, visibleBounds)
         if (hasClippingBase) {
             val base = layers[index - 1]
@@ -3450,9 +3451,9 @@ class DrawingView(context: Context) : View(context) {
         sampleCanvas.drawColor(Color.WHITE)
         layers.forEachIndexed { index, layer ->
             if (!isLayerEffectivelyVisible(layer)) return@forEachIndexed
-            val checkpoint = sampleCanvas.saveLayer(RectF(0f, 0f, 1f, 1f), null)
             configureLayerPaint(layer, effectiveLayerOpacity(layer))
-            layer.surface.drawAtPoint(sampleCanvas, x, y, layerPaint)
+            val checkpoint = sampleCanvas.saveLayer(RectF(0f, 0f, 1f, 1f), layerPaint)
+            layer.surface.drawAtPoint(sampleCanvas, x, y, isolatedLayerContentPaint)
             rasterMaskPaint.alpha = 255
             if (layer.maskEnabled) layer.maskSurface?.drawAtPoint(sampleCanvas, x, y, rasterMaskPaint)
             if (layer.clipping && index > 0) {
@@ -4131,9 +4132,9 @@ class DrawingView(context: Context) : View(context) {
                 return@forEachIndexed
             }
 
-            val checkpoint = canvas.saveLayer(documentBounds, null)
             configureLayerPaint(layer, effectiveLayerOpacity(layer))
-            layer.surface.drawAll(canvas, layerPaint)
+            val checkpoint = canvas.saveLayer(documentBounds, layerPaint)
+            layer.surface.drawAll(canvas, isolatedLayerContentPaint)
             rasterMaskPaint.alpha = 255
             if (hasMask) layer.maskSurface?.drawAll(canvas, rasterMaskPaint)
             if (hasClippingBase) {

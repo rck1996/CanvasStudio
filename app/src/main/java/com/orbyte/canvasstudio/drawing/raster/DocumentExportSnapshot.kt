@@ -95,8 +95,11 @@ internal class DocumentExportSnapshot(
     }
 
     /** PNG encoding stays off the UI thread and is verified before publishing. */
-    fun writePng(destination: OutputStream, includePaper: Boolean = true) {
-        staged(".png", destination) { output ->
+    fun writePng(destination: OutputStream, includePaper: Boolean = true) =
+        writePngTo({ destination }, includePaper)
+
+    fun writePngTo(openDestination: () -> OutputStream, includePaper: Boolean = true) {
+        staged(".png", openDestination) { output ->
             val bitmap = fullComposite(includePaper)
             try {
                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
@@ -109,8 +112,10 @@ internal class DocumentExportSnapshot(
     }
 
     /** Minimal merged-image PSD, deliberately not claiming editable PSD layers. */
-    fun writeBasicPsd(destination: OutputStream) {
-        staged(".psd", destination) { output ->
+    fun writeBasicPsd(destination: OutputStream) = writeBasicPsdTo { destination }
+
+    fun writeBasicPsdTo(openDestination: () -> OutputStream) {
+        staged(".psd", openDestination) { output ->
             val bitmap = fullComposite(includePaper = false)
             try {
                 BasicPsdCodec.write(bitmap, output)
@@ -121,11 +126,16 @@ internal class DocumentExportSnapshot(
     }
 
     /** Editable layers are represented by ORA PNG entries, not a flattened PSD. */
-    fun writeOpenRaster(destination: OutputStream) {
+    fun writeOpenRaster(destination: OutputStream) = writeOpenRasterTo { destination }
+
+    fun writeOpenRasterTo(openDestination: () -> OutputStream) {
         require(width.toLong() * height <= MAX_ORA_PIXELS) {
             "El documento es demasiado grande para exportarlo como OpenRaster en este dispositivo."
         }
-        staged(".ora", destination) { output ->
+        require(layers.none { it.clipping }) {
+            "OpenRaster no admite exportar capas con recorte todavía. Desactiva el recorte o exporta PNG."
+        }
+        staged(".ora", openDestination) { output ->
             ZipOutputStream(output.buffered()).use { zip ->
                 val mime = "image/openraster".toByteArray(Charsets.US_ASCII)
                 val crc = CRC32().apply { update(mime) }
@@ -152,6 +162,7 @@ internal class DocumentExportSnapshot(
                             .append(".png\" visibility=\"")
                             .append(if (layer.visible) "visible" else "hidden")
                             .append("\" opacity=\"").append(layer.opacity)
+                            .append("\" composite-op=\"").append(oraBlendMode(layer.blendMode))
                             .append("\"/>\n")
                     }
                     append("  </stack>\n</image>\n")
@@ -210,7 +221,7 @@ internal class DocumentExportSnapshot(
         }
     }
 
-    private fun staged(extension: String, destination: OutputStream, encode: (OutputStream) -> Unit) {
+    private fun staged(extension: String, openDestination: () -> OutputStream, encode: (OutputStream) -> Unit) {
         validateUnchanged()
         check(cacheDirectory.isDirectory || cacheDirectory.mkdirs()) {
             "No se pudo preparar el espacio temporal para exportar."
@@ -221,8 +232,10 @@ internal class DocumentExportSnapshot(
             // No destination bytes are released if a stroke/layer changed
             // during PNG encoding, PSD flattening or ORA ZIP construction.
             validateUnchanged()
-            FileInputStream(temporary).use { source -> source.copyTo(destination) }
-            destination.flush()
+            openDestination().use { destination ->
+                FileInputStream(temporary).use { source -> source.copyTo(destination) }
+                destination.flush()
+            }
         } finally {
             temporary.delete()
         }
@@ -234,6 +247,21 @@ internal class DocumentExportSnapshot(
             "No se pudo codificar una capa del archivo OpenRaster."
         }
         zip.closeEntry()
+    }
+
+    private fun oraBlendMode(mode: LayerBlendMode): String = when (mode) {
+        LayerBlendMode.NORMAL -> "svg:src-over"
+        LayerBlendMode.MULTIPLY -> "svg:multiply"
+        LayerBlendMode.SCREEN -> "svg:screen"
+        LayerBlendMode.OVERLAY -> "svg:overlay"
+        LayerBlendMode.ADD -> "svg:plus"
+        LayerBlendMode.DARKEN -> "svg:darken"
+        LayerBlendMode.LIGHTEN -> "svg:lighten"
+        LayerBlendMode.SOFT_LIGHT -> "svg:soft-light"
+        LayerBlendMode.HARD_LIGHT -> "svg:hard-light"
+        LayerBlendMode.DIFFERENCE -> "svg:difference"
+        LayerBlendMode.COLOR_DODGE -> "svg:color-dodge"
+        LayerBlendMode.COLOR_BURN -> "svg:color-burn"
     }
 
     private fun xmlEscape(value: String): String = value

@@ -514,9 +514,10 @@ fun EditorScreen(
                 }
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { output ->
-                        snapshot.writePng(output, includePaper = true)
-                    } ?: error("No se pudo abrir el archivo de destino.")
+                    snapshot.writePngTo({
+                        context.contentResolver.openOutputStream(uri)
+                            ?: error("No se pudo abrir el archivo de destino.")
+                    }, includePaper = true)
                 }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
@@ -546,8 +547,10 @@ fun EditorScreen(
                 }
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(snapshot::writeOpenRaster)
-                        ?: error("No se pudo abrir el archivo de destino.")
+                    snapshot.writeOpenRasterTo {
+                        context.contentResolver.openOutputStream(uri)
+                            ?: error("No se pudo abrir el archivo de destino.")
+                    }
                 }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
@@ -601,8 +604,10 @@ fun EditorScreen(
                 }
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(snapshot::writeBasicPsd)
-                        ?: error("No se pudo abrir el archivo de destino.")
+                    snapshot.writeBasicPsdTo {
+                        context.contentResolver.openOutputStream(uri)
+                            ?: error("No se pudo abrir el archivo de destino.")
+                    }
                 }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(

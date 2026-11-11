@@ -168,6 +168,22 @@ class DocumentExportSnapshotTest {
     }
 
     @Test
+    fun staleSnapshotDoesNotOpenDestination() {
+        lateinit var snapshot: DocumentExportSnapshot
+        val view = DrawingView(context)
+        instrumentation.runOnMainSync {
+            view.configureDocument(512, 512)
+            snapshot = view.captureExportSnapshot()
+            view.addLayer()
+        }
+        var opened = false
+        assertTrue(runCatching {
+            snapshot.writePngTo({ opened = true; ByteArrayOutputStream() })
+        }.isFailure)
+        assertFalse(opened)
+    }
+
+    @Test
     fun layerMetadataEditsInvalidatePendingExports() {
         lateinit var snapshot: DocumentExportSnapshot
         val view = DrawingView(context)

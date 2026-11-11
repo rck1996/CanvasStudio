@@ -36,6 +36,7 @@ internal class PreviewCompositor {
     )
 
     private val layerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val isolatedLayerContentPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val clippingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
@@ -66,10 +67,10 @@ internal class PreviewCompositor {
                     return@forEachIndexed
                 }
 
-                val checkpoint = canvas.saveLayer(documentBounds, null)
+                configureLayerPaint(layer)
+                val checkpoint = canvas.saveLayer(documentBounds, layerPaint)
                 try {
-                    configureLayerPaint(layer)
-                    layer.surface.drawAllDetached(canvas, layerPaint)
+                    layer.surface.drawAllDetached(canvas, isolatedLayerContentPaint)
                     if (mask != null) {
                         maskPaint.alpha = 255
                         mask.drawAllDetached(canvas, maskPaint)

@@ -62,6 +62,26 @@ class PreviewCompositorTest {
     }
 
     @Test
+    fun maskedMultiplyBlendsWithUnderlyingLayer() {
+        val root = File(context.cacheDir, "preview-masked-multiply").apply { deleteRecursively(); mkdirs() }
+        val bottom = SparseTileSurface(32, 32, File(root, "bottom"), 2L * 1024 * 1024)
+        val top = SparseTileSurface(32, 32, File(root, "top"), 2L * 1024 * 1024)
+        val mask = SparseTileSurface(32, 32, File(root, "mask"), 2L * 1024 * 1024)
+        try {
+            val bounds = RectF(0f, 0f, 32f, 32f)
+            assertTrue(bottom.draw(bounds) { it.drawColor(Color.RED) })
+            assertTrue(top.draw(bounds) { it.drawColor(Color.BLUE) })
+            val bitmap = PreviewCompositor().render(32, 32, listOf(
+                PreviewCompositor.Layer(bottom, null, true, 1f, LayerBlendMode.NORMAL, false, false),
+                PreviewCompositor.Layer(top, mask, true, 1f, LayerBlendMode.MULTIPLY, false, true),
+            ), includePaper = false)
+            try { assertEquals(Color.BLACK, bitmap.getPixel(16, 16)) } finally { bitmap.recycle() }
+        } finally {
+            bottom.recycle(); top.recycle(); mask.recycle(); root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun hiddenLayerIsNotComposited() {
         val root = File(context.cacheDir, "preview-compositor-hidden-test").apply {
             deleteRecursively()

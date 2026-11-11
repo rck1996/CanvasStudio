@@ -462,7 +462,9 @@ fun EditorScreen(
         if (changeTick == 0 || tutorialMode) return@LaunchedEffect
         saveLabel = "Guardando…"
         delay(3_000)
-        drawingView?.saveProject(
+        // Autosave waits for the ordered raster lane without rasterizing
+        // pending strokes synchronously during a drawing gesture.
+        drawingView?.saveProjectWhenIdle(
             projectId = document.id,
             title = document.title,
             dpi = document.dpi,

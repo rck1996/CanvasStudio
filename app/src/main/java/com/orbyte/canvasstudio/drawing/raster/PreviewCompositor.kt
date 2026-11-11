@@ -43,7 +43,7 @@ internal class PreviewCompositor {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     }
 
-    fun render(width: Int, height: Int, layers: List<Layer>, maxSize: Int = 720): Bitmap {
+    fun render(width: Int, height: Int, layers: List<Layer>, maxSize: Int = 720, includePaper: Boolean = true): Bitmap {
         require(width > 0 && height > 0 && maxSize > 0)
         val scale = min(1f, maxSize / max(width, height).toFloat())
         val preview = Bitmap.createBitmap(
@@ -53,7 +53,7 @@ internal class PreviewCompositor {
         )
         try {
             val canvas = Canvas(preview)
-            canvas.drawColor(Color.WHITE)
+            if (includePaper) canvas.drawColor(Color.WHITE)
             canvas.scale(scale, scale)
             val documentBounds = RectF(0f, 0f, width.toFloat(), height.toFloat())
             layers.forEachIndexed { index, layer ->

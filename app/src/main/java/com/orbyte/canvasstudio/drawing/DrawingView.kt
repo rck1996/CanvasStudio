@@ -2197,6 +2197,10 @@ class DrawingView(context: Context) : View(context) {
      * transaction which publishes the complete tile batch. All other editor
      * mutations first flush the lane and replay its fallback synchronously.
      */
+    /** Uses the immutable settings captured at pointer-down, not the current toolbar state. */
+    private fun strokeSettingsForQueuedCommand(commands: List<DrawCommand>): BrushSettings =
+        (commands.singleOrNull() as? StrokeCommand)?.settings ?: brushSettings
+
     private fun enqueueDetachedStrokeIfEligible(
         layer: LayerData,
         commands: List<DrawCommand>,
@@ -2205,7 +2209,7 @@ class DrawingView(context: Context) : View(context) {
         deferredRaster: Boolean,
     ): Boolean {
         if (!deferredRaster || commands.size != 1 ||
-            !canQueueAsyncStroke(completedTool, brushSettings, layer)) return false
+            !canQueueAsyncStroke(completedTool, strokeSettingsForQueuedCommand(commands), layer)) return false
         val stroke = commands.single() as? StrokeCommand ?: return false
         if (stroke.points.size > MAX_ASYNC_STROKE_POINTS ||
             strokeCommitLane.pendingCount >= MAX_PENDING_ASYNC_STROKES) return false

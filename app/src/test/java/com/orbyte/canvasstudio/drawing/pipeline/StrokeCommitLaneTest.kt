@@ -173,6 +173,54 @@ class StrokeCommitLaneTest {
     }
 
     @Test
+    fun autosaveWaitsForEveryStrokeAndCoalescesToLatestRequest() {
+        val worker = ManualExecutor()
+        val main = ManualExecutor()
+        val events = mutableListOf<String>()
+        val lane = StrokeCommitLane<ResultTile>(worker, main::execute) { events += "error" }
+        lane.enqueue(
+            prepare = { ResultTile("one", events) },
+            finish = { events += "commit-one" },
+        )
+        lane.enqueue(
+            prepare = { ResultTile("two", events) },
+            finish = { events += "commit-two" },
+        )
+        lane.whenIdleForAutosave { events += "stale-autosave" }
+        lane.whenIdleForAutosave { events += "latest-autosave" }
+        assertTrue(events.isEmpty())
+        worker.next()
+        main.next()
+        assertEquals(listOf("commit-one", "release-one"), events)
+        worker.next()
+        main.next()
+        assertEquals(
+            listOf("commit-one", "release-one", "commit-two",
+                "release-two", "latest-autosave"),
+            events,
+        )
+        assertFalse(lane.hasPending)
+    }
+
+    @Test
+    fun explicitSaveCanCancelDeferredAutosaveBeforeItRuns() {
+        val worker = ManualExecutor()
+        val main = ManualExecutor()
+        val events = mutableListOf<String>()
+        val lane = StrokeCommitLane<ResultTile>(worker, main::execute) { events += "error" }
+        lane.enqueue(
+            prepare = { ResultTile("one", events) },
+            finish = { events += "commit-one" },
+        )
+        lane.whenIdleForAutosave { events += "autosave-unexpected" }
+        lane.cancelDeferredAutosave()
+        lane.flushSynchronously()
+        worker.drain()
+        main.drain()
+        assertEquals(listOf("commit-one", "release-one"), events)
+    }
+
+    @Test
     fun closeFlushesBeforeRejectingNewStrokes() {
         val worker = ManualExecutor()
         val ui = ManualExecutor()

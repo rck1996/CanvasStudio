@@ -147,6 +147,49 @@ class AsyncStrokeCommitIntegrationTest {
     }
 
     @Test
+    fun debouncedAutosaveDoesNotBlockUiWhileRasterWorkerIsPending() {
+        val projectId = "idle-autosave-${UUID.randomUUID()}"
+        val enteredWorker = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        val saved = CountDownLatch(1)
+        val view = DrawingView(context)
+        var saveSucceeded = false
+        try {
+            instrumentation.runOnMainSync {
+                configure(view)
+                view.debugBeforeAsyncStrokePrepare = {
+                    enteredWorker.countDown()
+                    check(releaseWorker.await(25, TimeUnit.SECONDS))
+                }
+                view.onProjectSaved = { success ->
+                    saveSucceeded = success
+                    saved.countDown()
+                }
+                drawStroke(view, 105f, 205f, 265f, 205f)
+            }
+            assertTrue("Worker did not begin", enteredWorker.await(10, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync {
+                // This must only enqueue the autosave; it must not flush the
+                // blocked stroke or encode while holding the pen UI thread.
+                view.saveProjectWhenIdle(projectId, "Sin bloqueo", 300, includePreview = false)
+                assertEquals(1, view.debugPendingStrokeCommits())
+                assertFalse(ProjectRepository.metadataFile(context, projectId).isFile)
+            }
+            releaseWorker.countDown()
+            assertTrue("Idle autosave never completed", saved.await(55, TimeUnit.SECONDS))
+            assertTrue("Idle autosave failed", saveSucceeded)
+            assertTrue(ProjectRepository.metadataFile(context, projectId).isFile)
+        } finally {
+            releaseWorker.countDown()
+            instrumentation.runOnMainSync {
+                view.debugBeforeAsyncStrokePrepare = null
+                view.debugFlushPendingStrokeCommits()
+            }
+            ProjectRepository.projectDirectory(context, projectId).deleteRecursively()
+        }
+    }
+
+    @Test
     fun saveBarriersPublishBeforeCapturingProjectSnapshot() {
         val projectId = "async-save-${UUID.randomUUID()}"
         val saved = CountDownLatch(1)

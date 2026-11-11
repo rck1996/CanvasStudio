@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.6.0 — candidata
+
+- Guardado transaccional, recuperación de proyectos, papelera e historial visual.
+- Galería con favoritos, colecciones, etiquetas y ficha del documento.
+- Búsqueda de acciones, nuevos comandos para la rueda y controles de máscara durante la edición.
+- Vistas previas de pincel con el raster Canvas y seguimiento del S Pen durante el trazo.
+- PNG y OpenRaster por bandas para reducir memoria al exportar en 8K.
+- Optimización del raster de puntas grandes y correcciones de composición, entrada y validación de exportación.
+- El editor abre desde la galería. El tutorial anterior se retiró de la navegación.
+
+[Integración y evidencia de pruebas](TABLET_INTEGRATION_2026-11-11.md).
+
 ## 2.5.0
 
 - rueda contextual de seis accesos configurables bajo el punto de contacto, con gesto mantener/deslizar/soltar, estrella alternativa y perfiles Dibujo, Color y Capas;

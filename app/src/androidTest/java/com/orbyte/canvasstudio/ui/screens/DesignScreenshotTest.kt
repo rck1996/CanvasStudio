@@ -9,6 +9,8 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.assertIsSelected
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.orbyte.canvasstudio.model.EditorDocument
@@ -52,7 +54,11 @@ class DesignScreenshotTest {
     fun captureEditorAndInspector() {
         showEditor()
         compose.onNodeWithContentDescription("Panel Capas, seleccionado").assertExists()
+        compose.onNodeWithContentDescription("Selector de renderer de desarrollo").assertDoesNotExist()
         capture("02-editor-capas")
+        compose.onNodeWithContentDescription("Más opciones").performClick()
+        compose.onNodeWithText("Motor de renderizado · diagnóstico").performClick()
+        compose.onNodeWithText("Motor de renderizado").assertExists()
     }
 
     @Test
@@ -70,6 +76,26 @@ class DesignScreenshotTest {
         capture("04-editor-color")
     }
 
+    @Test
+    fun actionSearchFindsCanvasModeAndRunsIt() {
+        showEditor()
+        compose.onNodeWithContentDescription("Más opciones").performClick()
+        compose.onNodeWithText("Buscar acciones").performClick()
+        compose.onNodeWithText("Buscar acción").performTextInput("modo lienzo")
+        compose.onNodeWithText("Modo lienzo").performClick()
+        compose.onNodeWithContentDescription("Mostrar paneles").assertExists()
+    }
+
+    @Test
+    fun maskControlsSwitchToolsAndLeaveMaskEditing() {
+        showEditor()
+        compose.onNodeWithContentDescription("Máscara").performClick()
+        compose.onNodeWithText("Recuperar").performClick().assertIsSelected()
+        compose.onNodeWithText("Listo").performClick()
+        compose.onNodeWithText("Listo").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Editar máscara").assertExists()
+    }
+
     private fun showEditor() {
         compose.setContent {
             CanvasStudioTheme {
@@ -84,7 +110,6 @@ class DesignScreenshotTest {
                         isLocal = false,
                     ),
                     onBackToGallery = {},
-                    onOpenTutorial = {},
                 )
             }
         }

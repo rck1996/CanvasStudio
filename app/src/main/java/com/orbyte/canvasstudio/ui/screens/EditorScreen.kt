@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -87,6 +88,7 @@ import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -124,7 +126,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -152,9 +153,7 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
-import com.orbyte.canvasstudio.drawing.BrushRenderMode
 import com.orbyte.canvasstudio.drawing.BrushTipShape
-import com.orbyte.canvasstudio.drawing.brush.BrushPreviewModel
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
@@ -187,8 +186,10 @@ import com.orbyte.canvasstudio.ui.workspace.colorWheelSelection
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.BrushStrokePreview
 import com.orbyte.canvasstudio.ui.workspace.defaultQuickAccessActions
 import com.orbyte.canvasstudio.ui.workspace.matchingQuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.matchesWorkspaceAction
 import com.orbyte.canvasstudio.ui.workspace.normalizedQuickAccessActions
 import com.orbyte.canvasstudio.ui.workspace.quickAccessActionsFor
 import com.orbyte.canvasstudio.ui.workspace.quickAccessItems
@@ -233,46 +234,34 @@ private fun decodeBitmapForImport(
 private enum class DockTab { BRUSHES, COLOR, LAYERS }
 
 @Composable
-private fun RendererDebugSelector(
+private fun RendererDebugDialog(
     mode: RendererMode,
     onModeSelected: (RendererMode) -> Unit,
-    modifier: Modifier = Modifier,
+    onDismiss: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Surface(
-            modifier = Modifier
-                .semantics {
-                    contentDescription = "Selector de renderer de desarrollo"
-                    stateDescription = mode.label
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Motor de renderizado") },
+        text = {
+            Column {
+                RendererMode.entries.forEach { candidate ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.RadioButton) { onModeSelected(candidate) }
+                            .semantics { selected = candidate == mode }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = candidate == mode, onClick = null)
+                        Spacer(Modifier.width(10.dp))
+                        Text(candidate.label)
+                    }
                 }
-                .clickable(role = Role.Button) { expanded = true },
-            color = StudioPalette.Surface.copy(alpha = .94f),
-            shape = RoundedCornerShape(10.dp),
-            tonalElevation = 4.dp,
-        ) {
-            Text(
-                text = "Renderer · ${mode.label}",
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                color = StudioPalette.Text,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            RendererMode.entries.forEach { candidate ->
-                DropdownMenuItem(
-                    text = { Text(candidate.label) },
-                    onClick = {
-                        expanded = false
-                        onModeSelected(candidate)
-                    },
-                    leadingIcon = {
-                        if (candidate == mode) Icon(Icons.Outlined.RadioButtonUnchecked, null)
-                    },
-                )
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
 }
 
 private data class ToolSpec(val tool: DrawingTool, val label: String, val icon: ImageVector)
@@ -297,7 +286,6 @@ private val toolSpecs = listOf(
 fun EditorScreen(
     document: EditorDocument,
     onBackToGallery: () -> Unit,
-    onOpenTutorial: () -> Unit,
     tutorialMode: Boolean = false,
     onTutorialFinish: () -> Unit = {},
     onTutorialExit: () -> Unit = {},
@@ -378,6 +366,8 @@ fun EditorScreen(
     var quickMenuOpen by remember { mutableStateOf(false) }
     var quickMenuAnchor by remember { mutableStateOf<Offset?>(null) }
     var quickMenuEditSlot by remember { mutableStateOf<Int?>(null) }
+    var workspaceActionSearchOpen by remember { mutableStateOf(false) }
+    var maskToDeleteId by remember(document.id) { mutableStateOf<String?>(null) }
     var quickMenuTouchHoldEnabled by remember {
         mutableStateOf(workspacePreferences.getBoolean("quick_access_touch_hold", true))
     }
@@ -404,6 +394,7 @@ fun EditorScreen(
     var selectionActive by remember { mutableStateOf(false) }
     var selectionFeatherPx by remember { mutableFloatStateOf(0f) }
     var rendererMode by remember { mutableStateOf(RendererMode.CANVAS_BITMAP) }
+    var showRendererDebug by remember { mutableStateOf(false) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
@@ -704,6 +695,13 @@ fun EditorScreen(
         drawingView?.setLayerClipping(id, clipping)
         tutorialSession?.observe(StudioTutorialEvent.LayerClippingChanged(id, clipping))
     }
+    val paintMask: (String, Boolean) -> Unit = { id, recover ->
+        layerModels.firstOrNull { it.id == id && it.hasMask }?.let { layer ->
+            if (!layer.maskEnabled) drawingView?.toggleLayerMaskEnabled(id)
+            if (!layer.editingMask) drawingView?.setEditingLayerMask(id, true)
+            selectedTool = if (recover) DrawingTool.ERASER else DrawingTool.BRUSH
+        }
+    }
     val performQuickAccessAction: (QuickAccessAction) -> Unit = { action ->
         when (action) {
             QuickAccessAction.BRUSH_LIBRARY -> brushLibraryOpen = true
@@ -715,6 +713,10 @@ fun EditorScreen(
                 drawingView?.setLayerAlphaLocked(it.id, !it.alphaLocked)
             }
             QuickAccessAction.MASK_WORKFLOW -> openActiveMaskWorkflow()
+            QuickAccessAction.UNDO -> drawingView?.undo()
+            QuickAccessAction.REDO -> drawingView?.redo()
+            QuickAccessAction.FIT_CANVAS -> drawingView?.resetView()
+            QuickAccessAction.TOGGLE_CANVAS_MODE -> zenMode = !zenMode
             QuickAccessAction.OPEN_LAYERS -> {
                 zenMode = false
                 inspectorExpanded = true
@@ -852,7 +854,8 @@ fun EditorScreen(
                 if (inspectorExpanded) zenMode = false
             },
             onShowHelp = { showHelp = true },
-            onOpenTutorial = onOpenTutorial,
+            onSearchActions = { workspaceActionSearchOpen = true },
+            onShowRendererDebug = if (BuildConfig.DEBUG) ({ showRendererDebug = true }) else null,
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -1032,6 +1035,20 @@ fun EditorScreen(
                     modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
                 )
 
+                activeLayer?.takeIf { it.editingMask }?.let { maskLayer ->
+                    MaskEditingControls(
+                        layerName = maskLayer.name,
+                        recovering = selectedTool == DrawingTool.ERASER,
+                        maskEnabled = maskLayer.maskEnabled,
+                        onPaint = { recover -> paintMask(maskLayer.id, recover) },
+                        onDone = {
+                            drawingView?.finishMaskEditing()
+                            selectedTool = DrawingTool.BRUSH
+                        },
+                        modifier = Modifier.align(Alignment.TopCenter).padding(start = 68.dp, top = 14.dp, end = 10.dp),
+                    )
+                }
+
                 if (floatingBrushPaletteOpen && !zenMode) {
                     FloatingBrushPalette(
                         brushes = availableBrushes,
@@ -1081,24 +1098,6 @@ fun EditorScreen(
                             } else quickMenuEditSlot = slot
                         },
                         modifier = Modifier.fillMaxSize(),
-                    )
-                }
-
-                if (BuildConfig.DEBUG && !zenMode) {
-                    RendererDebugSelector(
-                        mode = rendererMode,
-                        onModeSelected = { selected ->
-                            rendererMode = selected
-                            val available = drawingView?.setRendererMode(selected) ?: true
-                            if (!available && selected == RendererMode.VULKAN_EXPERIMENTAL) {
-                                Toast.makeText(
-                                    context,
-                                    "Vulkan no disponible; los trazos usarán Canvas/Bitmap.",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 82.dp, end = 14.dp),
                     )
                 }
 
@@ -1293,16 +1292,10 @@ fun EditorScreen(
                         drawingView?.setEditingLayerMask(id, editing)
                         if (editing || selectedTool == DrawingTool.ERASER) selectedTool = DrawingTool.BRUSH
                     },
-                    onHideWithMask = { id ->
-                        drawingView?.setEditingLayerMask(id, true)
-                        selectedTool = DrawingTool.BRUSH
-                    },
-                    onRevealWithMask = { id ->
-                        drawingView?.setEditingLayerMask(id, true)
-                        selectedTool = DrawingTool.ERASER
-                    },
+                    onHideWithMask = { id -> paintMask(id, false) },
+                    onRevealWithMask = { id -> paintMask(id, true) },
                     onToggleMask = { drawingView?.toggleLayerMaskEnabled(it) },
-                    onDeleteMask = { drawingView?.deleteActiveLayerMask() },
+                    onDeleteMask = { maskToDeleteId = activeLayer?.id },
                     onAddLayer = addLayerFromWorkspace,
                     onDuplicateLayer = { drawingView?.duplicateActiveLayer() },
                     onDeleteLayer = { drawingView?.deleteActiveLayer() },
@@ -1332,60 +1325,86 @@ fun EditorScreen(
     }
     }
 
-    quickMenuEditSlot?.let { slot ->
+    if (workspaceActionSearchOpen || quickMenuEditSlot != null) {
+        val slot = quickMenuEditSlot
+        var actionQuery by remember(slot) { mutableStateOf("") }
+        val dismissActions = {
+            quickMenuEditSlot = null
+            workspaceActionSearchOpen = false
+        }
+        val matchingActions = remember(actionQuery) {
+            QuickAccessAction.entries.filter { action ->
+                matchesWorkspaceAction(actionQuery, quickAccessShortLabel(action), quickAccessDescription(action))
+            }
+        }
         AlertDialog(
-            onDismissRequest = { quickMenuEditSlot = null },
-            title = { Text("Acción ${slot + 1} de ${defaultQuickAccessActions.size}") },
+            onDismissRequest = dismissActions,
+            title = { Text(if (slot == null) "Buscar acciones" else "Configurar acceso ${slot + 1}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Perfiles", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        QuickAccessProfile.entries.filterNot { it == QuickAccessProfile.CUSTOM }.forEach { profile ->
-                            FilterChip(
-                                selected = matchingQuickAccessProfile(quickAccessActions) == profile,
-                                onClick = {
-                                    val updated = quickAccessActionsFor(profile)
-                                    quickAccessActions = updated
-                                    workspacePreferences.edit()
-                                        .putString("quick_access_actions", updated.joinToString(",") { it.name })
-                                        .apply()
+                    OutlinedTextField(
+                        value = actionQuery,
+                        onValueChange = { actionQuery = it.take(80) },
+                        label = { Text("Buscar acción") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (slot != null) {
+                        Text("Perfiles", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            QuickAccessProfile.entries.filterNot { it == QuickAccessProfile.CUSTOM }.forEach { profile ->
+                                FilterChip(
+                                    selected = matchingQuickAccessProfile(quickAccessActions) == profile,
+                                    onClick = {
+                                        val updated = quickAccessActionsFor(profile)
+                                        quickAccessActions = updated
+                                        workspacePreferences.edit()
+                                            .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                            .apply()
+                                    },
+                                    label = { Text(profile.label) },
+                                )
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Mantener un dedo en el lienzo", color = StudioPalette.Text)
+                                Text("Abre la rueda en el punto de contacto; el botón estrella siempre queda disponible.", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(
+                                checked = quickMenuTouchHoldEnabled,
+                                onCheckedChange = { enabled ->
+                                    quickMenuTouchHoldEnabled = enabled
+                                    workspacePreferences.edit().putBoolean("quick_access_touch_hold", enabled).apply()
                                 },
-                                label = { Text(profile.label) },
                             )
                         }
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Mantener un dedo en el lienzo", color = StudioPalette.Text)
-                            Text("Abre la rueda en el punto de contacto; el botón estrella siempre queda disponible.", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(
-                            checked = quickMenuTouchHoldEnabled,
-                            onCheckedChange = { enabled ->
-                                quickMenuTouchHoldEnabled = enabled
-                                workspacePreferences.edit().putBoolean("quick_access_touch_hold", enabled).apply()
-                            },
-                        )
-                    }
+                    if (matchingActions.isEmpty()) Text("No hay acciones que coincidan.", color = StudioPalette.TextMuted)
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 210.dp),
                         modifier = Modifier.heightIn(max = 340.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        gridItems(QuickAccessAction.entries) { action ->
+                        gridItems(matchingActions, key = { it.name }) { action ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        val updated = reassignQuickAccessAction(quickAccessActions, slot, action)
-                                        quickAccessActions = updated
-                                        workspacePreferences.edit()
-                                            .putString("quick_access_actions", updated.joinToString(",") { it.name })
-                                            .apply()
-                                        quickMenuEditSlot = null
+                                        if (slot == null) {
+                                            performQuickAccessAction(action)
+                                        } else {
+                                            val updated = reassignQuickAccessAction(quickAccessActions, slot, action)
+                                            quickAccessActions = updated
+                                            workspacePreferences.edit()
+                                                .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                                .apply()
+                                        }
+                                        dismissActions()
                                     },
-                                color = if (quickAccessActions.getOrNull(slot) == action) StudioPalette.AccentSoft else Color.Transparent,
+                                color = if (slot != null && quickAccessActions.getOrNull(slot) == action) StudioPalette.AccentSoft else Color.Transparent,
                                 shape = RoundedCornerShape(10.dp),
                             ) {
                                 Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1406,7 +1425,7 @@ fun EditorScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { quickMenuEditSlot = null }) { Text("Cerrar") }
+                TextButton(onClick = dismissActions) { Text("Cerrar") }
             },
         )
     }
@@ -1481,6 +1500,43 @@ fun EditorScreen(
         )
     }
 
+    maskToDeleteId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { maskToDeleteId = null },
+            title = { Text("Quitar máscara") },
+            text = { Text("Se descarta la máscara y vuelve a verse el dibujo original de la capa.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (activeLayer?.id == id) {
+                        drawingView?.deleteActiveLayerMask()
+                        selectedTool = DrawingTool.BRUSH
+                    }
+                    maskToDeleteId = null
+                }) { Text("Quitar máscara") }
+            },
+            dismissButton = { TextButton(onClick = { maskToDeleteId = null }) { Text("Cancelar") } },
+        )
+    }
+
+    if (BuildConfig.DEBUG && showRendererDebug) {
+        RendererDebugDialog(
+            mode = rendererMode,
+            onModeSelected = { selected ->
+                showRendererDebug = false
+                rendererMode = selected
+                val available = drawingView?.setRendererMode(selected) ?: true
+                if (!available && selected == RendererMode.VULKAN_EXPERIMENTAL) {
+                    Toast.makeText(
+                        context,
+                        "Vulkan no disponible; los trazos usarán Canvas/Bitmap.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
+            onDismiss = { showRendererDebug = false },
+        )
+    }
+
     if (renameLayerOpen) {
         AlertDialog(
             onDismissRequest = { renameLayerOpen = false },
@@ -1547,7 +1603,8 @@ private fun EditorTopBar(
     inspectorExpanded: Boolean,
     onToggleInspector: () -> Unit,
     onShowHelp: () -> Unit,
-    onOpenTutorial: () -> Unit,
+    onSearchActions: () -> Unit,
+    onShowRendererDebug: (() -> Unit)?,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     BoxWithConstraints(
@@ -1668,6 +1725,11 @@ private fun EditorTopBar(
                     onDismissRequest = { menuExpanded = false },
                 ) {
                     DropdownMenuItem(
+                        text = { Text("Buscar acciones") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        onClick = { menuExpanded = false; onSearchActions() },
+                    )
+                    DropdownMenuItem(
                         text = { Text("Importar imagen como capa") },
                         leadingIcon = { Icon(Icons.Outlined.Image, null) },
                         onClick = { menuExpanded = false; onImportImage() },
@@ -1697,11 +1759,12 @@ private fun EditorTopBar(
                         leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null) },
                         onClick = { menuExpanded = false; onShowHelp() },
                     )
-                    DropdownMenuItem(
-                        text = { Text("Tutorial interactivo") },
-                        leadingIcon = { Icon(Icons.Outlined.Brush, null) },
-                        onClick = { menuExpanded = false; onOpenTutorial() },
-                    )
+                    onShowRendererDebug?.let { showDebug ->
+                        DropdownMenuItem(
+                            text = { Text("Motor de renderizado · diagnóstico") },
+                            onClick = { menuExpanded = false; showDebug() },
+                        )
+                    }
                     DropdownMenuItem(
                         text = {
                             Text(if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape · mantener para enderezar")
@@ -2077,6 +2140,10 @@ private fun quickAccessIcon(action: QuickAccessAction, layer: LayerUiModel?): Im
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> if (layer?.alphaLocked == true) Icons.Outlined.Lock else Icons.Outlined.LockOpen
     QuickAccessAction.MASK_WORKFLOW -> Icons.Outlined.AutoFixNormal
     QuickAccessAction.OPEN_LAYERS -> Icons.Outlined.Layers
+    QuickAccessAction.UNDO -> Icons.AutoMirrored.Outlined.Undo
+    QuickAccessAction.REDO -> Icons.AutoMirrored.Outlined.Redo
+    QuickAccessAction.FIT_CANVAS -> Icons.Outlined.CenterFocusStrong
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> Icons.Outlined.Fullscreen
 }
 
 private fun quickAccessShortLabel(action: QuickAccessAction): String = when (action) {
@@ -2088,6 +2155,10 @@ private fun quickAccessShortLabel(action: QuickAccessAction): String = when (act
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar dentro"
     QuickAccessAction.MASK_WORKFLOW -> "Ocultar"
     QuickAccessAction.OPEN_LAYERS -> "Capas"
+    QuickAccessAction.UNDO -> "Deshacer"
+    QuickAccessAction.REDO -> "Rehacer"
+    QuickAccessAction.FIT_CANVAS -> "Ajustar lienzo"
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> "Modo lienzo"
 }
 
 private fun quickAccessLabel(action: QuickAccessAction, layer: LayerUiModel?): String = when (action) {
@@ -2110,6 +2181,48 @@ private fun quickAccessDescription(action: QuickAccessAction): String = when (ac
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar únicamente sobre píxeles existentes."
     QuickAccessAction.MASK_WORKFLOW -> "Ocultar o recuperar sin borrar el original."
     QuickAccessAction.OPEN_LAYERS -> "Abrir el panel completo de capas."
+    QuickAccessAction.UNDO -> "Deshacer el último cambio del dibujo."
+    QuickAccessAction.REDO -> "Rehacer el cambio deshecho."
+    QuickAccessAction.FIT_CANVAS -> "Encuadrar el dibujo y restablecer zoom y rotación."
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> "Ocultar o mostrar los paneles del editor."
+}
+
+@Composable
+private fun MaskEditingControls(
+    layerName: String,
+    recovering: Boolean,
+    maskEnabled: Boolean,
+    onPaint: (Boolean) -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.widthIn(max = 330.dp),
+        color = StudioPalette.Surface,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Accent),
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 5.dp)) {
+            Text(
+                if (maskEnabled) "Máscara de $layerName" else "Viendo original · $layerName",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioPalette.Text,
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = { onPaint(false) },
+                    modifier = Modifier.weight(1f).semantics { selected = maskEnabled && !recovering },
+                ) { Text("Ocultar", color = if (maskEnabled && !recovering) StudioPalette.Accent else StudioPalette.TextMuted) }
+                TextButton(
+                    onClick = { onPaint(true) },
+                    modifier = Modifier.weight(1f).semantics { selected = maskEnabled && recovering },
+                ) { Text("Recuperar", color = if (maskEnabled && recovering) StudioPalette.Accent else StudioPalette.TextMuted) }
+                TextButton(onClick = onDone, modifier = Modifier.weight(.8f)) { Text("Listo") }
+            }
+        }
+    }
 }
 
 @Composable
@@ -3376,75 +3489,6 @@ private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = cop
 )
 
 @Composable
-private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifier) {
-    val dabs = remember(preset) {
-        BrushPreviewModel.dabs(preset)
-    }
-    Canvas(modifier) {
-        drawRoundRect(
-            color = Color(0xFF1A1D22),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(9f, 9f),
-        )
-        if (dabs.isEmpty()) return@Canvas
-        val scaleX = (size.width - 12f) / 820f
-        val scaleY = (size.height - 12f) / 220f
-        val radiusScale = minOf(scaleX, scaleY).coerceAtLeast(.08f)
-        dabs.forEach { dab ->
-            val center = Offset(
-                6f + (dab.x - 60f) * scaleX,
-                size.height / 2f + (dab.y - 160f) * scaleY,
-            )
-            val grainUnit = ((dab.randomSeed ushr 8) and 0xff) / 255f
-            val grainCoverage = 1f - preset.grainProfile.depth * (.12f + grainUnit * .42f)
-            val materialCoverage = when (preset.renderProfile.mode) {
-                BrushRenderMode.LIGHT_GLAZE -> .58f
-                BrushRenderMode.UNIFORM_GLAZE -> .78f
-                BrushRenderMode.INTENSE_GLAZE -> .96f
-                BrushRenderMode.BLENDING -> .72f
-            }
-            val alpha = (dab.opacity * dab.flow * grainCoverage * materialCoverage)
-                .coerceIn(.012f, 1f)
-            val radiusX = (dab.radiusX * radiusScale).coerceAtLeast(.45f)
-            val radiusY = (dab.radiusY * radiusScale).coerceAtLeast(.45f)
-            val strandCount = when (preset.tipProfile.shape) {
-                BrushTipShape.BRISTLE -> preset.tipProfile.count.coerceIn(2, 10)
-                BrushTipShape.PARTICLE -> preset.tipProfile.count.coerceIn(2, 7)
-                else -> 1
-            }
-            rotate(
-                degrees = Math.toDegrees(dab.rotationRadians.toDouble()).toFloat(),
-                pivot = center,
-            ) {
-                repeat(strandCount) { strand ->
-                    val unit = if (strandCount == 1) .5f else strand / (strandCount - 1f)
-                    val offset = (unit - .5f) * radiusY * 1.18f
-                    val strandAlpha = if (strandCount == 1) alpha else alpha / kotlin.math.sqrt(strandCount.toFloat())
-                    drawOval(
-                        color = Color.White.copy(alpha = strandAlpha.coerceIn(.01f, 1f)),
-                        topLeft = Offset(
-                            center.x - radiusX,
-                            center.y - radiusY / strandCount.coerceAtLeast(1) + offset,
-                        ),
-                        size = androidx.compose.ui.geometry.Size(
-                            radiusX * 2f,
-                            (radiusY * 2f / strandCount.coerceAtLeast(1)).coerceAtLeast(.65f),
-                        ),
-                    )
-                }
-            }
-            if (preset.kind == BrushKind.AIRBRUSH) {
-                drawCircle(
-                    color = Color.White.copy(alpha = (alpha * .035f).coerceAtLeast(.004f)),
-                    radius = radiusX * (1.5f + (1f - preset.hardness)),
-                    center = center,
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
 private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, display: String, onValueChange: (Float) -> Unit) {
     Column(
         Modifier
@@ -3727,6 +3771,7 @@ private fun LayersDock(
     onRename: () -> Unit,
 ) {
     val active = layers.firstOrNull { it.isActive }
+    val clippingBase = active?.let { layers.getOrNull(layers.indexOf(it) + 1) }
     val selectedCount = layers.count { it.isSelected }
     val activeGroup = groups.firstOrNull { it.id == active?.groupId }
     var layerQuery by remember { mutableStateOf("") }
@@ -3775,9 +3820,9 @@ private fun LayersDock(
                         LayerQuickChip(
                             icon = Icons.Outlined.AutoFixNormal,
                             label = when {
-                                active.editingMask -> "Salir ocultación"
-                                active.hasMask -> "Editar ocultación"
-                                else -> "Ocultar"
+                                active.editingMask -> "Salir de máscara"
+                                active.hasMask -> "Editar máscara"
+                                else -> "Máscara"
                             },
                             selected = active.editingMask,
                             modifier = Modifier.weight(1.15f),
@@ -3787,8 +3832,9 @@ private fun LayersDock(
                         )
                         LayerQuickChip(
                             icon = Icons.Outlined.Layers,
-                            label = "Molde",
+                            label = "Recorte",
                             selected = active.clipping,
+                            enabled = clippingBase != null || active.clipping,
                             anchorId = "layer_clipping",
                             modifier = Modifier.weight(1f),
                             onClick = { onClipping(active.id, !active.clipping) },
@@ -3830,8 +3876,8 @@ private fun LayersDock(
                 Spacer(Modifier.height(7.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     LayerInspectorTab("General", inspectorPage == 0, Modifier.weight(1f)) { inspectorPage = 0 }
-                    LayerInspectorTab("Molde", inspectorPage == 1, Modifier.weight(1f)) { inspectorPage = 1 }
-                    LayerInspectorTab("Ocultar", inspectorPage == 2, Modifier.weight(1f)) { inspectorPage = 2 }
+                    LayerInspectorTab("Recorte", inspectorPage == 1, Modifier.weight(1f)) { inspectorPage = 1 }
+                    LayerInspectorTab("Máscara", inspectorPage == 2, Modifier.weight(1f)) { inspectorPage = 2 }
                 }
                 Spacer(Modifier.height(7.dp))
                 Column(Modifier.heightIn(max = 230.dp).verticalScroll(rememberScrollState())) {
@@ -3869,12 +3915,22 @@ private fun LayersDock(
                                 }
                             }
                         }
-                        1 -> LayerConceptToggle(
-                            title = "Usar la capa inferior como molde",
-                            explanation = "Esta capa solo se verá donde la capa de abajo tenga contenido. Úsalo para sombras, luces y color sin salirte.",
-                            checked = active.clipping,
-                            onCheckedChange = { onClipping(active.id, it) },
-                        )
+                        1 -> {
+                            if (clippingBase == null && !active.clipping) {
+                                Text("Añade una capa debajo para usarla como base del recorte.", color = StudioPalette.TextMuted)
+                            } else {
+                                LayerConceptToggle(
+                                    title = clippingBase?.let { "Recortar a «${it.name}»" } ?: "Recorte activo",
+                                    explanation = if (clippingBase?.visible == false) {
+                                        "La capa base está oculta. Muéstrala para ver el resultado."
+                                    } else {
+                                        "Esta capa se ve donde la capa de abajo ya tiene contenido."
+                                    },
+                                    checked = active.clipping,
+                                    onCheckedChange = { onClipping(active.id, it) },
+                                )
+                            }
+                        }
                         else -> {
                             if (active.hasMask) {
                                 Surface(
@@ -4113,6 +4169,7 @@ private fun LayerQuickChip(
     icon: ImageVector,
     label: String,
     selected: Boolean = false,
+    enabled: Boolean = true,
     anchorId: String? = null,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -4126,7 +4183,7 @@ private fun LayerQuickChip(
                 this.selected = selected
                 role = Role.Button
             }
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
         shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(

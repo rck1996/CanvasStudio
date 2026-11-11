@@ -40,6 +40,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material3.AlertDialog
@@ -90,6 +91,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.R
 import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import com.orbyte.canvasstudio.drawing.ShortcutPreferences
@@ -97,9 +99,11 @@ import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
 import com.orbyte.canvasstudio.model.CanvasPresetRepository
 import com.orbyte.canvasstudio.model.EditorDocument
+import com.orbyte.canvasstudio.model.GalleryMetadataStore
 import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
+import com.orbyte.canvasstudio.model.ProjectOrganization
 import com.orbyte.canvasstudio.model.LocalProjectVersion
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.TrashedProject
@@ -126,14 +130,19 @@ fun GalleryScreen(
     onRestoreSpecificVersion: (ProjectCard, LocalProjectVersion) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
+    val metadataStore = remember(context) { GalleryMetadataStore(context) }
     var searchQuery by remember { mutableStateOf("") }
     var sortOrder by remember { mutableStateOf(GallerySortOrder.RECENT) }
+    var favoriteIds by remember(metadataStore) { mutableStateOf(metadataStore.favoriteIds()) }
+    var organizationById by remember(metadataStore, projects) {
+        mutableStateOf(projects.associate { it.id to metadataStore.organization(it.id) })
+    }
     var showSettings by remember { mutableStateOf(false) }
     var showTrash by remember { mutableStateOf(false) }
     var pendingPermanentDelete by remember { mutableStateOf<TrashedProject?>(null) }
     var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
-    val filteredProjects = remember(projects, searchQuery, sortOrder) {
-        sortGalleryProjects(projects, searchQuery, sortOrder)
+    val filteredProjects = remember(projects, searchQuery, sortOrder, favoriteIds, organizationById) {
+        sortGalleryProjects(projects, searchQuery, sortOrder, favoriteIds, organizationById)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(StudioPalette.Background)) {
@@ -197,18 +206,16 @@ fun GalleryScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    GallerySortOrder.entries.forEach { order ->
-                        FilterChip(
-                            selected = sortOrder == order,
-                            onClick = { sortOrder = order },
-                            label = { Text(order.label) },
-                            modifier = Modifier.testTag("gallery_sort_${order.name.lowercase()}"),
-                        )
+                    GallerySortOrder.entries.filterNot { it == GallerySortOrder.FAVORITES }.forEach { order ->
+                        GallerySortChip(order, sortOrder) { sortOrder = order }
                     }
                     TextButton(onClick = { showTrash = true }) {
                         Icon(Icons.Outlined.DeleteOutline, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("Papelera (${trashedProjects.size})")
+                    }
+                    GallerySortChip(GallerySortOrder.FAVORITES, sortOrder) {
+                        sortOrder = GallerySortOrder.FAVORITES
                     }
                 }
                 if (filteredProjects.isEmpty() && searchQuery.isNotBlank()) {
@@ -219,7 +226,7 @@ fun GalleryScreen(
                     ) {
                         Text("Sin resultados", style = MaterialTheme.typography.titleMedium, color = StudioPalette.Text)
                         Text(
-                            "Prueba otro nombre o resolución de lienzo.",
+                            "Prueba otro nombre, resolución, colección o etiqueta.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = StudioPalette.TextMuted,
                         )
@@ -245,6 +252,13 @@ fun GalleryScreen(
                             onRestoreLatestVersion = { onRestoreLatestVersion(project) },
                             onRestoreSpecificVersion = { version ->
                                 onRestoreSpecificVersion(project, version)
+                            },
+                            favorite = project.id in favoriteIds,
+                            onToggleFavorite = { favoriteIds = metadataStore.toggleFavorite(project.id) },
+                            organization = organizationById.getValue(project.id),
+                            onSaveOrganization = { collection, tags ->
+                                val updated = metadataStore.saveOrganization(project.id, collection, tags)
+                                organizationById = organizationById + (project.id to updated)
                             },
                         )
                     }
@@ -328,7 +342,7 @@ fun GalleryScreen(
             title = { Text("Canvas Studio") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Canvas Studio 2.5.0", fontWeight = FontWeight.SemiBold)
+                    Text("Canvas Studio ${BuildConfig.VERSION_NAME}", fontWeight = FontWeight.SemiBold)
                     Text("Guardado local, sin cuenta y sin servicios en segundo plano.")
                     Text("Perfil de atajos", fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -364,6 +378,16 @@ fun GalleryScreen(
             },
         )
     }
+}
+
+@Composable
+private fun GallerySortChip(order: GallerySortOrder, selected: GallerySortOrder, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected == order,
+        onClick = onClick,
+        label = { Text(order.label) },
+        modifier = Modifier.testTag("gallery_sort_${order.name.lowercase()}"),
+    )
 }
 
 @Composable
@@ -521,6 +545,10 @@ private fun GalleryProjectCard(
     onDelete: () -> Unit,
     onRestoreLatestVersion: () -> Unit,
     onRestoreSpecificVersion: (LocalProjectVersion) -> Unit,
+    favorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    organization: ProjectOrganization,
+    onSaveOrganization: (String, String) -> Unit,
 ) {
     val context = LocalContext.current
     val localVersions = remember(project.id, project.modifiedEpoch) {
@@ -531,6 +559,8 @@ private fun GalleryProjectCard(
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
     var showVersionHistory by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
+    var showOrganization by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -545,7 +575,20 @@ private fun GalleryProjectCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
         Column {
-            ProjectArtworkPreview(project, Modifier.fillMaxWidth().aspectRatio(1.54f))
+            Box {
+                ProjectArtworkPreview(project, Modifier.fillMaxWidth().aspectRatio(1.54f))
+                IconButton(
+                    onClick = onToggleFavorite,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+                        .background(StudioPalette.Surface, CircleShape),
+                ) {
+                    Icon(
+                        if (favorite) Icons.Outlined.Star else Icons.Outlined.StarBorder,
+                        if (favorite) "Quitar ${project.title} de favoritos" else "Añadir ${project.title} a favoritos",
+                        tint = if (favorite) StudioPalette.Accent else StudioPalette.TextMuted,
+                    )
+                }
+            }
             Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -582,6 +625,18 @@ private fun GalleryProjectCard(
                             text = { Text("Duplicar") },
                             onClick = { menuExpanded = false; onDuplicate() },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Ver detalles") },
+                            onClick = { menuExpanded = false; showDetails = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Organizar colección y etiquetas") },
+                            onClick = { menuExpanded = false; showOrganization = true },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (favorite) "Quitar de favoritos" else "Añadir a favoritos") },
+                            onClick = { menuExpanded = false; onToggleFavorite() },
+                        )
                         if (project.isLocal) {
                             DropdownMenuItem(
                                 text = {
@@ -607,6 +662,22 @@ private fun GalleryProjectCard(
                 }
             }
         }
+    }
+
+    if (showDetails) {
+        ProjectDetailsDialog(project, organization, onDismiss = { showDetails = false })
+    }
+
+    if (showOrganization) {
+        ProjectOrganizationDialog(
+            project = project,
+            organization = organization,
+            onDismiss = { showOrganization = false },
+            onSave = { collection, tags ->
+                showOrganization = false
+                onSaveOrganization(collection, tags)
+            },
+        )
     }
 
     if (confirmDelete) {
@@ -657,6 +728,83 @@ private fun GalleryProjectCard(
     }
 }
 
+
+@Composable
+private fun ProjectDetailsDialog(
+    project: ProjectCard,
+    organization: ProjectOrganization,
+    onDismiss: () -> Unit,
+) {
+    val footprint = remember(project.width, project.height) {
+        estimateCanvasFootprint(project.width, project.height)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(project.title) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("${project.width} × ${project.height} px · ${project.dpi} DPI")
+                Text(
+                    "${"%.1f".format(footprint.megapixels)} MP · " +
+                        "${footprint.flattenedRgbaMiB} MiB RGBA al aplanar",
+                    color = StudioPalette.TextMuted,
+                )
+                Text("${footprint.tileCount} tiles estimados · ${footprint.level}", color = StudioPalette.TextMuted)
+                Text(
+                    if (project.isLocal) "Guardado local en este dispositivo" else "Proyecto de ejemplo",
+                    color = StudioPalette.TextMuted,
+                )
+                organization.collection?.let { Text("Colección: $it", color = StudioPalette.TextMuted) }
+                if (organization.tags.isNotEmpty()) {
+                    Text("Etiquetas: ${organization.tags.joinToString(" · ")}", color = StudioPalette.TextMuted)
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
+}
+
+@Composable
+private fun ProjectOrganizationDialog(
+    project: ProjectCard,
+    organization: ProjectOrganization,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var collection by remember(project.id) { mutableStateOf(organization.collection.orEmpty()) }
+    var tags by remember(project.id) { mutableStateOf(organization.tags.joinToString(", ")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Organizar ${project.title}") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("Las colecciones y etiquetas solo organizan esta biblioteca local.", color = StudioPalette.TextMuted)
+                OutlinedTextField(
+                    value = collection,
+                    onValueChange = { collection = it.take(32) },
+                    label = { Text("Colección") },
+                    placeholder = { Text("Ej. Personajes") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = tags,
+                    onValueChange = { tags = it.take(220) },
+                    label = { Text("Etiquetas") },
+                    placeholder = { Text("Ej. boceto, cliente, tinta") },
+                    supportingText = { Text("Separa las etiquetas con coma.") },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(collection, tags) }) { Text("Guardar") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
+}
 
 @Composable
 private fun ProjectArtworkPreview(project: ProjectCard, modifier: Modifier = Modifier) {
@@ -1086,19 +1234,24 @@ internal fun NumberField(label: String, value: Int, modifier: Modifier, onValueC
 
 /** Pure ordering/search policy to keep filtering out of individual card compositions. */
 internal enum class GallerySortOrder(val label: String) {
-    RECENT("Recientes"), NAME("Nombre"), LARGEST("Resolución"),
+    RECENT("Recientes"), NAME("Nombre"), LARGEST("Resolución"), FAVORITES("Favoritos primero"),
 }
 
 internal fun sortGalleryProjects(
     projects: List<ProjectCard>,
     query: String,
     order: GallerySortOrder,
+    favoriteIds: Set<String> = emptySet(),
+    organizationById: Map<String, ProjectOrganization> = emptyMap(),
 ): List<ProjectCard> {
     val term = query.trim()
     val normalizedDimensions = term.replace(" ", "")
     val matching = if (term.isBlank()) projects else projects.filter { project ->
+        val organization = organizationById[project.id]
         project.title.contains(term, ignoreCase = true) ||
-            "${project.width}x${project.height}".contains(normalizedDimensions, ignoreCase = true)
+            "${project.width}x${project.height}".contains(normalizedDimensions, ignoreCase = true) ||
+            organization?.collection?.contains(term, ignoreCase = true) == true ||
+            organization?.tags?.any { it.contains(term, ignoreCase = true) } == true
     }
     return when (order) {
         GallerySortOrder.RECENT -> matching
@@ -1106,6 +1259,9 @@ internal fun sortGalleryProjects(
         GallerySortOrder.LARGEST -> matching.sortedWith(
             compareByDescending<ProjectCard> { it.width.toLong() * it.height.toLong() }
                 .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+        )
+        GallerySortOrder.FAVORITES -> matching.sortedWith(
+            compareByDescending<ProjectCard> { it.id in favoriteIds }.thenByDescending { it.modifiedEpoch },
         )
     }
 }

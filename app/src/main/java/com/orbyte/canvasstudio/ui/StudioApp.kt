@@ -27,24 +27,12 @@ import com.orbyte.canvasstudio.ui.screens.EditorScreen
 import com.orbyte.canvasstudio.ui.screens.GalleryScreen
 import com.orbyte.canvasstudio.ui.screens.NewCanvasDialog
 
-private enum class Destination { GALLERY, EDITOR, TUTORIAL }
+private enum class Destination { GALLERY, EDITOR }
 
 @Composable
 fun StudioApp() {
     val context = LocalContext.current
-    val preferences = remember {
-        context.getSharedPreferences("canvas_studio_preferences", android.content.Context.MODE_PRIVATE)
-    }
-    var destination by rememberSaveable {
-        mutableStateOf(
-            if (preferences.getBoolean("brush_tutorial_complete", false)) {
-                Destination.GALLERY
-            } else {
-                Destination.TUTORIAL
-            },
-        )
-    }
-    var tutorialReturnDestination by rememberSaveable { mutableStateOf(Destination.GALLERY) }
+    var destination by rememberSaveable { mutableStateOf(Destination.GALLERY) }
     var activeDocument by remember {
         mutableStateOf(
             EditorDocument(
@@ -174,30 +162,6 @@ fun StudioApp() {
                     addOrRefreshLocalCard(activeDocument)
                     destination = Destination.GALLERY
                 },
-                onOpenTutorial = {
-                    tutorialReturnDestination = Destination.EDITOR
-                    destination = Destination.TUTORIAL
-                },
-            )
-
-            Destination.TUTORIAL -> EditorScreen(
-                document = EditorDocument(
-                    id = "tutorial-session",
-                    title = "Práctica guiada",
-                    width = 2048,
-                    height = 1536,
-                    dpi = 300,
-                    preview = PreviewStyle.SKETCH,
-                    isLocal = false,
-                ),
-                onBackToGallery = { destination = tutorialReturnDestination },
-                onOpenTutorial = {},
-                tutorialMode = true,
-                onTutorialFinish = {
-                    preferences.edit().putBoolean("brush_tutorial_complete", true).apply()
-                    destination = tutorialReturnDestination
-                },
-                onTutorialExit = { destination = tutorialReturnDestination },
             )
         }
     }

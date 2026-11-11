@@ -412,9 +412,9 @@ El panel presenta esta función por su resultado: **Ocultar partes sin borrar**.
 
 No se incluyen todavía feather configurable, inversión, niveles, máscaras vectoriales ni máscaras de grupo.
 
-### Tutorial interactivo sobre el editor real
+### Tutorial interactivo de la versión 2.5.0
 
-El tutorial abre un documento temporal `2048 × 1536` dentro del editor principal y comienza siempre en la lección 1. Las acciones se realizan con las herramientas, paneles, capas y motor raster reales; el documento de práctica no se carga ni se guarda como proyecto.
+El tutorial de la versión publicada 2.5.0 utilizaba un documento temporal de `2048 × 1536` con las herramientas y capas del editor. La rama de integración abre directamente la galería y ha retirado el acceso al tutorial.
 
 - 14 lecciones guiadas por evidencia de dominio, no por simples pulsaciones;
 - foco calculado desde los límites reales de cada control;
@@ -527,7 +527,7 @@ Formatos habituales como PNG y JPEG dependen del soporte de Android y del provee
 
 ### Exportación PNG
 
-Genera una imagen aplanada mediante `ActivityResultContracts.CreateDocument("image/png")` y permite escoger la ubicación con el selector del sistema.
+Genera una imagen aplanada por bandas de 512 filas. La app valida el PNG temporal contra las revisiones del documento antes de copiarlo al destino elegido con el selector del sistema. [Integración y protocolo de rendimiento](docs/TABLET_INTEGRATION_2026-11-11.md).
 
 ### Exportación OpenRaster
 
@@ -1248,7 +1248,7 @@ Comprueba:
 - perfiles authored por preset para diferenciar 2H, HB, 6B, tintas, acuarelas y óleos;
 - bounds conservadores que incluyen partículas, blur, sangrado y Dual Brush;
 - replay filtrado por tile para evitar el costo `tiles × trazo completo`;
-- tutorial interactivo de catorce módulos, accesible desde **Más opciones → Tutorial interactivo**;
+- tutorial interactivo de catorce módulos en la versión publicada;
 - 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
 
 ### Integración final 2.4 y mejoras posteriores

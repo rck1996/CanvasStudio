@@ -16,7 +16,8 @@ if (-not (Test-Path -LiteralPath $adb)) { throw "ADB no encontrado: $adb" }
 
 $root = Split-Path -Parent $PSScriptRoot
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$runDirectory = Join-Path $root "build-logs\instrumentation-$stamp"
+$runId = [guid]::NewGuid().ToString("N")
+$runDirectory = Join-Path $root "build-logs\instrumentation-$stamp-$runId"
 New-Item -ItemType Directory -Force -Path $runDirectory | Out-Null
 $eventsFile = Join-Path $runDirectory "events.log"
 $stateFile = Join-Path $runDirectory "state.json"
@@ -48,6 +49,22 @@ function Write-State([string]$ClassName, [string]$Status, [datetime]$Started, [s
     $state | ConvertTo-Json | Set-Content -LiteralPath $stateFile -Encoding utf8
     $line = "{0} | {1} | {2} | {3}s | {4}" -f $state.updatedAt, $Status, $ClassName, $state.elapsedSeconds, $Detail
     $line | Tee-Object -FilePath $eventsFile -Append
+}
+
+function Get-InstrumentationResult([string]$StandardOutput, [string]$StandardError, [int]$ExitCode, [bool]$TimedOut) {
+    $combined = $StandardOutput + "`n" + $StandardError
+    $failure = [regex]::Match($combined, 'FAILURES!!!|INSTRUMENTATION_FAILED[^\r\n]*|shortMsg=[^\r\n]*')
+    $success = [regex]::Match($StandardOutput, '(?m)^OK \([1-9][0-9]* tests?\)[ \t]*\r?$')
+    # AndroidJUnitRunner's -1 is a successful terminal result, separate from the host exit code.
+    $completion = [regex]::Match($StandardOutput, '(?m)^INSTRUMENTATION_CODE:[ \t]*-1\s*\z')
+
+    if ($TimedOut) { return @{ Status = "TIMEOUT"; Detail = "Tiempo limite por clase agotado" } }
+    if ($ExitCode -ne 0) { return @{ Status = "FAIL"; Detail = "ADB exit=$ExitCode" } }
+    if ($failure.Success) { return @{ Status = "FAIL"; Detail = $failure.Value } }
+    if (-not $success.Success -or -not $completion.Success -or $success.Index -ge $completion.Index) {
+        return @{ Status = "FAIL"; Detail = "Sin cierre exitoso de AndroidJUnitRunner con pruebas ejecutadas" }
+    }
+    return @{ Status = "PASS"; Detail = $success.Value.TrimEnd() }
 }
 
 $results = @()
@@ -104,24 +121,27 @@ foreach ($className in $Classes) {
     $standardError = $stderrTask.Result
     $standardOutput | Set-Content -LiteralPath $stdout -Encoding utf8
     $standardError | Set-Content -LiteralPath $stderr -Encoding utf8
-    $combined = $standardOutput + "`n" + $standardError
-    $passed = -not $timedOut -and $combined -match 'OK \(\d+ tests?\)' -and
-        $combined -notmatch 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg='
-    $status = if ($timedOut) { "TIMEOUT" } elseif ($passed) { "PASS" } else { "FAIL" }
-    $summary = ([regex]::Match($combined, 'OK \(\d+ tests?\)|FAILURES!!!|INSTRUMENTATION_FAILED[^\r\n]*').Value)
-    Write-State $className $status $started $summary
+    $exitCode = $process.ExitCode
+    $outcome = Get-InstrumentationResult $standardOutput $standardError $exitCode $timedOut
+    Write-State $className $outcome.Status $started $outcome.Detail
     $results += [pscustomobject]@{
         className = $className
-        status = $status
+        status = $outcome.Status
         durationSeconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
-        processExitCode = if ($process.HasExited) { $process.ExitCode } else { $null }
+        processExitCode = $exitCode
         log = $stdout
     }
 }
 
-$results | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runDirectory "results.json") -Encoding utf8
+$resultsFile = Join-Path $runDirectory "results.json"
+ConvertTo-Json -InputObject $results | Set-Content -LiteralPath $resultsFile -Encoding utf8
 $failed = @($results | Where-Object status -ne "PASS")
-$finalStatus = if ($failed.Count -eq 0) { "PASS" } else { "FAIL" }
-Write-State "ALL" $finalStatus (Get-Date) "$($results.Count - $failed.Count)/$($results.Count) clases"
-Write-Output "RESULTS=$runDirectory\results.json"
-if ($failed.Count -gt 0) { exit 1 }
+$allPassed = $results.Count -gt 0 -and $failed.Count -eq 0
+$finalStatus = if ($allPassed) { "PASS" } else { "FAIL" }
+$finalDetail = if ($results.Count -eq 0) { "No hay clases seleccionadas" } else {
+    "$($results.Count - $failed.Count)/$($results.Count) clases"
+}
+Write-State "ALL" $finalStatus (Get-Date) $finalDetail
+Write-Output "RESULTS=$resultsFile"
+if (-not $allPassed) { exit 1 }
+exit 0

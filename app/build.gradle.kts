@@ -17,8 +17,8 @@ android {
         applicationId = "com.orbyte.canvasstudio"
         minSdk = 26
         targetSdk = 36
-        versionCode = 32
-        versionName = "2.5.0"
+        versionCode = 33
+        versionName = "2.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         testInstrumentationRunnerArguments["notAnnotation"] =
             "com.orbyte.canvasstudio.testing.LongRunningTest"
@@ -26,7 +26,11 @@ android {
         vectorDrawables { useSupportLibrary = true }
     }
 
-    val signingPropertiesFile = rootProject.file("keystore.properties")
+    val externalSigningProperties = providers.gradleProperty("canvasSigningProperties").orNull
+    val signingPropertiesFile = rootProject.file(externalSigningProperties ?: "keystore.properties")
+    require(externalSigningProperties == null || signingPropertiesFile.isFile) {
+        "El archivo de firma configurado no existe."
+    }
     val signingProperties = Properties().apply {
         if (signingPropertiesFile.isFile) {
             FileInputStream(signingPropertiesFile).use(::load)
@@ -35,7 +39,7 @@ android {
     signingConfigs {
         if (signingPropertiesFile.isFile) {
             create("release") {
-                storeFile = rootProject.file(signingProperties.getProperty("storeFile"))
+                storeFile = signingPropertiesFile.parentFile.resolve(signingProperties.getProperty("storeFile"))
                 storePassword = signingProperties.getProperty("storePassword")
                 keyAlias = signingProperties.getProperty("keyAlias")
                 keyPassword = signingProperties.getProperty("keyPassword")

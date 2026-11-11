@@ -4062,6 +4062,7 @@ class DrawingView(context: Context) : View(context) {
             "La captura de exportación debe ejecutarse en el hilo principal."
         }
         flushStrokeCommits()
+        check(activeStrokePoints == null) { "Termina el trazo antes de exportar." }
         check(transformBitmap == null) { "Confirma la transformación antes de exportar." }
         return DocumentExportSnapshot(
             width = documentWidth,

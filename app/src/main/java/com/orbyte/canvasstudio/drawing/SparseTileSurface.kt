@@ -253,9 +253,9 @@ internal class SparseTileSurface(
      * The thumbnail is a best-effort point-in-time view. Project publication
      * checks the committed document revision before accepting its result.
      */
-    fun drawAllDetached(target: Canvas, paint: Paint?) {
+    fun drawAllDetached(target: Canvas, paint: Paint?, tileRow: Int? = null) {
         val keys = synchronized(lock) {
-            allCurrentKeys().sortedWith(
+            allCurrentKeys().filter { tileRow == null || it.row == tileRow }.sortedWith(
                 compareBy<TileStorage.Key> { it.row }.thenBy { it.column },
             )
         }

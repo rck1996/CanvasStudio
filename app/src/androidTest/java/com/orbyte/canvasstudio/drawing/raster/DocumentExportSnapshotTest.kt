@@ -96,18 +96,18 @@ class DocumentExportSnapshotTest {
     }
 
     @Test
-    fun layeredOpacityAndBlendModeMatchExistingCanvasComposite() {
+    fun layeredOpacityAndBlendModeMatchAcrossPngBands() {
         val view = DrawingView(context)
         lateinit var snapshot: DocumentExportSnapshot
         lateinit var original: android.graphics.Bitmap
         instrumentation.runOnMainSync {
-            view.configureDocument(512, 512)
+            view.configureDocument(512, 640)
             view.brushSettings = BrushSettings(
                 kind = BrushKind.INK, color = Color.RED, sizePx = 100f, opacity = 1f,
             )
             view.debugDrawStrokeForTest(listOf(
-                StrokePoint(215f, 245f, 1f, 0f, 1L),
-                StrokePoint(310f, 245f, 1f, 0f, 2L),
+                StrokePoint(215f, 512f, 1f, 0f, 1L),
+                StrokePoint(310f, 512f, 1f, 0f, 2L),
             ))
             view.addLayer()
             var activeId = ""
@@ -119,8 +119,8 @@ class DocumentExportSnapshotTest {
                 kind = BrushKind.INK, color = Color.BLUE, sizePx = 100f, opacity = 1f,
             )
             view.debugDrawStrokeForTest(listOf(
-                StrokePoint(255f, 195f, 1f, 0f, 3L),
-                StrokePoint(255f, 295f, 1f, 0f, 4L),
+                StrokePoint(255f, 462f, 1f, 0f, 3L),
+                StrokePoint(255f, 562f, 1f, 0f, 4L),
             ))
             check(activeId.isNotEmpty())
             view.setLayerOpacity(activeId, .65f)
@@ -135,7 +135,7 @@ class DocumentExportSnapshotTest {
                 BitmapFactory.decodeByteArray(png.toByteArray(), 0, png.size()),
             )
             try {
-                for (y in 0 until 512 step 4) for (x in 0 until 512 step 4) {
+                for (y in 0 until 640) for (x in 0 until 512) {
                     assertEquals(
                         "Composite blend mismatch at $x,$y",
                         original.getPixel(x, y),
@@ -147,6 +147,37 @@ class DocumentExportSnapshotTest {
             }
         } finally {
             original.recycle()
+        }
+    }
+
+    @Test
+    fun sparseEightKPngKeepsInkInTheLastPartialBand() {
+        lateinit var snapshot: DocumentExportSnapshot
+        instrumentation.runOnMainSync {
+            val view = DrawingView(context)
+            view.configureDocument(7680, 4320)
+            view.brushSettings = BrushSettings(kind = BrushKind.INK, color = Color.RED, sizePx = 120f)
+            view.debugDrawStrokeForTest(listOf(
+                StrokePoint(7000f, 4200f, 1f, 0f, 1L),
+                StrokePoint(7200f, 4200f, 1f, 0f, 2L),
+            ))
+            snapshot = view.captureExportSnapshot()
+        }
+        val png = ByteArrayOutputStream()
+        snapshot.writePng(png, includePaper = false)
+        val bytes = png.toByteArray()
+        val dimensions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, dimensions)
+        assertEquals(7680, dimensions.outWidth)
+        assertEquals(4320, dimensions.outHeight)
+        val sampled = requireNotNull(BitmapFactory.decodeByteArray(
+            bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = 8 },
+        ))
+        try {
+            assertTrue(Color.alpha(sampled.getPixel(7100 / 8, 4200 / 8)) > 0)
+            assertEquals(Color.TRANSPARENT, sampled.getPixel(1, 1))
+        } finally {
+            sampled.recycle()
         }
     }
 

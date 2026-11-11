@@ -11,6 +11,7 @@ import android.graphics.RectF
 import android.os.Build
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.SparseTileSurface
+import com.orbyte.canvasstudio.drawing.TileStorage
 import kotlin.math.max
 import kotlin.math.min
 
@@ -56,47 +57,60 @@ internal class PreviewCompositor {
             val canvas = Canvas(preview)
             if (includePaper) canvas.drawColor(Color.WHITE)
             canvas.scale(scale, scale)
-            val documentBounds = RectF(0f, 0f, width.toFloat(), height.toFloat())
-            layers.forEachIndexed { index, layer ->
-                if (!layer.visible) return@forEachIndexed
-                val mask = layer.maskSurface.takeIf { layer.maskEnabled }
-                val clippingBase = layers.getOrNull(index - 1).takeIf { layer.clipping }
-                if (clippingBase != null && !clippingBase.visible) return@forEachIndexed
-                if (mask == null && clippingBase == null) {
-                    configureLayerPaint(layer)
-                    layer.surface.drawAllDetached(canvas, layerPaint)
-                    return@forEachIndexed
-                }
-
-                configureLayerPaint(layer)
-                val checkpoint = canvas.saveLayer(documentBounds, layerPaint)
-                try {
-                    layer.surface.drawAllDetached(canvas, isolatedLayerContentPaint)
-                    if (mask != null) {
-                        maskPaint.alpha = 255
-                        mask.drawAllDetached(canvas, maskPaint)
-                    }
-                    if (clippingBase != null && clippingBase.visible) {
-                        clippingPaint.alpha = (clippingBase.opacity * 255f).toInt().coerceIn(0, 255)
-                        val maskCheckpoint = canvas.saveLayer(documentBounds, clippingPaint)
-                        try {
-                            clippingBase.surface.drawAllDetached(canvas, isolatedLayerContentPaint)
-                            if (clippingBase.maskEnabled) {
-                                clippingBase.maskSurface?.drawAllDetached(canvas, maskPaint)
-                            }
-                        } finally {
-                            canvas.restoreToCount(maskCheckpoint)
-                        }
-                    }
-                } finally {
-                    canvas.restoreToCount(checkpoint)
-                }
-            }
+            drawLayers(canvas, RectF(0f, 0f, width.toFloat(), height.toFloat()), layers)
             return preview
         } catch (error: Throwable) {
             preview.recycle()
             throw error
         }
+    }
+
+    fun renderBand(band: Bitmap, top: Int, rows: Int, layers: List<Layer>, includePaper: Boolean) {
+        check(top % TileStorage.TILE_SIZE == 0 && rows in 1..TileStorage.TILE_SIZE)
+        band.eraseColor(if (includePaper) Color.WHITE else Color.TRANSPARENT)
+        val bounds = RectF(0f, top.toFloat(), band.width.toFloat(), (top + rows).toFloat())
+        val canvas = Canvas(band)
+        canvas.translate(0f, -top.toFloat())
+        canvas.clipRect(bounds)
+        drawLayers(canvas, bounds, layers, tileRow = top / TileStorage.TILE_SIZE)
+    }
+
+    private fun drawLayers(canvas: Canvas, bounds: RectF, layers: List<Layer>, tileRow: Int? = null) {
+    layers.forEachIndexed { index, layer ->
+        if (!layer.visible) return@forEachIndexed
+        val mask = layer.maskSurface.takeIf { layer.maskEnabled }
+        val clippingBase = layers.getOrNull(index - 1).takeIf { layer.clipping }
+        if (clippingBase != null && !clippingBase.visible) return@forEachIndexed
+        if (mask == null && clippingBase == null) {
+            configureLayerPaint(layer)
+            layer.surface.drawAllDetached(canvas, layerPaint, tileRow)
+            return@forEachIndexed
+        }
+
+        configureLayerPaint(layer)
+        val checkpoint = canvas.saveLayer(bounds, layerPaint)
+        try {
+            layer.surface.drawAllDetached(canvas, isolatedLayerContentPaint, tileRow)
+            if (mask != null) {
+                maskPaint.alpha = 255
+                mask.drawAllDetached(canvas, maskPaint, tileRow)
+            }
+            if (clippingBase != null && clippingBase.visible) {
+                clippingPaint.alpha = (clippingBase.opacity * 255f).toInt().coerceIn(0, 255)
+                val maskCheckpoint = canvas.saveLayer(bounds, clippingPaint)
+                try {
+                    clippingBase.surface.drawAllDetached(canvas, isolatedLayerContentPaint, tileRow)
+                    if (clippingBase.maskEnabled) {
+                        clippingBase.maskSurface?.drawAllDetached(canvas, maskPaint, tileRow)
+                    }
+                } finally {
+                    canvas.restoreToCount(maskCheckpoint)
+                }
+            }
+        } finally {
+            canvas.restoreToCount(checkpoint)
+        }
+    }
     }
 
     private fun configureLayerPaint(layer: Layer) {

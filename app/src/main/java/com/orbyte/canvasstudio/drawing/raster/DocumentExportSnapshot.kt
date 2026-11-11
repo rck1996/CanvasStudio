@@ -1,13 +1,10 @@
 package com.orbyte.canvasstudio.drawing.raster
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.SparseTileSurface
+import com.orbyte.canvasstudio.drawing.TileStorage
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -16,7 +13,6 @@ import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.math.max
-import kotlin.math.min
 
 /**
  * Export metadata captured from the document's owner thread *after* pending
@@ -100,14 +96,19 @@ internal class DocumentExportSnapshot(
 
     fun writePngTo(openDestination: () -> OutputStream, includePaper: Boolean = true) {
         staged(".png", openDestination) { output ->
-            val bitmap = fullComposite(includePaper)
-            try {
-                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
-                    "No se pudo codificar la imagen PNG."
-                }
-            } finally {
-                bitmap.recycle()
-            }
+            writeCompositePng(output, composerLayers(), includePaper)
+        }
+    }
+
+    private fun writeCompositePng(
+        output: OutputStream,
+        renderLayers: List<PreviewCompositor.Layer>,
+        includePaper: Boolean,
+    ) {
+        val compositor = PreviewCompositor()
+        writeBandedPng(output, width, height, TileStorage.TILE_SIZE) { band, top, rows ->
+            validateUnchanged()
+            compositor.renderBand(band, top, rows, renderLayers, includePaper)
         }
     }
 
@@ -171,53 +172,34 @@ internal class DocumentExportSnapshot(
                 zip.write(xml.toByteArray(Charsets.UTF_8))
                 zip.closeEntry()
 
-                reversed.forEachIndexed { index, layer ->
-                    val bitmap = renderLayer(layer)
-                    try {
-                        writeBitmapEntry(zip, "data/layer${index.toString().padStart(3, '0')}.png", bitmap)
-                    } finally {
-                        bitmap.recycle()
-                    }
-                }
-
-                val merged = fullComposite(includePaper = false)
-                try {
-                    writeBitmapEntry(zip, "mergedimage.png", merged)
-                    val scale = min(1f, 256f / max(width, height).toFloat())
-                    val thumbnail = Bitmap.createScaledBitmap(
-                        merged,
-                        max(1, (width * scale).toInt()),
-                        max(1, (height * scale).toInt()),
-                        true,
+                val renderLayers = composerLayers()
+                renderLayers.asReversed().forEachIndexed { index, layer ->
+                    // OpenRaster stores these attributes in stack.xml. Bake only the mask
+                    // into the pixels so an external editor does not apply opacity twice.
+                    val pixels = layer.copy(
+                        visible = true,
+                        opacity = 1f,
+                        blendMode = LayerBlendMode.NORMAL,
+                        clipping = false,
                     )
-                    try {
-                        writeBitmapEntry(zip, "Thumbnails/thumbnail.png", thumbnail)
-                    } finally {
-                        if (thumbnail !== merged) thumbnail.recycle()
-                    }
-                } finally {
-                    merged.recycle()
+                    zip.putNextEntry(ZipEntry("data/layer${index.toString().padStart(3, '0')}.png"))
+                    writeCompositePng(zip, listOf(pixels), includePaper = false)
+                    zip.closeEntry()
                 }
-            }
-        }
-    }
 
-    private fun renderLayer(layer: Layer): Bitmap {
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bitmap)
-            layer.surface.drawAllDetached(canvas, null)
-            if (layer.maskEnabled) {
-                val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    alpha = 255
-                    xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+                zip.putNextEntry(ZipEntry("mergedimage.png"))
+                writeCompositePng(zip, renderLayers, includePaper = false)
+                zip.closeEntry()
+
+                val thumbnail = PreviewCompositor().render(
+                    width, height, renderLayers, maxSize = 256, includePaper = false,
+                )
+                try {
+                    writeBitmapEntry(zip, "Thumbnails/thumbnail.png", thumbnail)
+                } finally {
+                    thumbnail.recycle()
                 }
-                layer.maskSurface?.drawAllDetached(canvas, maskPaint)
             }
-            return bitmap
-        } catch (error: Throwable) {
-            bitmap.recycle()
-            throw error
         }
     }
 

@@ -61,6 +61,7 @@ internal class PreviewCompositor {
                 if (!layer.visible) return@forEachIndexed
                 val mask = layer.maskSurface.takeIf { layer.maskEnabled }
                 val clippingBase = layers.getOrNull(index - 1).takeIf { layer.clipping }
+                if (clippingBase != null && !clippingBase.visible) return@forEachIndexed
                 if (mask == null && clippingBase == null) {
                     configureLayerPaint(layer)
                     layer.surface.drawAllDetached(canvas, layerPaint)
@@ -77,9 +78,14 @@ internal class PreviewCompositor {
                     }
                     if (clippingBase != null && clippingBase.visible) {
                         clippingPaint.alpha = (clippingBase.opacity * 255f).toInt().coerceIn(0, 255)
-                        clippingBase.surface.drawAllDetached(canvas, clippingPaint)
-                        if (clippingBase.maskEnabled) {
-                            clippingBase.maskSurface?.drawAllDetached(canvas, maskPaint)
+                        val maskCheckpoint = canvas.saveLayer(documentBounds, clippingPaint)
+                        try {
+                            clippingBase.surface.drawAllDetached(canvas, isolatedLayerContentPaint)
+                            if (clippingBase.maskEnabled) {
+                                clippingBase.maskSurface?.drawAllDetached(canvas, maskPaint)
+                            }
+                        } finally {
+                            canvas.restoreToCount(maskCheckpoint)
                         }
                     }
                 } finally {

@@ -1162,6 +1162,7 @@ class DrawingView(context: Context) : View(context) {
         if (!isLayerEffectivelyVisible(layer)) return
         val hasMask = layer.maskEnabled && layer.maskSurface != null
         val hasClippingBase = layer.clipping && index > 0
+        if (hasClippingBase && !isLayerEffectivelyVisible(layers[index - 1])) return
 
         // Avoid an off-screen saveLayer for ordinary layers. Textured brushes already put
         // pressure on the GPU; allocating a temporary layer for every raster layer made the
@@ -1181,13 +1182,12 @@ class DrawingView(context: Context) : View(context) {
         if (hasMask) applyRasterMaskVisible(canvas, layer, visibleBounds)
         if (hasClippingBase) {
             val base = layers[index - 1]
-            if (!isLayerEffectivelyVisible(base)) {
-                canvas.restoreToCount(checkpoint)
-                return
-            }
             clippingMaskPaint.alpha = (effectiveLayerOpacity(base) * 255f).toInt().coerceIn(0, 255)
-            base.surface.drawVisible(canvas, visibleBounds, clippingMaskPaint)
+            // A full isolated mask makes absent tiles transparent, too.
+            val maskCheckpoint = canvas.saveLayer(visibleBounds, clippingMaskPaint)
+            base.surface.drawVisible(canvas, visibleBounds, isolatedLayerContentPaint)
             if (base.maskEnabled) base.maskSurface?.drawVisible(canvas, visibleBounds, rasterMaskPaint)
+            canvas.restoreToCount(maskCheckpoint)
         }
         canvas.restoreToCount(checkpoint)
     }
@@ -3451,6 +3451,7 @@ class DrawingView(context: Context) : View(context) {
         sampleCanvas.drawColor(Color.WHITE)
         layers.forEachIndexed { index, layer ->
             if (!isLayerEffectivelyVisible(layer)) return@forEachIndexed
+            if (layer.clipping && index > 0 && !isLayerEffectivelyVisible(layers[index - 1])) return@forEachIndexed
             configureLayerPaint(layer, effectiveLayerOpacity(layer))
             val checkpoint = sampleCanvas.saveLayer(RectF(0f, 0f, 1f, 1f), layerPaint)
             layer.surface.drawAtPoint(sampleCanvas, x, y, isolatedLayerContentPaint)
@@ -3458,12 +3459,11 @@ class DrawingView(context: Context) : View(context) {
             if (layer.maskEnabled) layer.maskSurface?.drawAtPoint(sampleCanvas, x, y, rasterMaskPaint)
             if (layer.clipping && index > 0) {
                 val base = layers[index - 1]
-                if (!isLayerEffectivelyVisible(base)) {
-                    sampleCanvas.restoreToCount(checkpoint)
-                    return@forEachIndexed
-                }
                 clippingMaskPaint.alpha = (effectiveLayerOpacity(base) * 255f).toInt().coerceIn(0, 255)
-                base.surface.drawAtPoint(sampleCanvas, x, y, clippingMaskPaint)
+                val maskCheckpoint = sampleCanvas.saveLayer(RectF(0f, 0f, 1f, 1f), clippingMaskPaint)
+                base.surface.drawAtPoint(sampleCanvas, x, y, isolatedLayerContentPaint)
+                if (base.maskEnabled) base.maskSurface?.drawAtPoint(sampleCanvas, x, y, rasterMaskPaint)
+                sampleCanvas.restoreToCount(maskCheckpoint)
             }
             sampleCanvas.restoreToCount(checkpoint)
         }
@@ -4126,6 +4126,7 @@ class DrawingView(context: Context) : View(context) {
             if (!isLayerEffectivelyVisible(layer)) return@forEachIndexed
             val hasMask = layer.maskEnabled && layer.maskSurface != null
             val hasClippingBase = layer.clipping && index > 0
+            if (hasClippingBase && !isLayerEffectivelyVisible(layers[index - 1])) return@forEachIndexed
             if (!hasMask && !hasClippingBase) {
                 configureLayerPaint(layer, effectiveLayerOpacity(layer))
                 layer.surface.drawAll(canvas, layerPaint)
@@ -4139,13 +4140,11 @@ class DrawingView(context: Context) : View(context) {
             if (hasMask) layer.maskSurface?.drawAll(canvas, rasterMaskPaint)
             if (hasClippingBase) {
                 val base = layers[index - 1]
-                if (!isLayerEffectivelyVisible(base)) {
-                    canvas.restoreToCount(checkpoint)
-                    return@forEachIndexed
-                }
                 clippingMaskPaint.alpha = (effectiveLayerOpacity(base) * 255f).toInt().coerceIn(0, 255)
-                base.surface.drawAll(canvas, clippingMaskPaint)
+                val maskCheckpoint = canvas.saveLayer(documentBounds, clippingMaskPaint)
+                base.surface.drawAll(canvas, isolatedLayerContentPaint)
                 if (base.maskEnabled) base.maskSurface?.drawAll(canvas, rasterMaskPaint)
+                canvas.restoreToCount(maskCheckpoint)
             }
             canvas.restoreToCount(checkpoint)
         }

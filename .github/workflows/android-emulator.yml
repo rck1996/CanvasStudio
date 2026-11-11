@@ -2,13 +2,8 @@ name: Android emulator regression
 
 on:
   push:
-    branches: ["audit/**", "engine/**"]
-    paths:
-      - ".github/workflows/android-emulator.yml"
-      - "app/**"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle/**"
+    branches: ["main"]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-java@v4
         with:

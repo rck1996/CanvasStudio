@@ -82,6 +82,31 @@ class PreviewCompositorTest {
     }
 
     @Test
+    fun clippingExcludesMissingTilesAndHiddenBase() {
+        val root = File(context.cacheDir, "preview-clipping-tiles").apply { deleteRecursively(); mkdirs() }
+        val base = SparseTileSurface(1024, 64, File(root, "base"), 4L * 1024 * 1024)
+        val top = SparseTileSurface(1024, 64, File(root, "top"), 8L * 1024 * 1024)
+        try {
+            assertTrue(base.draw(RectF(0f, 0f, 512f, 64f)) { it.drawColor(Color.RED) })
+            assertTrue(top.draw(RectF(0f, 0f, 1024f, 64f)) { it.drawColor(Color.BLUE) })
+            fun render(baseVisible: Boolean) = PreviewCompositor().render(1024, 64, listOf(
+                PreviewCompositor.Layer(base, null, baseVisible, 1f, LayerBlendMode.NORMAL, false, false),
+                PreviewCompositor.Layer(top, null, true, 1f, LayerBlendMode.NORMAL, true, false),
+            ), maxSize = 1024, includePaper = false)
+            val visible = render(true)
+            try {
+                assertEquals(Color.BLUE, visible.getPixel(200, 32))
+                assertEquals(Color.TRANSPARENT, visible.getPixel(800, 32))
+            } finally { visible.recycle() }
+            val hidden = render(false)
+            try { assertEquals(Color.TRANSPARENT, hidden.getPixel(200, 32)) }
+            finally { hidden.recycle() }
+        } finally {
+            base.recycle(); top.recycle(); root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun hiddenLayerIsNotComposited() {
         val root = File(context.cacheDir, "preview-compositor-hidden-test").apply {
             deleteRecursively()

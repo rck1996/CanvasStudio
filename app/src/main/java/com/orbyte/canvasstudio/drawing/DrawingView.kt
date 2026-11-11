@@ -4294,12 +4294,35 @@ class DrawingView(context: Context) : View(context) {
         }
     }
 
+    /**
+     * Debounced autosave should not force unpublished worker strokes to
+     * rasterize synchronously on the UI thread. Its latest request runs once
+     * the strictly ordered stroke lane becomes idle.
+     *
+     * Explicit saves, app-stop and view disposal still use the immediate
+     * safety barrier in saveProject() to protect durable content.
+     */
+    fun saveProjectWhenIdle(
+        projectId: String,
+        title: String,
+        dpi: Int,
+        includePreview: Boolean = false,
+    ) {
+        val generation = documentGeneration
+        strokeCommitLane.whenIdleForAutosave {
+            if (documentGeneration == generation) {
+                saveProject(projectId, title, dpi, includePreview)
+            }
+        }
+    }
+
     fun saveProject(
         projectId: String,
         title: String,
         dpi: Int,
         includePreview: Boolean = true,
     ) {
+        strokeCommitLane.cancelDeferredAutosave()
         flushStrokeCommits()
         val saveStartedNanos = if (performanceMetrics.isActive) System.nanoTime() else 0L
         if (transformBitmap != null) commitSelectionTransform()

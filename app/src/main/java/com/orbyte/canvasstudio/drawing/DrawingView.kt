@@ -383,6 +383,7 @@ class DrawingView(context: Context) : View(context) {
     private fun flushStrokeCommits() {
         if (strokeCommitLane.hasPending) strokeCommitLane.flushSynchronously()
     }
+    private var activeGesturePointerId: Int? = null
     private var activeStrokePoints: MutableList<StrokePoint>? = null
     private var activeInputTool: DrawingTool? = null
     private var activeStrokeSettings: BrushSettings? = null
@@ -1674,6 +1675,9 @@ class DrawingView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            activeGesturePointerId = event.getPointerId(event.actionIndex)
+        }
         if (event.actionMasked == MotionEvent.ACTION_DOWN &&
             strokeCommitLane.hasPending &&
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0 ||
@@ -1688,6 +1692,11 @@ class DrawingView(context: Context) : View(context) {
             event.actionMasked == MotionEvent.ACTION_POINTER_UP &&
             event.flags and MotionEvent.FLAG_CANCELED == MotionEvent.FLAG_CANCELED
         if (canceledPalmPointer) {
+            // A rejected palm must not cancel a different pointer's pen stroke.
+            if (activeGesturePointerId != null &&
+                event.getPointerId(event.actionIndex) != activeGesturePointerId
+            ) return true
+            activeGesturePointerId = null
             clearActiveStrokeState()
             shapeStart = null
             shapeEnd = null

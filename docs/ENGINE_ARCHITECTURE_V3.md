@@ -272,6 +272,28 @@ continues to synchronously resolve pending commits before modifying the
 document. This conservatively protects integrity while the next milestone
 addresses deferred, cancellable history operations.
 
+## M2-F — nonblocking debounced autosave
+
+- `StrokeCommitLane.whenIdleForAutosave()` stores **one latest-wins**
+  callback while the experimental raster lane has pending transactions.
+  All callbacks run on the document owner/UI thread, never the worker.
+- After the final raster batch publishes, the callback enters the established
+  serial project-save worker. It does not replay pending brush strokes on
+  pointer input just to satisfy an ordinary 3-second debounce.
+- `EditorScreen` uses `saveProjectWhenIdle()` only from its debounced
+  `LaunchedEffect(changeTick)`; user-initiated saves and lifecycle
+  `ON_STOP`/disposal **still use `saveProject()`** with the synchronous
+  history barrier. This preserves durable project recovery when leaving.
+- A manual/lifecycle save cancels any obsolete deferred autosave before
+  flushing strokes, preventing duplicate revision work.
+- Queue tests verify coalescing, FIFO drain and cancellation; instrumented
+  regression blocks the raster worker and confirms that scheduling autosave
+  does not force a premature synchronous stroke commit.
+
+**Limitation:** undo/redo, layer operations and the explicit/lifecycle save
+still synchronously drain pending brush work. The debug async route remains
+disabled for normal users until on-device speed and correctness tests pass.
+
 ## Proposed M2-C activation gate
 
 - Record input, stroke command, selected layer ID, surface ID, original tile

@@ -2,11 +2,14 @@ package com.orbyte.canvasstudio.drawing
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.BitmapFactory
 import android.view.MotionEvent
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.orbyte.canvasstudio.model.ProjectRepository
+import com.orbyte.canvasstudio.drawing.raster.DocumentExportSnapshot
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -114,6 +117,32 @@ class AsyncStrokeCommitIntegrationTest {
                 view.debugBeforeAsyncStrokePrepare = null
                 view.debugFlushPendingStrokeCommits()
             }
+        }
+    }
+
+    @Test
+    fun exportSnapshotBarrierContainsPendingDetachedStroke() {
+        val view = DrawingView(context)
+        lateinit var snapshot: DocumentExportSnapshot
+        instrumentation.runOnMainSync {
+            configure(view)
+            drawStroke(view, 95f, 245f, 260f, 245f)
+            snapshot = view.captureExportSnapshot()
+            // Safe owner-thread export barrier must publish pending history
+            // before it gives a worker access to detached raster data.
+            assertEquals(0, view.debugPendingStrokeCommits())
+        }
+        val out = ByteArrayOutputStream()
+        snapshot.writePng(out, includePaper = false)
+        val bytes = out.toByteArray()
+        val bitmap = requireNotNull(BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+        try {
+            assertEquals(512, bitmap.width)
+            assertEquals(512, bitmap.height)
+            assertTrue(Color.alpha(bitmap.getPixel(177, 245)) > 0)
+            assertEquals(0, Color.alpha(bitmap.getPixel(25, 25)))
+        } finally {
+            bitmap.recycle()
         }
     }
 

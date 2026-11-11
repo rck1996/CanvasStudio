@@ -358,6 +358,7 @@ class DrawingView(context: Context) : View(context) {
         val command: StrokeCommand,
     )
     private val queuedStrokePreviews = mutableListOf<QueuedStrokePreview>()
+    private val queuedPreviewIdentity = listOf(Matrix())
     internal fun debugPendingStrokeCommits(): Int = strokeCommitLane.pendingCount
     internal fun debugFlushPendingStrokeCommits() = flushStrokeCommits()
 
@@ -2089,7 +2090,7 @@ class DrawingView(context: Context) : View(context) {
                 preview.command.points,
                 preview.command.settings,
                 preview.command.tool,
-                listOf(Matrix()),
+                queuedPreviewIdentity,
             )
         }
         val points = activeStrokePoints ?: return

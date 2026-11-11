@@ -56,7 +56,7 @@ internal class DocumentExportSnapshot(
     private val pinned = layers.flatMap { layer ->
         buildList {
             add(layer.surface)
-            layer.maskSurface?.let(::add)
+            layer.maskSurface?.let { add(it) }
         }
     }.distinct().map { surface -> PinnedSurface(surface, surface.rasterRevision()) }
 

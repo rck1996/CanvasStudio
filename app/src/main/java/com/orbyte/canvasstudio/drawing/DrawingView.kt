@@ -451,7 +451,12 @@ class DrawingView(context: Context) : View(context) {
     var onQuickMenuRequested: ((Float, Float) -> Unit)? = null
     var onQuickMenuFlickSelected: ((Int) -> Unit)? = null
     var quickMenuTouchHoldEnabled: Boolean = true
-    var usePlatformLowLatencyPreview: Boolean = false
+    internal var platformInkPreviewActive: Boolean = false
+        set(value) {
+            if (field == value) return
+            field = value
+            deferredStrokeOverlay.invalidateSelf()
+        }
 
     /** Local debug instrumentation for profiling on real tablets. Never persisted or uploaded. */
     var debugPerformanceMetricsEnabled: Boolean
@@ -502,8 +507,8 @@ class DrawingView(context: Context) : View(context) {
             (shouldDeferActiveRaster(brushSettings) || quickShapeEnabled) &&
             platformInkPreviewCompatible(brushSettings.kind)
 
-    private fun hasCompatiblePlatformPreview(settings: BrushSettings): Boolean =
-        usePlatformLowLatencyPreview && platformInkPreviewCompatible(settings.kind)
+    internal fun hasActiveBrushStroke(): Boolean =
+        activeInputTool == DrawingTool.BRUSH && activeStrokePoints != null
 
     fun platformPreviewSizePx(): Float = brushSettings.sizePx * currentScale
 
@@ -2019,7 +2024,7 @@ class DrawingView(context: Context) : View(context) {
             return
         }
         if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
-            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+            if (!platformInkPreviewActive) {
                 deferredStrokeOverlay.invalidateSelf()
             }
             return
@@ -2089,12 +2094,24 @@ class DrawingView(context: Context) : View(context) {
         performanceMetrics.recordSample(accepted = true)
         points += sampled
         if (activeStrokeDefersRaster || shouldDeferActiveRaster(settings)) {
-            if (activeStrokeDefersRaster || !hasCompatiblePlatformPreview(settings)) {
+            if (!platformInkPreviewActive) {
                 deferredStrokeOverlay.invalidateSelf()
             }
         } else {
+            if (canPreviewPendingBrushSegments()) deferredStrokeOverlay.invalidateSelf()
             scheduleActiveStrokeRender()
         }
+    }
+
+    private fun canPreviewPendingBrushSegments(): Boolean {
+        if (activeInputTool != DrawingTool.BRUSH || selectionPath != null) return false
+        // This overlay sits above the compositor. Only preview strokes whose
+        // actual raster will also be drawn above every other layer.
+        val layer = layers.lastOrNull()?.takeIf { it.id == activeLayerId } ?: return false
+        return layer.groupId == null && layer.visible && layer.opacity == 1f &&
+            !layer.editingMask && !layer.alphaLocked && !layer.clipping &&
+            (!layer.maskEnabled || layer.maskSurface == null) &&
+            layer.blendMode == LayerBlendMode.NORMAL
     }
 
     /**
@@ -2115,13 +2132,22 @@ class DrawingView(context: Context) : View(context) {
         }
         val points = activeStrokePoints ?: return
         val settings = activeStrokeSettings ?: return
-        if ((!activeStrokeDefersRaster && !shouldDeferActiveRaster(settings)) || points.isEmpty()) return
+        if (platformInkPreviewActive) return
+        val deferredRaster = activeStrokeDefersRaster || shouldDeferActiveRaster(settings)
+        val firstPointIndex = if (deferredRaster) {
+            0
+        } else {
+            if (activeRenderedPointCount >= points.size || !canPreviewPendingBrushSegments()) return
+            // Start at the last rasterized point so the visible tip joins the real stroke.
+            (activeRenderedPointCount - 1).coerceAtLeast(0)
+        }
         strokePreviewRenderer.draw(
             canvas = canvas,
             points = points,
             settings = settings,
             tool = activeInputTool ?: tool,
             symmetryMatrices = symmetryMatrices(),
+            firstPointIndex = firstPointIndex,
         )
     }
 
@@ -2215,6 +2241,7 @@ class DrawingView(context: Context) : View(context) {
             }
         }
         activeRenderedPointCount = endExclusive
+        if (canPreviewPendingBrushSegments()) deferredStrokeOverlay.invalidateSelf()
         performanceMetrics.recordDabs((endExclusive - firstEndPointIndex) * matrices.size)
         if (activeStrokeInputStartedNanos != 0L) {
             performanceMetrics.addInputToPreview(System.nanoTime() - activeStrokeInputStartedNanos)

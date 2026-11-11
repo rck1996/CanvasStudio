@@ -9,6 +9,8 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Immutable StrokeCommand replay, detached from View state.
@@ -26,6 +28,9 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
 
     fun draw(canvas: Canvas, command: StrokeCommand, documentBounds: RectF, pickupColors: IntArray? = null, renderClipBounds: RectF? = null) {
         this.documentBounds.set(documentBounds)
+        val brushExtent = if (renderClipBounds == null) 0f else {
+            BrushStrokeGeometry.maximumBrushExtent(command.settings)
+        }
         val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
             ?.let { pathFromPoints(it, close = true) }
         val clipSave = clipPath?.let {
@@ -38,10 +43,7 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
         }
         command.points.firstOrNull()?.takeIf { first ->
             renderClipBounds == null ||
-                RectF.intersects(
-                    BrushStrokeGeometry.segmentBounds(first, first, command.settings),
-                    renderClipBounds,
-                )
+                intersectsClip(first, first, brushExtent, renderClipBounds)
         }?.let { first ->
             brushes.drawBrushStamp(
                 canvas = canvas,
@@ -58,24 +60,16 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
         }
         val segmentCount = (command.points.size - 1).coerceAtLeast(0)
         for (index in 0 until segmentCount) {
-            if (
-                renderClipBounds != null &&
-                !RectF.intersects(
-                    BrushStrokeGeometry.segmentBounds(
-                        command.points[index],
-                        command.points[index + 1],
-                        command.settings,
-                    ),
-                    renderClipBounds,
-                )
-            ) {
+            val from = command.points[index]
+            val to = command.points[index + 1]
+            if (renderClipBounds != null && !intersectsClip(from, to, brushExtent, renderClipBounds)) {
                 continue
             }
             val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
             brushes.drawStrokeSegment(
                 canvas,
-                command.points[index],
-                command.points[index + 1],
+                from,
+                to,
                 command.tool,
                 command.settings,
                 progress,
@@ -93,6 +87,12 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
             )
         }
     }
+
+    private fun intersectsClip(from: StrokePoint, to: StrokePoint, extent: Float, clip: RectF): Boolean =
+        min(from.x, to.x) - extent < clip.right &&
+            max(from.x, to.x) + extent > clip.left &&
+            min(from.y, to.y) - extent < clip.bottom &&
+            max(from.y, to.y) + extent > clip.top
 
     private fun pathFromPoints(points: List<StrokePoint>, close: Boolean): Path = Path().apply {
         points.firstOrNull()?.let { first ->

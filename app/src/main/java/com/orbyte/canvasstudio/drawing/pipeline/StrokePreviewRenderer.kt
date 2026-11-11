@@ -29,15 +29,16 @@ internal class StrokePreviewRenderer {
         settings: BrushSettings,
         tool: DrawingTool,
         symmetryMatrices: List<Matrix>,
+        firstPointIndex: Int = 0,
     ) {
-        if (points.isEmpty()) return
+        if (firstPointIndex !in points.indices) return
         paint.color = if (tool == DrawingTool.ERASER) Color.WHITE else settings.color
         paint.alpha = if (tool == DrawingTool.ERASER) 150 else {
             (settings.opacity.coerceIn(0.15f, 1f) * 220f).toInt()
         }
         symmetryMatrices.forEach { matrix ->
             val identityTransform = matrix.isIdentity
-            var previous = points.first()
+            var previous = points[firstPointIndex]
             if (points.size == 1) {
                 endpoints[0] = previous.x
                 endpoints[1] = previous.y
@@ -48,7 +49,7 @@ internal class StrokePreviewRenderer {
                     previous.pressure.coerceIn(settings.minSize, 1f)
                 canvas.drawPoint(endpoints[0], endpoints[1], paint)
             } else {
-                for (index in 1 until points.size) {
+                for (index in firstPointIndex + 1 until points.size) {
                     val current = points[index]
                     endpoints[0] = previous.x
                     endpoints[1] = previous.y

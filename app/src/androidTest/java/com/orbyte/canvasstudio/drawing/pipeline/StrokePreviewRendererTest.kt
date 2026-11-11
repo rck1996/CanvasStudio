@@ -71,6 +71,27 @@ class StrokePreviewRendererTest {
     }
 
     @Test
+    fun pendingPreviewJoinsCommittedStrokeAndSkipsAlreadyRasterizedSegments() {
+        val bitmap = Bitmap.createBitmap(96, 32, Bitmap.Config.ARGB_8888)
+        try {
+            val renderer = StrokePreviewRenderer()
+            val settings = BrushSettings(sizePx = 6f, color = Color.BLACK, opacity = 1f)
+            val points = listOf(8f, 32f, 56f, 80f).mapIndexed { index, x ->
+                StrokePoint(x, 16f, 1f, 0f, index.toLong())
+            }
+            renderer.draw(
+                Canvas(bitmap), points, settings, DrawingTool.BRUSH, listOf(Matrix()),
+                firstPointIndex = 2,
+            )
+            assertEquals(Color.TRANSPARENT, bitmap.getPixel(32, 16))
+            assertTrue(Color.alpha(bitmap.getPixel(56, 16)) > 0)
+            assertTrue(Color.alpha(bitmap.getPixel(76, 16)) > 0)
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    @Test
     fun translatedSymmetryDrawsInExpectedRegion() {
         val bitmap = Bitmap.createBitmap(64, 32, Bitmap.Config.ARGB_8888)
         try {

@@ -60,6 +60,7 @@ internal class BrushRasterSession(
     private data class GrainTextureEntry(
         val bitmap: Bitmap,
         val shader: BitmapShader,
+        var stationaryScale: Float? = null,
     )
     private val grainTextureCache =
         object : LinkedHashMap<BrushTextureKey, GrainTextureEntry>(12, .75f, true) {
@@ -72,6 +73,8 @@ internal class BrushRasterSession(
             }
         }
     private val grainShaderMatrix = Matrix()
+    private var lastTintColor = 0
+    private var lastTintFilter: PorterDuffColorFilter? = null
     private var cachedMaskFilterKey: Int = Int.MIN_VALUE
     private var cachedMaskFilter: BlurMaskFilter? = null
 
@@ -90,7 +93,12 @@ internal class BrushRasterSession(
         -> true
     }
 
-    private fun stampSpacing(settings: BrushSettings): Float {
+    internal fun stampSpacing(
+        settings: BrushSettings,
+        pressure: Float,
+        speedFactor: Float,
+        tool: DrawingTool,
+    ): Float {
         val requested = settings.spacing.coerceIn(0.025f, 0.5f)
         val floor = when (settings.kind) {
             BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH -> 0.13f
@@ -100,7 +108,32 @@ internal class BrushRasterSession(
             BrushKind.MARKER -> 0.08f
             else -> requested
         }
-        return max(requested, floor)
+        val largeTipFloor = when (settings.kind) {
+            BrushKind.BRISTLE, BrushKind.WATERCOLOR, BrushKind.OIL -> .20f
+            else -> floor
+        }
+        if (settings.sizePx <= 96f || largeTipFloor == floor || tool == DrawingTool.ERASER) {
+            return max(requested, floor)
+        }
+        val minimum = settings.minSize.coerceIn(.02f, 1f)
+        val pressureWidth = if (settings.pressureSize) {
+            val curved = applyInputCurve(
+                calibratedPressure(pressure, settings.pressureCurve),
+                settings.dynamicsProfile.sizePressure,
+            )
+            minimum + curved * (1f - minimum)
+        } else {
+            1f
+        }
+        val velocityWidth = 1f - max(settings.velocitySize, settings.dynamicsProfile.velocitySize)
+            .coerceIn(0f, 1f) * speedFactor * .62f
+        val widthFactor = pressureWidth * velocityWidth
+        // A nominally large brush can still produce a thin dab at light pressure.
+        val fullTipWeight = ((widthFactor - .55f) / .30f).coerceIn(0f, 1f)
+        // At large sizes these tips already overlap heavily. Keep their full
+        // geometry and grain, while limiting repeated overdraw of the same area.
+        val largeTipWeight = ((settings.sizePx - 96f) / 84f).coerceIn(0f, 1f)
+        return max(requested, floor + (largeTipFloor - floor) * largeTipWeight * fullTipWeight)
     }
 
     internal fun drawStrokeSegment(
@@ -119,7 +152,8 @@ internal class BrushRasterSession(
         val elapsed = (to.timestampMillis - from.timestampMillis).coerceAtLeast(1L).toFloat()
         val speed = distance / elapsed
         val speedFactor = (speed / 2.4f).coerceIn(0f, 1f)
-        val effectivePressure = ((from.pressure + to.pressure) / 2f) * taperFactor(settings, progress)
+        val taper = taperFactor(settings, progress)
+        val effectivePressure = ((from.pressure + to.pressure) / 2f) * taper
         val angleRadians = atan2(deltaY.toDouble(), deltaX.toDouble()).toFloat()
         val stampBased = isStampBrush(settings.kind)
         val pigmentColor = mixPigmentColor(
@@ -129,7 +163,8 @@ internal class BrushRasterSession(
         )
 
         if (stampBased) {
-            val step = max(1.5f, settings.sizePx * stampSpacing(settings))
+            val minimumPressure = min(from.pressure, to.pressure) * taper
+            val step = max(1.5f, settings.sizePx * stampSpacing(settings, minimumPressure, speedFactor, drawingTool))
             val stampCount = max(1, ceil(distance / step).toInt()).coerceAtMost(MAX_STAMPS_PER_SEGMENT)
             repeat(stampCount) { index ->
                 val stampProgress = (index + 1f) / stampCount.toFloat()
@@ -137,8 +172,7 @@ internal class BrushRasterSession(
                     canvas = canvas,
                     x = from.x + deltaX * stampProgress,
                     y = from.y + deltaY * stampProgress,
-                    pressure = (from.pressure + (to.pressure - from.pressure) * stampProgress) *
-                        taperFactor(settings, progress),
+                    pressure = (from.pressure + (to.pressure - from.pressure) * stampProgress) * taper,
                     tilt = from.tilt + (to.tilt - from.tilt) * stampProgress,
                     drawingTool = drawingTool,
                     settings = settings,
@@ -246,7 +280,7 @@ internal class BrushRasterSession(
             strokePaint.colorFilter = if (drawingTool == DrawingTool.ERASER) {
                 null
             } else {
-                PorterDuffColorFilter(resolvedColor, PorterDuff.Mode.SRC_IN)
+                pigmentTint(resolvedColor)
             }
             canvas.drawBitmap(
                 customTip,
@@ -295,12 +329,10 @@ internal class BrushRasterSession(
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 canvas.drawOval(
-                    RectF(
-                        stampX - radius * tiltWidth,
-                        stampY - radius * roundness,
-                        stampX + radius * tiltWidth,
-                        stampY + radius * roundness,
-                    ),
+                    stampX - radius * tiltWidth,
+                    stampY - radius * roundness,
+                    stampX + radius * tiltWidth,
+                    stampY + radius * roundness,
                     strokePaint,
                 )
                 if (settings.grainProfile.depth > .08f) {
@@ -327,12 +359,10 @@ internal class BrushRasterSession(
                 when (settings.tipProfile.shape) {
                     BrushTipShape.ROUND -> canvas.drawCircle(stampX, stampY, radius, strokePaint)
                     BrushTipShape.OVAL, BrushTipShape.CHISEL -> canvas.drawOval(
-                        RectF(
-                            stampX - radius,
-                            stampY - radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
-                            stampX + radius,
-                            stampY + radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
-                        ),
+                        stampX - radius,
+                        stampY - radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
+                        stampX + radius,
+                        stampY + radius * settings.tipProfile.roundness.coerceIn(.08f, 1f),
                         strokePaint,
                     )
                     BrushTipShape.BRISTLE, BrushTipShape.PARTICLE -> {
@@ -341,12 +371,10 @@ internal class BrushRasterSession(
                             val unit = part / (count - 1f)
                             val offset = (unit - .5f) * radius * 1.2f
                             canvas.drawOval(
-                                RectF(
-                                    stampX - radius,
-                                    stampY + offset - max(.4f, radius * .05f),
-                                    stampX + radius,
-                                    stampY + offset + max(.4f, radius * .05f),
-                                ),
+                                stampX - radius,
+                                stampY + offset - max(.4f, radius * .05f),
+                                stampX + radius,
+                                stampY + offset + max(.4f, radius * .05f),
                                 strokePaint,
                             )
                         }
@@ -373,12 +401,10 @@ internal class BrushRasterSession(
                     baseAlpha * if (settings.kind == BrushKind.CHARCOAL) .2f else .14f
                 ).toInt().coerceIn(1, 255)
                 canvas.drawOval(
-                    RectF(
-                        stampX - radius * .82f,
-                        stampY - radius * .2f,
-                        stampX + radius * .82f,
-                        stampY + radius * .2f,
-                    ),
+                    stampX - radius * .82f,
+                    stampY - radius * .2f,
+                    stampX + radius * .82f,
+                    stampY + radius * .2f,
                     strokePaint,
                 )
                 canvas.restore()
@@ -402,12 +428,10 @@ internal class BrushRasterSession(
                         particleY,
                     )
                     canvas.drawOval(
-                        RectF(
-                            particleX - max(.55f, particleRadius),
-                            particleY - max(.45f, particleRadius * aspect),
-                            particleX + max(.55f, particleRadius),
-                            particleY + max(.45f, particleRadius * aspect),
-                        ),
+                        particleX - max(.55f, particleRadius),
+                        particleY - max(.45f, particleRadius * aspect),
+                        particleX + max(.55f, particleRadius),
+                        particleY + max(.45f, particleRadius * aspect),
                         strokePaint,
                     )
                     canvas.restore()
@@ -420,12 +444,10 @@ internal class BrushRasterSession(
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 val roundness = settings.tipProfile.roundness.coerceIn(.12f, 1f)
                 canvas.drawOval(
-                    RectF(
-                        stampX - radius,
-                        stampY - radius * roundness,
-                        stampX + radius,
-                        stampY + radius * roundness,
-                    ),
+                    stampX - radius,
+                    stampY - radius * roundness,
+                    stampX + radius,
+                    stampY + radius * roundness,
                     strokePaint,
                 )
                 canvas.restore()
@@ -460,12 +482,10 @@ internal class BrushRasterSession(
                             baseAlpha * (.3f + bristle * .36f / bristleCount)
                             ).toInt().coerceIn(1, 255)
                         canvas.drawOval(
-                            RectF(
-                                stampX - radius * .7f,
-                                stampY + offset - radius * .08f,
-                                stampX + radius * .7f,
-                                stampY + offset + radius * .08f,
-                            ),
+                            stampX - radius * .7f,
+                            stampY + offset - radius * .08f,
+                            stampX + radius * .7f,
+                            stampY + offset + radius * .08f,
                             strokePaint,
                         )
                     }
@@ -486,12 +506,10 @@ internal class BrushRasterSession(
                         baseAlpha * (.42f + bristle * .4f / bristleCount)
                         ).toInt().coerceIn(1, 255)
                     canvas.drawOval(
-                        RectF(
-                            stampX - radius,
-                            stampY + offset - radius * .055f,
-                            stampX + radius,
-                            stampY + offset + radius * .055f,
-                        ),
+                        stampX - radius,
+                        stampY + offset - radius * .055f,
+                        stampX + radius,
+                        stampY + offset + radius * .055f,
                         strokePaint,
                     )
                 }
@@ -509,12 +527,10 @@ internal class BrushRasterSession(
                     baseAlpha * (.64f - dilution * .24f)
                     ).toInt().coerceIn(1, 255)
                 canvas.drawOval(
-                    RectF(
-                        stampX - wetRadius,
-                        stampY - wetRadius * (.78f + wetness * .18f),
-                        stampX + wetRadius,
-                        stampY + wetRadius * (.78f + wetness * .18f),
-                    ),
+                    stampX - wetRadius,
+                    stampY - wetRadius * (.78f + wetness * .18f),
+                    stampX + wetRadius,
+                    stampY + wetRadius * (.78f + wetness * .18f),
                     strokePaint,
                 )
                 strokePaint.style = Paint.Style.STROKE
@@ -523,12 +539,10 @@ internal class BrushRasterSession(
                     baseAlpha * (.1f + wetness * .18f + settings.grain * .12f)
                     ).toInt().coerceIn(1, 255)
                 canvas.drawOval(
-                    RectF(
-                        stampX - radius * .91f + noiseX * radius * .06f,
-                        stampY - radius * .77f + noiseY * radius * .06f,
-                        stampX + radius * .91f + noiseX * radius * .06f,
-                        stampY + radius * .77f + noiseY * radius * .06f,
-                    ),
+                    stampX - radius * .91f + noiseX * radius * .06f,
+                    stampY - radius * .77f + noiseY * radius * .06f,
+                    stampX + radius * .91f + noiseX * radius * .06f,
+                    stampY + radius * .77f + noiseY * radius * .06f,
                     strokePaint,
                 )
                 strokePaint.style = Paint.Style.FILL
@@ -551,12 +565,10 @@ internal class BrushRasterSession(
                         baseAlpha * (.48f + ((bristleSeed ushr 18) and 0xFF) / 255f * .42f)
                         ).toInt().coerceIn(1, 255)
                     canvas.drawOval(
-                        RectF(
-                            stampX - radius * lengthNoise,
-                            stampY + offset - thickness,
-                            stampX + radius,
-                            stampY + offset + thickness,
-                        ),
+                        stampX - radius * lengthNoise,
+                        stampY + offset - thickness,
+                        stampX + radius,
+                        stampY + offset + thickness,
                         strokePaint,
                     )
                 }
@@ -644,12 +656,10 @@ internal class BrushRasterSession(
         when (dual.tip.shape) {
             BrushTipShape.ROUND -> canvas.drawCircle(centerX, centerY, secondaryRadius, strokePaint)
             BrushTipShape.OVAL, BrushTipShape.CHISEL -> canvas.drawOval(
-                RectF(
-                    centerX - secondaryRadius,
-                    centerY - secondaryRadius * roundness,
-                    centerX + secondaryRadius,
-                    centerY + secondaryRadius * roundness,
-                ),
+                centerX - secondaryRadius,
+                centerY - secondaryRadius * roundness,
+                centerX + secondaryRadius,
+                centerY + secondaryRadius * roundness,
                 strokePaint,
             )
             BrushTipShape.BRISTLE -> {
@@ -658,12 +668,10 @@ internal class BrushRasterSession(
                     val unit = bristle / (count - 1f)
                     val bristleY = centerY + (unit - .5f) * secondaryRadius * 1.4f
                     canvas.drawOval(
-                        RectF(
-                            centerX - secondaryRadius,
-                            bristleY - max(.35f, secondaryRadius * .045f),
-                            centerX + secondaryRadius,
-                            bristleY + max(.35f, secondaryRadius * .045f),
-                        ),
+                        centerX - secondaryRadius,
+                        bristleY - max(.35f, secondaryRadius * .045f),
+                        centerX + secondaryRadius,
+                        bristleY + max(.35f, secondaryRadius * .045f),
                         strokePaint,
                     )
                 }
@@ -679,12 +687,10 @@ internal class BrushRasterSession(
                         .12f + ((particleSeed ushr 9) and 0xFF) / 255f * .24f
                         )
                     canvas.drawOval(
-                        RectF(
-                            centerX + px - particleRadius,
-                            centerY + py - particleRadius * roundness,
-                            centerX + px + particleRadius,
-                            centerY + py + particleRadius * roundness,
-                        ),
+                        centerX + px - particleRadius,
+                        centerY + py - particleRadius * roundness,
+                        centerX + px + particleRadius,
+                        centerY + py + particleRadius * roundness,
                         strokePaint,
                     )
                 }
@@ -727,10 +733,9 @@ internal class BrushRasterSession(
             ).also { grainTextureCache[key] = it }
         }
         val textureScale = profile.scale.coerceIn(.15f, 4f)
-        grainShaderMatrix.reset()
-        grainShaderMatrix.setScale(textureScale, textureScale)
         if (profile.mode == BrushGrainMode.MOVING) {
             val movement = profile.movement.coerceIn(0f, 1f)
+            grainShaderMatrix.setScale(textureScale, textureScale)
             grainShaderMatrix.postRotate(
                 angleRadians * 180f / PI.toFloat() * movement,
                 x,
@@ -740,10 +745,23 @@ internal class BrushRasterSession(
                 x * movement + stampIndex * 1.7f,
                 y * movement + stampIndex * .9f,
             )
+            entry.shader.setLocalMatrix(grainShaderMatrix)
+            entry.stationaryScale = null
+        } else if (entry.stationaryScale != textureScale) {
+            grainShaderMatrix.setScale(textureScale, textureScale)
+            entry.shader.setLocalMatrix(grainShaderMatrix)
+            entry.stationaryScale = textureScale
         }
-        entry.shader.setLocalMatrix(grainShaderMatrix)
         paint.shader = entry.shader
-        paint.colorFilter = PorterDuffColorFilter(resolvedColor, PorterDuff.Mode.SRC_IN)
+        paint.colorFilter = pigmentTint(resolvedColor)
+    }
+
+    private fun pigmentTint(color: Int): PorterDuffColorFilter {
+        lastTintFilter?.takeIf { lastTintColor == color }?.let { return it }
+        return PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN).also {
+            lastTintColor = color
+            lastTintFilter = it
+        }
     }
 
     private fun resolveBrushRotation(

@@ -33,6 +33,21 @@ class BrushRasterSessionIntegrationTest {
     fun charcoalPixelsMatchCommittedDocument() =
         assertBrushMatchesDocument(BrushKind.CHARCOAL)
 
+    @Test
+    fun largeTipsKeepOriginalSpacingWhenDynamicsMakeTheMarkNarrow() {
+        BrushRasterSession().use { raster ->
+            val settings = BrushSettings(
+                sizePx = 180f, spacing = .05f, kind = BrushKind.WATERCOLOR,
+                pressureSize = true, minSize = .02f, pressureCurve = 1f,
+            )
+            val legacy = raster.stampSpacing(settings.copy(sizePx = 96f), .10f, 0f, DrawingTool.BRUSH)
+            assertEquals(legacy, raster.stampSpacing(settings, .10f, 0f, DrawingTool.BRUSH), .001f)
+            assertEquals(legacy, raster.stampSpacing(settings.copy(velocitySize = 1f), 1f, 1f, DrawingTool.BRUSH), .001f)
+            assertEquals(legacy, raster.stampSpacing(settings, 1f, 0f, DrawingTool.ERASER), .001f)
+            assertEquals(.20f, raster.stampSpacing(settings, 1f, 0f, DrawingTool.BRUSH), .001f)
+        }
+    }
+
     private fun assertBrushMatchesDocument(kind: BrushKind) {
         instrumentation.runOnMainSync {
             val view = DrawingView(context).apply {

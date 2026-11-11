@@ -2,9 +2,9 @@ package com.orbyte.canvasstudio.drawing
 
 import android.content.Context
 import android.graphics.Color
+import android.os.Build
 import android.view.MotionEvent
 import android.view.KeyEvent
-import android.view.View
 import android.widget.FrameLayout
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
@@ -18,9 +18,7 @@ import androidx.ink.strokes.Stroke
  * while [DrawingView] remains the source of truth for layers, undo, tiles and project persistence.
  */
 class InkDrawingContainer(context: Context) : FrameLayout(context) {
-    val drawingView = DrawingView(context).apply {
-        usePlatformLowLatencyPreview = true
-    }
+    val drawingView = DrawingView(context)
     private val inkView = InProgressStrokesView(context)
     private val pressurePenFamily = StockBrushes.pressurePen()
     private val previewBrushCache = object : LinkedHashMap<String, Brush>(16, 0.75f, true) {
@@ -69,71 +67,55 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
         post { requestFocus() }
     }
 
-    override fun dispatchTouchEvent(event: MotionEvent): Boolean = handleTouch(this, event)
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
-        drawingView.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
-
-    private fun handleTouch(view: View, event: MotionEvent): Boolean {
-        val useInk = drawingView.supportsPlatformLowLatencyPreview()
-        if (!useInk) {
-            activeInkStroke?.let { inkView.cancelStroke(it, event) }
-            activeInkStroke = null
-            activePointerId = -1
-            return drawingView.onTouchEvent(event)
-        }
-
-        // Ink may internally transform or batch the event. Give the document engine its own
-        // untouched copy first so the persisted stroke can never depend on preview behavior.
-        MotionEvent.obtain(event).let { engineEvent ->
-            try {
-                drawingView.onTouchEvent(engineEvent)
-            } finally {
-                engineEvent.recycle()
-            }
-        }
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // DrawingView reads the event synchronously before handing it to AndroidX Ink.
+        val handled = drawingView.onTouchEvent(event)
+        val index = event.actionIndex
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                view.requestUnbufferedDispatch(event)
-                activePointerId = event.getPointerId(event.actionIndex)
-                val toolType = event.getToolType(event.actionIndex)
-                val supportsInkPreview =
-                    toolType == MotionEvent.TOOL_TYPE_STYLUS ||
-                        toolType == MotionEvent.TOOL_TYPE_ERASER
-                activeInkStroke = if (supportsInkPreview) {
-                    inkView.startStroke(
-                        event,
-                        activePointerId,
-                        previewBrush(),
-                    )
-                } else {
-                    null
+                endInk(event, canceled = true)
+                if (event.getToolType(index) == MotionEvent.TOOL_TYPE_STYLUS &&
+                    drawingView.hasActiveBrushStroke() && drawingView.supportsPlatformLowLatencyPreview()
+                ) {
+                    requestUnbufferedDispatch(event)
+                    val pointerId = event.getPointerId(index)
+                    activeInkStroke = inkView.startStroke(event, pointerId, previewBrush())
+                    activePointerId = pointerId
+                    drawingView.platformInkPreviewActive = true
                 }
             }
             MotionEvent.ACTION_MOVE -> {
                 activeInkStroke?.let { stroke ->
-                    inkView.addToStroke(event, activePointerId, stroke)
+                    if (event.findPointerIndex(activePointerId) >= 0 && drawingView.hasActiveBrushStroke()) {
+                        inkView.addToStroke(event, activePointerId, stroke)
+                    } else {
+                        endInk(event, canceled = true)
+                    }
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                val stroke = activeInkStroke
-                if (stroke != null) inkView.finishStroke(event, activePointerId, stroke)
-                activeInkStroke = null
-                activePointerId = -1
-                return true
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(index) == activePointerId) {
+                    val canceled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        event.flags and MotionEvent.FLAG_CANCELED != 0
+                    endInk(event, canceled)
+                }
             }
-            MotionEvent.ACTION_CANCEL -> {
-                activeInkStroke?.let { inkView.cancelStroke(it, event) }
-                activeInkStroke = null
-                activePointerId = -1
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                activeInkStroke?.let { inkView.cancelStroke(it, event) }
-                activeInkStroke = null
-                activePointerId = -1
-            }
+            MotionEvent.ACTION_CANCEL -> endInk(event, canceled = true)
         }
-        return true
+        return handled
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        drawingView.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
+
+    private fun endInk(event: MotionEvent, canceled: Boolean) {
+        val stroke = activeInkStroke ?: return
+        val pointerId = activePointerId
+        activeInkStroke = null
+        activePointerId = -1
+        drawingView.platformInkPreviewActive = false
+        if (canceled) inkView.cancelStroke(stroke, event)
+        else inkView.finishStroke(event, pointerId, stroke)
     }
 
     private fun previewBrush(): Brush {

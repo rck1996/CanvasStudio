@@ -94,7 +94,7 @@ internal object BrushFixture {
                 y = 160f + sin(t * PI * 2.2).toFloat() * 54f,
                 pressure = pressure,
                 tilt = (.08f + t * .84f).coerceAtMost(1f),
-                timestampMillis = index * if (index < 22) 15L else 5L,
+                timestampMillis = minOf(index, 21) * 15L + (index - 21).coerceAtLeast(0) * 5L,
                 orientation = (t * PI * .9).toFloat(),
             )
         }

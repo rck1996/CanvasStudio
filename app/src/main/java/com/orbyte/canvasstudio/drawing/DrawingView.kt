@@ -1652,13 +1652,23 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun symmetryCommands(command: DrawCommand): List<DrawCommand> =
-        symmetryMatrices().mapIndexed { index, matrix -> transformCommand(command, matrix, keepId = index == 0) }
+        if (radialSymmetryCount == 1 && !verticalSymmetry) {
+            // Identity symmetry must never copy every point or create matrices:
+            // a long stroke previously allocated a FloatArray and StrokePoint
+            // per sample even when symmetry was disabled.
+            listOf(command)
+        } else {
+            symmetryMatrices().mapIndexed { index, matrix ->
+                transformCommand(command, matrix, keepId = index == 0)
+            }
+        }
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN &&
             strokeCommitLane.hasPending &&
-            !canQueueAsyncStroke(tool, brushSettings, activeLayer())
+            (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0 ||
+                !canQueueAsyncStroke(tool, brushSettings, activeLayer()))
         ) {
             // Non-eligible gestures (eraser, selection, shape, mask edits) must
             // not overtake an unpublished brush command.
@@ -2200,6 +2210,17 @@ class DrawingView(context: Context) : View(context) {
      * transaction which publishes the complete tile batch. All other editor
      * mutations first flush the lane and replay its fallback synchronously.
      */
+    /** Accumulate length without allocating a Pair for each sampled segment. */
+    private fun strokeLength(points: List<StrokePoint>): Float {
+        var total = 0.0
+        for (index in 1 until points.size) {
+            val from = points[index - 1]
+            val to = points[index]
+            total += hypot(to.x - from.x, to.y - from.y).toDouble()
+        }
+        return total.toFloat()
+    }
+
     /** Uses the immutable settings captured at pointer-down, not the current toolbar state. */
     private fun strokeSettingsForQueuedCommand(commands: List<DrawCommand>): BrushSettings =
         (commands.singleOrNull() as? StrokeCommand)?.settings ?: brushSettings
@@ -2225,9 +2246,7 @@ class DrawingView(context: Context) : View(context) {
         val preserveAlpha = layer.alphaLocked
         val generation = documentGeneration
         val preview = QueuedStrokePreview(stroke)
-        val length = completedPoints.zipWithNext().sumOf { (first, second) ->
-            hypot(second.x - first.x, second.y - first.y).toDouble()
-        }.toFloat()
+        val length = strokeLength(completedPoints)
         val event = DrawingInteractionEvent.StrokeCommitted(
             layerId = layer.id,
             lengthPx = length,
@@ -2358,9 +2377,7 @@ class DrawingView(context: Context) : View(context) {
             } else if (requiresFinalStrokeRebuild(command.settings)) {
                 rebuildLayerRegion(layer, combinedBounds(commands))
             }
-            val length = completedPoints.zipWithNext().sumOf { (first, second) ->
-                hypot(second.x - first.x, second.y - first.y).toDouble()
-            }.toFloat()
+            val length = strokeLength(completedPoints)
             onInteraction?.invoke(
                 DrawingInteractionEvent.StrokeCommitted(
                     layerId = layer.id,

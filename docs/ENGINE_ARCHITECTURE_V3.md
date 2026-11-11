@@ -228,6 +228,50 @@ This iteration changes only the **explicitly opt-in DEBUG raster path**:
 remains for history, save, layer operations and queue backpressure. No p95/p99
 stylus latency is claimed without an actual S Pen tablet and Perfetto traces.
 
+## M2-E — staged, revision-validated export pipeline
+
+The previous editor export flow called `DrawingView.exportOpenRaster()`
+from `Dispatchers.IO`, reading its live layer list, visibility, mask and Paint
+state while the owner thread could still be drawing. PSD also rendered its
+merged image directly through the View from a worker. PNG rendered its huge
+composite Bitmap on the UI thread before encoding on IO.
+
+The editor's PNG, PSD and OpenRaster UI flows now use the same safe contract:
+
+1. **Owner thread**: `DrawingView.captureExportSnapshot()` drains pending
+   async stroke commits, rejects an unfinished active stylus gesture and a
+   pending transform, then freezes document size, layer names/visibility,
+   effective opacity, blend modes, clipping, masks, surface revision numbers
+   and an atomic `exportMetadataEpoch`.
+2. **Worker thread**: `DocumentExportSnapshot` creates its own Canvas/Paint
+   instances; uses `PreviewCompositor` and detached per-tile snapshots for
+   full-resolution PNG / merged PSD / OpenRaster layers and previews. It does
+   **not** enumerate or edit `DrawingView`'s live metadata.
+3. **Atomic staging**: output is first encoded into an isolated cache file.
+   Immediately before copying bytes to the destination stream, the worker
+   validates the pinned raster revisions and metadata epoch once more.
+   If they changed, it discards the temporary file and reports a retryable
+   error instead of publishing an export with mixed revisions.
+4. **Cleanup**: the stage file is deleted in `finally`. No full-resolution
+   bitmap survives the encoding call; layer bitmaps in OpenRaster are released
+   after each ZIP entry.
+5. **Regressions**: emulator tests decode PNG, PSD and ORA, check transparent
+   backgrounds and pixels, compare layered multiply/opacity composites to the
+   existing Canvas path, reject stale raster/metadata exports with zero
+   destination bytes, and verify that pending async strokes are committed
+   before an export snapshot is taken.
+
+This is **optimistic revision validation**, not an immutable document database.
+A document edited during a long export may cause that export to fail and ask
+the user to retry. Temporary disk space is needed for the staged file. The
+older public View export methods remain for compatibility but are not used
+from the editor's active IO export launchers.
+
+There is still no nonblocking undo/redo implementation; a history operation
+continues to synchronously resolve pending commits before modifying the
+document. This conservatively protects integrity while the next milestone
+addresses deferred, cancellable history operations.
+
 ## Proposed M2-C activation gate
 
 - Record input, stroke command, selected layer ID, surface ID, original tile

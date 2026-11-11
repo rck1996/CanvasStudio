@@ -44,6 +44,7 @@ import com.orbyte.canvasstudio.drawing.pipeline.OrderedRasterCommandQueue
 import com.orbyte.canvasstudio.drawing.pipeline.StrokeCommitLane
 import com.orbyte.canvasstudio.drawing.raster.DetachedStrokeRasterizer
 import com.orbyte.canvasstudio.drawing.raster.PreviewCompositor
+import com.orbyte.canvasstudio.drawing.raster.DocumentExportSnapshot
 import com.orbyte.canvasstudio.drawing.input.QuickShapeRecognizer
 import com.orbyte.canvasstudio.drawing.input.StylusInputController
 import com.orbyte.canvasstudio.drawing.history.HistoryRasterTarget
@@ -230,6 +231,8 @@ class DrawingView(context: Context) : View(context) {
     private var documentBounds = RectF(0f, 0f, documentWidth.toFloat(), documentHeight.toFloat())
     @Volatile private var documentGeneration = 0L
     @Volatile private var committedRevision = 0L
+    // Read by export workers only as an atomic epoch, never as mutable View state.
+    @Volatile private var exportMetadataEpoch = 0L
     private val layers = mutableListOf<LayerData>()
     private val layerGroups = mutableListOf<LayerGroupData>()
     private var activeLayerId: String = ""
@@ -684,6 +687,7 @@ class DrawingView(context: Context) : View(context) {
     private fun createEmptyDocument(width: Int, height: Int) {
         flushStrokeCommits()
         documentGeneration += 1L
+        exportMetadataEpoch++
         clearActiveStrokeState()
         cancelSelectionTransform(rebuild = false)
         selectionPath = null
@@ -4044,6 +4048,42 @@ class DrawingView(context: Context) : View(context) {
 
     fun zoomPercent(): Int = (currentScale * 100f).toInt().coerceAtLeast(1)
 
+    /**
+     * Capture export metadata and a version fence after committing all pending
+     * strokes. This MUST be called on the View owner thread; encoding happens
+     * later via DocumentExportSnapshot on Dispatchers.IO.
+     *
+     * The snapshot never consults live layer metadata on the export thread.
+     * Instead, it rejects exports that race with edits (atomic staging), so
+     * no partially updated file reaches the SAF destination.
+     */
+    internal fun captureExportSnapshot(): DocumentExportSnapshot {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "La captura de exportación debe ejecutarse en el hilo principal."
+        }
+        flushStrokeCommits()
+        check(transformBitmap == null) { "Confirma la transformación antes de exportar." }
+        return DocumentExportSnapshot(
+            width = documentWidth,
+            height = documentHeight,
+            cacheDirectory = context.cacheDir,
+            metadataEpoch = exportMetadataEpoch,
+            currentMetadataEpoch = { exportMetadataEpoch },
+            layers = layers.map { layer ->
+                DocumentExportSnapshot.Layer(
+                    name = layer.name,
+                    surface = layer.surface,
+                    maskSurface = layer.maskSurface,
+                    visible = isLayerEffectivelyVisible(layer),
+                    opacity = effectiveLayerOpacity(layer),
+                    blendMode = layer.blendMode,
+                    clipping = layer.clipping,
+                    maskEnabled = layer.maskEnabled,
+                )
+            },
+        )
+    }
+
     fun exportCompositeBitmap(includePaper: Boolean = true): Bitmap {
         check(transformBitmap == null) { "Confirma la transformación antes de exportar." }
         val requiredBytes = documentWidth.toLong() * documentHeight.toLong() * 4L
@@ -4902,6 +4942,8 @@ class DrawingView(context: Context) : View(context) {
     }
 
     private fun notifyLayers() {
+        // Any layer/group property change invalidates an in-progress staged export.
+        exportMetadataEpoch++
         onLayersChanged?.invoke(
             layers.asReversed().map { layer ->
                 LayerUiModel(

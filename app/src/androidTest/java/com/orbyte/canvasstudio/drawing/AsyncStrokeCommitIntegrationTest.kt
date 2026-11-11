@@ -56,6 +56,7 @@ class AsyncStrokeCommitIntegrationTest {
             // ACTION_DOWN imposes a synchronous barrier on the prior stroke.
             drawStroke(view, 240f, 220f, 340f, 220f)
             view.debugFlushPendingStrokeCommits()
+            assertEquals(2, view.debugAsyncStrokeEnqueueCount)
             assertEquals(2, committed)
             assertEquals(0, view.debugPendingStrokeCommits())
             assertTrue(Color.alpha(view.debugPixelForTest(115f, 140f)) > 0)
@@ -63,6 +64,56 @@ class AsyncStrokeCommitIntegrationTest {
             view.undo()
             assertEquals(0, Color.alpha(view.debugPixelForTest(290f, 220f)))
             assertTrue(Color.alpha(view.debugPixelForTest(115f, 140f)) > 0)
+        }
+    }
+
+    @Test
+    fun secondPenDownDoesNotFlushBlockedFirstRasterWorker() {
+        val enteredWorker = CountDownLatch(1)
+        val releaseWorker = CountDownLatch(1)
+        val twoCommits = CountDownLatch(2)
+        val view = DrawingView(context)
+        try {
+            instrumentation.runOnMainSync {
+                configure(view)
+                view.debugBeforeAsyncStrokePrepare = {
+                    enteredWorker.countDown()
+                    check(releaseWorker.await(25, TimeUnit.SECONDS)) {
+                        "Experimental worker release timed out"
+                    }
+                }
+                view.onInteraction = {
+                    if (it is DrawingInteractionEvent.StrokeCommitted) twoCommits.countDown()
+                }
+                drawStroke(view, 65f, 85f, 145f, 85f)
+            }
+            assertTrue("Raster worker never started", enteredWorker.await(10, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync {
+                // Worker #1 is deliberately blocked. Gesture #2 must still
+                // complete on UI, queue after #1 and remain visible, rather
+                // than force a synchronous replay of #1.
+                drawStroke(view, 280f, 315f, 390f, 315f)
+                assertEquals(2, view.debugAsyncStrokeEnqueueCount)
+                assertEquals(2, view.debugPendingStrokeCommits())
+                assertEquals(0, view.debugAsyncStrokeFallbackCount)
+                assertEquals(0, view.debugAsyncStrokePublishedCount)
+            }
+            releaseWorker.countDown()
+            assertTrue("Both ordered raster commits were not delivered",
+                twoCommits.await(55, TimeUnit.SECONDS))
+            instrumentation.runOnMainSync {
+                assertEquals(0, view.debugPendingStrokeCommits())
+                assertEquals(2, view.debugAsyncStrokePublishedCount)
+                assertEquals(0, view.debugAsyncStrokeFallbackCount)
+                assertTrue(Color.alpha(view.debugPixelForTest(104f, 85f)) > 0)
+                assertTrue(Color.alpha(view.debugPixelForTest(329f, 315f)) > 0)
+            }
+        } finally {
+            releaseWorker.countDown()
+            instrumentation.runOnMainSync {
+                view.debugBeforeAsyncStrokePrepare = null
+                view.debugFlushPendingStrokeCommits()
+            }
         }
     }
 

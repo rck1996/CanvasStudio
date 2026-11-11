@@ -501,7 +501,7 @@ fun EditorScreen(
     ) { uri ->
         val view = drawingView ?: return@rememberLauncherForActivityResult
         if (uri != null) {
-            val bitmap = runCatching { view.exportCompositeBitmap(includePaper = true) }
+            val snapshot = runCatching { view.captureExportSnapshot() }
                 .getOrElse { error ->
                     Toast.makeText(
                         context,
@@ -513,12 +513,9 @@ fun EditorScreen(
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
                     context.contentResolver.openOutputStream(uri)?.use { output ->
-                        check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 96, output)) {
-                            "No se pudo codificar la imagen PNG."
-                        }
+                        snapshot.writePng(output, includePaper = true)
                     } ?: error("No se pudo abrir el archivo de destino.")
                 }
-                bitmap.recycle()
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         context,
@@ -536,9 +533,18 @@ fun EditorScreen(
     ) { uri ->
         val view = drawingView ?: return@rememberLauncherForActivityResult
         if (uri != null) {
+            val snapshot = runCatching { view.captureExportSnapshot() }
+                .getOrElse { error ->
+                    Toast.makeText(
+                        context,
+                        error.message ?: "No se pudo preparar OpenRaster.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@rememberLauncherForActivityResult
+                }
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportOpenRaster)
+                    context.contentResolver.openOutputStream(uri)?.use(snapshot::writeOpenRaster)
                         ?: error("No se pudo abrir el archivo de destino.")
                 }
                 withContext(Dispatchers.Main) {
@@ -582,9 +588,18 @@ fun EditorScreen(
     ) { uri ->
         val view = drawingView ?: return@rememberLauncherForActivityResult
         if (uri != null) {
+            val snapshot = runCatching { view.captureExportSnapshot() }
+                .getOrElse { error ->
+                    Toast.makeText(
+                        context,
+                        error.message ?: "No se pudo preparar PSD.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    return@rememberLauncherForActivityResult
+                }
             scope.launch(Dispatchers.IO) {
                 val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportBasicPsd)
+                    context.contentResolver.openOutputStream(uri)?.use(snapshot::writeBasicPsd)
                         ?: error("No se pudo abrir el archivo de destino.")
                 }
                 withContext(Dispatchers.Main) {

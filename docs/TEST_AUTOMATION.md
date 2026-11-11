@@ -107,8 +107,39 @@ inclinación ni la frecuencia real de un S Pen.
 `.github/workflows/android-ci.yml` ejecuta en cada push y pull request:
 
 - `lintDebug`;
+- `testDebugUnitTest` (regresiones JVM rápidas);
 - `assembleDebug`;
 - `assembleDebugAndroidTest`;
 - `assembleRelease`;
 - `bundleRelease`;
 - publicación de reportes y artefactos de compilación.
+
+## Integridad de datos (auditoría de noviembre de 2026)
+
+El hardening protege las copias de proyectos y su publicación atómica, evita colisiones
+entre snapshots y conserva copias originales cuando falla una restauración. Los tiles
+PNG se guardan mediante `AtomicFile` y el codec PSD valida estrictamente los datos RLE.
+
+Las pruebas `androidTest` de persistencia, tiles y PSD **requieren emulador o dispositivo**
+y no se ejecutan con el paso JVM del CI. La certificación completa sigue usando
+`scripts/run-tablet-instrumentation.ps1`; una compilación no reemplaza esa validación.
+
+## Nuevas regresiones del guardado completo y papelera
+
+El workflow `.github/workflows/android-emulator.yml` incluye pruebas instrumentadas
+para publicar/revertir guardados completos, recuperar cierres entre renombrados,
+restaurar proyectos desde la papelera y confirmar la eliminación permanente desde
+la interfaz Compose. Una ejecución exitosa en emulador API 35 no verifica por sí sola
+el hardware del S Pen ni la resistencia a cortes de energía.
+
+## Rendimiento y UX (iteración Procreate/Android)
+
+La suite CI normal compila y ejecuta `QuickBrushSizingTest` y
+`ColorWheelGeometryTest` en JVM. El workflow emulado ejecuta además
+`SparseTileScratchTest`, `PreviewBitmapRepositoryTest`,
+`CanvasPresetRepositoryTest`, `RecentColorRepositoryTest`,
+`QuickDialUiTest`, `ColorWheelUiTest` y `CanvasFormatUiTest`.
+
+En QA manual de S Pen, comparar p95 y p99 de frame, asignaciones de Java,
+caché de tiles, ausencia de presión perdida y movimiento de sliders/selector HSV
+sobre un documento con muchas capas. No usar tiempos de CI como cifras de FPS.

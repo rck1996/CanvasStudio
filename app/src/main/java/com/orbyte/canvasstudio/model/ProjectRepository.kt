@@ -1,18 +1,26 @@
 package com.orbyte.canvasstudio.model
 
 import android.content.Context
+import android.util.AtomicFile
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.Properties
+import java.util.UUID
 
 object ProjectRepository {
     private const val ROOT_FOLDER = "canvasstudio/projects"
 
     fun projectsRoot(context: Context): File = File(context.filesDir, ROOT_FOLDER).apply { mkdirs() }
 
-    fun projectDirectory(context: Context, projectId: String): File =
-        File(projectsRoot(context), safeId(projectId)).apply { mkdirs() }
+    /** UUIDs prevent accidental collisions between rapid project creations. */
+    fun newProjectId(): String = "project-${UUID.randomUUID()}"
+
+    fun projectDirectory(context: Context, projectId: String): File {
+        val id = safeId(projectId)
+        ProjectSaveTransaction.recover(context, id)
+        return File(projectsRoot(context), id).apply { mkdirs() }
+    }
 
     fun previewPath(context: Context, projectId: String): String =
         File(projectDirectory(context, projectId), "preview.png").absolutePath
@@ -21,60 +29,74 @@ object ProjectRepository {
         recoverMetadata(projectDirectory(context, projectId))
 
     fun loadLocalProjects(context: Context): List<ProjectCard> {
+        ProjectSaveTransaction.recoverPending(context)
         val root = projectsRoot(context)
         return root.listFiles()
             .orEmpty()
-            .filter { it.isDirectory && recoverMetadata(it).isFile }
+            .filter { directory ->
+                directory.isDirectory &&
+                    !directory.name.endsWith(".partial") &&
+                    !directory.name.endsWith(".restore") &&
+                    !directory.name.endsWith(".before-restore") &&
+                    !directory.name.endsWith(".save-stage") &&
+                    !directory.name.endsWith(".before-save") &&
+                    !directory.name.contains(".failed-save-") &&
+                    recoverMetadata(directory).isFile
+            }
             .mapNotNull(::readProjectCard)
             .sortedByDescending(ProjectCard::modifiedEpoch)
     }
 
     fun deleteProject(context: Context, projectId: String): Boolean {
-        val directory = File(projectsRoot(context), safeId(projectId))
+        val id = safeId(projectId)
+        if (ProjectSaveTransaction.isActive(id)) return false
+        ProjectSaveTransaction.recover(context, id)
+        val directory = File(projectsRoot(context), id)
         val deleted = !directory.exists() || directory.deleteRecursively()
         if (deleted) ProjectVersionStore.deleteAll(context, projectId)
         return deleted
     }
 
     fun duplicateProject(context: Context, sourceId: String, newTitle: String? = null): ProjectCard? {
-        val source = File(projectsRoot(context), safeId(sourceId))
-        if (!source.isDirectory) return null
+        val safeSourceId = safeId(sourceId)
+        if (ProjectSaveTransaction.isActive(safeSourceId)) return null
+        ProjectSaveTransaction.recover(context, safeSourceId)
+        val source = File(projectsRoot(context), safeSourceId)
+        if (!source.isDirectory || !isUsableMetadata(recoverMetadata(source))) return null
 
-        val destinationId = "project-${System.currentTimeMillis()}"
-        val destination = File(projectsRoot(context), safeId(destinationId))
-        if (!source.copyRecursively(destination, overwrite = false)) {
-            destination.deleteRecursively()
-            return null
-        }
+        val destinationId = newProjectId()
+        val root = projectsRoot(context)
+        val staging = File(root, "$destinationId.partial")
+        val destination = File(root, destinationId)
+        if (staging.exists() || destination.exists()) return null
 
+        // Only publish a copy after all files and its new metadata are ready.
         return runCatching {
-            val metadataFile = recoverMetadata(destination)
+            check(source.copyRecursively(staging, overwrite = false))
+            val metadata = recoverMetadata(staging)
             val properties = Properties().apply {
-                FileInputStream(metadataFile).use { input -> load(input) }
+                FileInputStream(metadata).use(::load)
                 setProperty("id", destinationId)
-                setProperty(
-                    "title",
-                    newTitle ?: "${getProperty("title", "Proyecto")} copia",
-                )
+                setProperty("title", newTitle ?: "${getProperty("title", "Proyecto")} copia")
                 setProperty("modifiedEpoch", System.currentTimeMillis().toString())
             }
-            val temporary = File(destination, "project.properties.tmp")
-            FileOutputStream(temporary).use { output ->
+            val atomic = AtomicFile(File(staging, "project.properties"))
+            var output: FileOutputStream? = null
+            try {
+                output = atomic.startWrite()
                 properties.store(output, "Canvas Studio project")
-                output.fd.sync()
+                atomic.finishWrite(output)
+            } catch (error: Exception) {
+                output?.let(atomic::failWrite)
+                throw error
             }
-            val backup = File(destination, "project.properties.bak")
-            if (metadataFile.exists()) {
-                metadataFile.copyTo(backup, overwrite = true)
-                check(metadataFile.delete()) { "No se pudo reemplazar la metadata del duplicado" }
-            }
-            if (!temporary.renameTo(metadataFile)) {
-                if (backup.isFile) backup.copyTo(metadataFile, overwrite = true)
-                error("No se pudo completar el duplicado del proyecto")
-            }
-            backup.delete()
-            checkNotNull(readProjectCard(destination)) { "No se pudo leer el proyecto duplicado" }
+            // Do not carry the source project's old recovery metadata into its copy.
+            File(staging, "project.properties.tmp").delete()
+            File(staging, "project.properties.bak").delete()
+            check(!destination.exists() && staging.renameTo(destination))
+            checkNotNull(readProjectCard(destination))
         }.getOrElse {
+            staging.deleteRecursively()
             destination.deleteRecursively()
             null
         }
@@ -85,6 +107,7 @@ object ProjectRepository {
             FileInputStream(recoverMetadata(directory)).use { input -> load(input) }
         }
         val id = properties.getProperty("id") ?: directory.name
+        if (id != directory.name) return@runCatching null
         ProjectCard(
             id = id,
             title = properties.getProperty("title", "Proyecto sin título"),

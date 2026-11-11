@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -112,11 +113,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -126,6 +129,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
@@ -165,6 +169,7 @@ import com.orbyte.canvasstudio.drawing.sanitized
 import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
+import com.orbyte.canvasstudio.model.RecentColorRepository
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialFocusProvider
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialOverlay
@@ -176,6 +181,9 @@ import com.orbyte.canvasstudio.ui.tutorial.freshEditorTutorialState
 import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
 import com.orbyte.canvasstudio.ui.tutorial.tutorialRuntimePolicy
 import com.orbyte.canvasstudio.ui.tutorial.tutorialShouldExitMaskEditing
+import com.orbyte.canvasstudio.ui.workspace.QuickBrushSizing
+import com.orbyte.canvasstudio.ui.workspace.ColorWheelSelection
+import com.orbyte.canvasstudio.ui.workspace.colorWheelSelection
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
@@ -186,6 +194,7 @@ import com.orbyte.canvasstudio.ui.workspace.quickAccessActionsFor
 import com.orbyte.canvasstudio.ui.workspace.quickAccessItems
 import com.orbyte.canvasstudio.ui.workspace.quickMenuTopLeft
 import com.orbyte.canvasstudio.ui.workspace.reassignQuickAccessAction
+import com.orbyte.canvasstudio.ui.workspace.shouldShowInspector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -347,8 +356,24 @@ fun EditorScreen(
     var changeTick by remember { mutableIntStateOf(0) }
     var saveLabel by remember { mutableStateOf(if (tutorialMode) "Sesión temporal" else "Guardado automático") }
     var zenMode by remember { mutableStateOf(false) }
+    // Portrait tablets should open on the canvas, not a 316dp side inspector.
+    // Landscape keeps the dock visible by default; compact layouts expose a toggle.
+    var inspectorExpanded by remember(tutorialMode) { mutableStateOf(tutorialMode) }
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
+    }
+    var quickShapeEnabled by remember(tutorialMode) {
+        mutableStateOf(!tutorialMode && workspacePreferences.getBoolean("quick_shape_enabled", false))
+    }
+    var recentColors by remember { mutableStateOf(RecentColorRepository.load(context)) }
+    var lastRecordedColor by remember { mutableIntStateOf(brushSettings.color) }
+    // Color-wheel and HSV sliders can emit dozens of changes per second. Persist the
+    // final selected color only after the gesture settles instead of doing disk I/O per move.
+    LaunchedEffect(brushSettings.color, tutorialMode) {
+        if (tutorialMode || brushSettings.color == lastRecordedColor) return@LaunchedEffect
+        delay(550)
+        recentColors = RecentColorRepository.record(context, brushSettings.color)
+        lastRecordedColor = brushSettings.color
     }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var quickMenuAnchor by remember { mutableStateOf<Offset?>(null) }
@@ -383,6 +408,8 @@ fun EditorScreen(
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
+    var floatingBrushPaletteOpen by remember { mutableStateOf(false) }
+    var floatingBrushPaletteOffset by remember { mutableStateOf(IntOffset.Zero) }
     var brushDockResetTick by remember { mutableIntStateOf(0) }
     var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
     var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
@@ -435,7 +462,9 @@ fun EditorScreen(
         if (changeTick == 0 || tutorialMode) return@LaunchedEffect
         saveLabel = "Guardando…"
         delay(3_000)
-        drawingView?.saveProject(
+        // Autosave waits for the ordered raster lane without rasterizing
+        // pending strokes synchronously during a drawing gesture.
+        drawingView?.saveProjectWhenIdle(
             projectId = document.id,
             title = document.title,
             dpi = document.dpi,
@@ -469,62 +498,7 @@ fun EditorScreen(
         }
     }
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/png"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            val bitmap = runCatching { view.exportCompositeBitmap(includePaper = true) }
-                .getOrElse { error ->
-                    Toast.makeText(
-                        context,
-                        error.message ?: "No se pudo preparar la exportación.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@rememberLauncherForActivityResult
-                }
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { output ->
-                        check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 96, output)) {
-                            "No se pudo codificar la imagen PNG."
-                        }
-                    } ?: error("No se pudo abrir el archivo de destino.")
-                }
-                bitmap.recycle()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PNG exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar PNG.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
-
-    val openRasterLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/openraster"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportOpenRaster)
-                        ?: error("No se pudo abrir el archivo de destino.")
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "OpenRaster exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar OpenRaster.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
+    val exportActions = rememberEditorExportActions(drawingView)
 
     val importImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -545,28 +519,6 @@ fun EditorScreen(
                     } else {
                         Toast.makeText(context, "No se pudo abrir la imagen.", Toast.LENGTH_LONG).show()
                     }
-                }
-            }
-        }
-    }
-
-    val exportPsdLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/vnd.adobe.photoshop"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportBasicPsd)
-                        ?: error("No se pudo abrir el archivo de destino.")
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PSD compuesto exportado"
-                        else result.exceptionOrNull()?.message ?: "No se pudo exportar PSD.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
                 }
             }
         }
@@ -695,6 +647,7 @@ fun EditorScreen(
         if (policy.closeTransientUi) {
             quickMenuOpen = false
             brushLibraryOpen = false
+            floatingBrushPaletteOpen = false
             quickMenuEditSlot = null
             zenMode = false
         }
@@ -764,6 +717,7 @@ fun EditorScreen(
             QuickAccessAction.MASK_WORKFLOW -> openActiveMaskWorkflow()
             QuickAccessAction.OPEN_LAYERS -> {
                 zenMode = false
+                inspectorExpanded = true
                 selectedDock = DockTab.LAYERS
             }
         }
@@ -807,19 +761,16 @@ fun EditorScreen(
                     tutorialSession?.observe(StudioTutorialEvent.ExportFormatSelected("PNG"))
                     tutorialSession?.observe(StudioTutorialEvent.ExportPreviewGenerated("PNG", document.width, document.height))
                 } else {
-                    val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                    exportLauncher.launch("$safeName.png")
+                    exportActions.png(document.title)
                 }
             },
             onExportOpenRaster = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                openRasterLauncher.launch("$safeName.ora")
+                exportActions.openRaster(document.title)
             },
             onExportPsd = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                exportPsdLauncher.launch("$safeName.psd")
+                exportActions.psd(document.title)
             },
             onImportImage = { importImageLauncher.launch("image/*") },
             onImportPsd = { importPsdLauncher.launch(arrayOf("image/vnd.adobe.photoshop", "application/octet-stream")) },
@@ -846,6 +797,16 @@ fun EditorScreen(
             onToggleAngleSnapping = {
                 angleSnappingEnabled = !angleSnappingEnabled
                 drawingView?.setAngleSnappingEnabled(angleSnappingEnabled)
+            },
+            quickShapeEnabled = quickShapeEnabled,
+            onToggleQuickShape = {
+                quickShapeEnabled = !quickShapeEnabled
+                drawingView?.quickShapeEnabled = quickShapeEnabled
+                if (!tutorialMode) {
+                    workspacePreferences.edit()
+                        .putBoolean("quick_shape_enabled", quickShapeEnabled)
+                        .apply()
+                }
             },
             symmetryLabel = when (symmetryMode) {
                 1 -> "Simetría vertical"
@@ -885,23 +846,39 @@ fun EditorScreen(
             },
             zenMode = zenMode,
             onToggleZen = { zenMode = !zenMode },
+            inspectorExpanded = inspectorExpanded,
+            onToggleInspector = {
+                inspectorExpanded = !inspectorExpanded
+                if (inspectorExpanded) zenMode = false
+            },
             onShowHelp = { showHelp = true },
             onOpenTutorial = onOpenTutorial,
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val compactWorkspace = maxWidth < 1080.dp
+            val compactWorkspace = maxWidth < 1120.dp
             Row(Modifier.fillMaxSize()) {
             if (!zenMode) {
                 EditorToolRail(
                     selectedTool = selectedTool,
                     compact = compactWorkspace,
                     onSelect = { selectedTool = it },
-                    onTune = { brushLibraryOpen = true },
+                    onTune = {
+                        if (tutorialMode) brushLibraryOpen = true
+                        else floatingBrushPaletteOpen = !floatingBrushPaletteOpen
+                    },
                 )
             }
 
-            Box(Modifier.weight(1f).fillMaxHeight()) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight()) {
+                val paletteDensity = LocalDensity.current
+                val maxPaletteX = with(paletteDensity) {
+                    (maxWidth - 308.dp - 14.dp).coerceAtLeast(0.dp).roundToPx()
+                }
+                val floatingPaletteMaxHeight = (maxHeight - 90.dp).coerceIn(168.dp, 440.dp)
+                val maxPaletteY = with(paletteDensity) {
+                    (maxHeight - floatingPaletteMaxHeight - 70.dp).coerceAtLeast(0.dp).roundToPx()
+                }
                 AndroidView(
                     factory = { viewContext ->
                         InkDrawingContainer(viewContext).also { container ->
@@ -930,6 +907,7 @@ fun EditorScreen(
                             }
                             tool = selectedTool
                             brushSettings = brushSettings
+                            quickShapeEnabled = quickShapeEnabled
                             onLayersChanged = { layerModels = it }
                             onLayerGroupsChanged = { layerGroups = it }
                             onDocumentChanged = { changeTick++ }
@@ -993,6 +971,7 @@ fun EditorScreen(
                         val view = container.drawingView
                         view.tool = selectedTool
                         view.brushSettings = brushSettings
+                        view.quickShapeEnabled = quickShapeEnabled
                         view.setGridVisible(gridVisible)
                         view.setRulersVisible(rulersVisible)
                         view.setDocumentDpi(document.dpi)
@@ -1053,6 +1032,38 @@ fun EditorScreen(
                     modifier = Modifier.align(Alignment.TopStart).padding(14.dp),
                 )
 
+                if (floatingBrushPaletteOpen && !zenMode) {
+                    FloatingBrushPalette(
+                        brushes = availableBrushes,
+                        selectedPresetId = selectedPreset.id,
+                        favoriteBrushIds = favoriteBrushIds,
+                        recentBrushIds = recentBrushIds,
+                        maxPanelHeight = floatingPaletteMaxHeight,
+                        onPresetSelected = { preset ->
+                            applyBrushPreset(preset)
+                            floatingBrushPaletteOpen = false
+                        },
+                        onOpenAdvanced = {
+                            floatingBrushPaletteOpen = false
+                            brushLibraryOpen = true
+                        },
+                        onDismiss = { floatingBrushPaletteOpen = false },
+                        onDragBy = { amount ->
+                            floatingBrushPaletteOffset = IntOffset(
+                                (floatingBrushPaletteOffset.x + amount.x.toInt()).coerceIn(0, maxPaletteX),
+                                (floatingBrushPaletteOffset.y + amount.y.toInt()).coerceIn(0, maxPaletteY),
+                            )
+                        },
+                        modifier = Modifier.align(Alignment.TopStart)
+                            .offset {
+                                IntOffset(
+                                    with(paletteDensity) { 14.dp.roundToPx() } + floatingBrushPaletteOffset.x,
+                                    with(paletteDensity) { 70.dp.roundToPx() } + floatingBrushPaletteOffset.y,
+                                )
+                            },
+                    )
+                }
+
                 if (quickMenuOpen) {
                     RadialQuickMenu(
                         actions = quickAccessActions,
@@ -1092,14 +1103,23 @@ fun EditorScreen(
                 }
 
                 if (!zenMode) {
-                    Column(
-                        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
+                    // One set of interactive dials. Wide tablets lay them out as
+                    // the reference design; compact screens keep a vertical stack.
+                    val quickDialItems: @Composable () -> Unit = {
                         QuickDial(
                             label = "Tamaño",
-                            progress = brushSettings.sizePx / 180f,
+                            progress = QuickBrushSizing.sizeProgress(brushSettings.sizePx),
                             value = "${brushSettings.sizePx.toInt()} px",
+                            onProgressChanged = { progress ->
+                                val before = brushSettings.sizePx
+                                val after = QuickBrushSizing.sizeFromProgress(progress)
+                                brushSettings = brushSettings.copy(sizePx = after)
+                                if (abs(after - before) >= 0.1f) {
+                                    tutorialSession?.observe(
+                                        StudioTutorialEvent.BrushParameterChanged("size", before, after),
+                                    )
+                                }
+                            },
                             onDecrease = {
                                 val before = brushSettings.sizePx
                                 brushSettings = brushSettings.copy(sizePx = (before / 1.16f).coerceAtLeast(2f))
@@ -1113,12 +1133,33 @@ fun EditorScreen(
                         )
                         QuickDial(
                             label = "Opacidad",
-                            progress = brushSettings.opacity,
+                            progress = QuickBrushSizing.opacityProgress(brushSettings.opacity),
                             value = "${(brushSettings.opacity * 100).toInt()}%",
+                            onProgressChanged = { progress ->
+                                brushSettings = brushSettings.copy(
+                                    opacity = QuickBrushSizing.opacityFromProgress(progress),
+                                )
+                            },
                             onDecrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity - .1f).coerceAtLeast(.05f)) },
                             onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
                             color = Color(brushSettings.color),
                         )
+                    }
+                    if (maxWidth >= 780.dp) {
+                        Row(
+                            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            quickDialItems()
+                        }
+                    } else {
+                        Column(
+                            modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            quickDialItems()
+                        }
                     }
                 }
 
@@ -1172,9 +1213,9 @@ fun EditorScreen(
                 )
             }
 
-            if (!zenMode) {
+            if (shouldShowInspector(compactWorkspace, inspectorExpanded, zenMode)) {
                 RightDock(
-                    dockWidth = if (compactWorkspace) 316.dp else 360.dp,
+                    dockWidth = if (compactWorkspace) 286.dp else 320.dp,
                     selectedTab = selectedDock,
                     onSelectTab = {
                         selectedDock = it
@@ -1184,6 +1225,11 @@ fun EditorScreen(
                     selectedPreset = selectedPreset,
                     brushes = availableBrushes,
                     brushSettings = brushSettings,
+                    recentColors = recentColors,
+                    onClearRecentColors = {
+                        RecentColorRepository.clear(context)
+                        recentColors = emptyList()
+                    },
                     onPresetSelected = applyBrushPreset,
                     onBrushSettingsChanged = { updated ->
                         val before = brushSettings.sizePx
@@ -1423,6 +1469,7 @@ fun EditorScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("S Pen: presión e inclinación controlan el trazo; el botón lateral activa el borrador temporal.")
                     Text("Vista: usa dos dedos para mover, ampliar y girar. Restablecer vista vuelve al encuadre inicial.")
+                    Text("QuickShape: activa la varita de la barra y mantén el lápiz quieto al terminar una línea para enderezarla.")
                     Text("Rendimiento: los tiles visibles permanecen en memoria y se guardan incrementalmente.")
                     Text("Teclado: B pincel, E borrador, H mano, Ctrl+Z deshacer. El perfil puede cambiarse en Ajustes.")
                     Text("La cuadrícula solo es una guía visual y nunca se exporta.")
@@ -1489,12 +1536,16 @@ private fun EditorTopBar(
     onToggleRulerUnits: () -> Unit,
     angleSnappingEnabled: Boolean,
     onToggleAngleSnapping: () -> Unit,
+    quickShapeEnabled: Boolean,
+    onToggleQuickShape: () -> Unit,
     symmetryLabel: String,
     onCycleSymmetry: () -> Unit,
     guideLabel: String,
     onCycleGuides: () -> Unit,
     zenMode: Boolean,
     onToggleZen: () -> Unit,
+    inspectorExpanded: Boolean,
+    onToggleInspector: () -> Unit,
     onShowHelp: () -> Unit,
     onOpenTutorial: () -> Unit,
 ) {
@@ -1507,12 +1558,13 @@ private fun EditorTopBar(
             .border(1.dp, StudioPalette.Border),
     ) {
         val compact = maxWidth < 1120.dp
+        val narrow = maxWidth < 760.dp
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = StudioPalette.Text) }
-            Column(Modifier.width(if (compact) 148.dp else 230.dp)) {
+            Column(Modifier.width(if (compact) 118.dp else 230.dp)) {
                 Text(
                     document.title,
                     color = StudioPalette.Text,
@@ -1531,7 +1583,14 @@ private fun EditorTopBar(
             TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", "undo", onUndo)
             TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", "redo", onRedo)
             Spacer(Modifier.width(6.dp))
-            Surface(
+            if (narrow) {
+                TopIconButton(
+                    Icons.Outlined.CenterFocusStrong,
+                    "Restablecer vista",
+                    "view_reset",
+                    onResetView,
+                )
+            } else Surface(
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -1566,6 +1625,25 @@ private fun EditorTopBar(
                     Text(saveLabel, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
                 }
                 Spacer(Modifier.width(10.dp))
+            }
+            if (compact) {
+                TopIconButton(
+                    Icons.Outlined.Layers,
+                    if (inspectorExpanded) "Ocultar inspector" else "Mostrar paneles de edición",
+                    null,
+                    onToggleInspector,
+                )
+            }
+            IconButton(
+                onClick = onToggleQuickShape,
+                modifier = Modifier.size(42.dp).testTag("quickshape_toggle"),
+            ) {
+                Icon(
+                    Icons.Outlined.AutoFixNormal,
+                    contentDescription = if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape",
+                    tint = if (quickShapeEnabled) StudioPalette.Accent else StudioPalette.TextMuted,
+                    modifier = Modifier.size(21.dp),
+                )
             }
             TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", null, onToggleZen)
             Button(
@@ -1623,6 +1701,13 @@ private fun EditorTopBar(
                         text = { Text("Tutorial interactivo") },
                         leadingIcon = { Icon(Icons.Outlined.Brush, null) },
                         onClick = { menuExpanded = false; onOpenTutorial() },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape · mantener para enderezar")
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.AutoFixNormal, null) },
+                        onClick = { menuExpanded = false; onToggleQuickShape() },
                     )
                     DropdownMenuItem(
                         text = { Text(if (gridVisible) "Ocultar cuadrícula" else "Mostrar cuadrícula") },
@@ -1693,11 +1778,11 @@ private fun EditorToolRail(
 ) {
     Column(
         modifier = Modifier
-            .width(if (compact) 72.dp else 92.dp)
+            .width(if (compact) 64.dp else 76.dp)
             .fillMaxHeight()
             .background(StudioPalette.Surface)
             .border(1.dp, StudioPalette.Border)
-            .padding(horizontal = if (compact) 6.dp else 9.dp, vertical = 12.dp),
+            .padding(horizontal = if (compact) 4.dp else 6.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
@@ -1758,46 +1843,74 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
 }
 
 @Composable
-private fun QuickDial(
+internal fun QuickDial(
     label: String,
     progress: Float,
     value: String,
     onDecrease: () -> Unit,
     onIncrease: () -> Unit,
+    onProgressChanged: (Float) -> Unit,
     color: Color? = null,
 ) {
     Surface(
-        modifier = Modifier.editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
+        modifier = Modifier
+            .width(252.dp)
+            .editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
         color = Color(0xEA171A1F),
         shape = RoundedCornerShape(15.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
     ) {
-        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxSize(),
-                    strokeWidth = 3.dp,
-                    color = StudioPalette.Accent,
-                    trackColor = StudioPalette.SurfaceHover,
-                )
-                Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 9.sp)
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxSize(),
+                        strokeWidth = 3.dp,
+                        color = StudioPalette.Accent,
+                        trackColor = StudioPalette.SurfaceHover,
+                    )
+                    Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 11.sp)
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
+                    Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                }
+                color?.let {
+                    Box(
+                        Modifier.size(22.dp)
+                            .background(it, CircleShape)
+                            .border(1.dp, Color.White.copy(alpha = .6f), CircleShape),
+                    )
+                }
+                IconButton(onClick = onDecrease, modifier = Modifier.size(42.dp)) {
+                    Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
+                }
+                IconButton(onClick = onIncrease, modifier = Modifier.size(42.dp)) {
+                    Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
+                }
             }
-            Spacer(Modifier.width(9.dp))
-            Column {
-                Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
-                Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
-            }
-            color?.let {
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.size(22.dp).background(it, CircleShape).border(1.dp, Color.White.copy(alpha = .6f), CircleShape))
-            }
-            IconButton(onClick = onDecrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
-            }
-            IconButton(onClick = onIncrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
-            }
+            // Keep an actual 48dp touch target: a smaller slider is hard to grab
+            // accurately with a finger and can miss a test drag at its edges.
+            // Material3 preserves its native SetProgress accessibility action.
+            Slider(
+                value = progress.coerceIn(0f, 1f),
+                onValueChange = onProgressChanged,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag(if (label == "Tamaño") "quick_slider_size" else "quick_slider_opacity")
+                    .semantics {
+                        contentDescription = "Deslizar $label"
+                        stateDescription = value
+                    },
+                colors = SliderDefaults.colors(
+                    thumbColor = StudioPalette.Accent,
+                    activeTrackColor = StudioPalette.Accent,
+                    inactiveTrackColor = StudioPalette.SurfaceHover,
+                ),
+            )
         }
     }
 }
@@ -2104,6 +2217,8 @@ private fun RightDock(
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
     brushSettings: BrushSettings,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
     onPresetSelected: (BrushPreset) -> Unit,
     onBrushSettingsChanged: (BrushSettings) -> Unit,
     onSaveCustomBrush: (String) -> Unit,
@@ -2175,6 +2290,8 @@ private fun RightDock(
             )
             DockTab.COLOR -> ColorDock(
                 currentColor = brushSettings.color,
+                recentColors = recentColors,
+                onClearRecentColors = onClearRecentColors,
                 onColorChanged = { onBrushSettingsChanged(brushSettings.copy(color = it)) },
             )
             DockTab.LAYERS -> LayersDock(
@@ -3157,7 +3274,7 @@ private fun BrushToggle(label: String, checked: Boolean, onCheckedChange: (Boole
 }
 
 @Composable
-private fun BrushPresetRow(
+internal fun BrushPresetRow(
     preset: BrushPreset,
     selected: Boolean,
     favorite: Boolean = false,
@@ -3357,7 +3474,12 @@ private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPoin
 }
 
 @Composable
-private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
+private fun ColorDock(
+    currentColor: Int,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
+    onColorChanged: (Int) -> Unit,
+) {
     val hsv = remember(currentColor) {
         FloatArray(3).also { AndroidColor.colorToHSV(currentColor, it) }
     }
@@ -3407,8 +3529,42 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             emitColor(newValue = it)
         }
         Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Colores recientes", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            if (recentColors.isNotEmpty()) {
+                TextButton(onClick = onClearRecentColors) { Text("Limpiar") }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (recentColors.isEmpty()) {
+            Text(
+                "Aquí aparecerán los colores que uses al pintar.",
+                color = StudioPalette.TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                recentColors.forEach { swatch ->
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .background(Color(swatch), RoundedCornerShape(8.dp))
+                            .border(1.dp, StudioPalette.Border, RoundedCornerShape(8.dp))
+                            .semantics {
+                                contentDescription = String.format(Locale.US, "Color reciente #%06X", swatch and 0xFFFFFF)
+                            }
+                            .clickable { onColorChanged(swatch) },
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth()) {
-            Text("Paleta reciente", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Text("Paleta básica", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
             Text(
                 String.format(Locale.US, "#%06X", 0xFFFFFF and currentColor),
@@ -3417,9 +3573,11 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             )
         }
         Spacer(Modifier.height(10.dp))
-        val swatches = listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        val baseSwatches = remember {
+            listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            swatches.forEach { swatch ->
+            baseSwatches.forEach { swatch ->
                 Box(
                     Modifier
                         .size(25.dp)
@@ -3433,7 +3591,7 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
 }
 
 @Composable
-private fun HueWheel(
+internal fun HueWheel(
     hue: Float,
     saturation: Float,
     value: Float,
@@ -3441,67 +3599,98 @@ private fun HueWheel(
     onHueChanged: (Float) -> Unit,
     onSaturationValueChanged: (Float, Float) -> Unit,
 ) {
+    val latestOnHueChanged by rememberUpdatedState(onHueChanged)
+    val latestOnSaturationValueChanged by rememberUpdatedState(onSaturationValueChanged)
+    // Three gradient draws replace the old 120 arcs + 576 swatch rectangles per frame.
+    // The two composited gradients are mathematically equivalent to HSV(saturation, value).
+    val hueRing = remember {
+        Brush.sweepGradient((0..6).map { step ->
+            Color(AndroidColor.HSVToColor(floatArrayOf(step * 60f, 1f, 1f)))
+        })
+    }
+    val saturationBrush = remember(hue) {
+        Brush.horizontalGradient(
+            listOf(Color.White, Color(AndroidColor.HSVToColor(floatArrayOf(hue, 1f, 1f)))),
+        )
+    }
+    val valueBrush = remember { Brush.verticalGradient(listOf(Color.Transparent, Color.Black)) }
+
     Canvas(
         modifier = modifier
+            .testTag("hsv_color_wheel")
             .pointerInput(Unit) {
                 detectTapGestures { point ->
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val dx = point.x - center.x
-                    val dy = point.y - center.y
-                    val radius = min(size.width, size.height) / 2f
-                    val distanceSquared = dx * dx + dy * dy
-                    if (distanceSquared > (radius * .62f) * (radius * .62f)) {
-                        val angle = (atan2(dy.toDouble(), dx.toDouble()).toFloat() * 180f / PI.toFloat() + 360f) % 360f
-                        onHueChanged(angle)
-                    } else {
-                        val squareHalf = radius * .42f
-                        val sat = ((point.x - (center.x - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        val v = (1f - (point.y - (center.y - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        onSaturationValueChanged(sat, v)
+                    when (val selection = colorWheelSelection(
+                        point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                    )) {
+                        is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                        is ColorWheelSelection.SaturationValue ->
+                            latestOnSaturationValueChanged(selection.saturation, selection.value)
+                        null -> Unit
                     }
                 }
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { point ->
+                        when (val selection = colorWheelSelection(
+                            point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        when (val selection = colorWheelSelection(
+                            change.position.x,
+                            change.position.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                        change.consume()
+                    },
+                )
             },
     ) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val outerRadius = min(size.width, size.height) / 2f
         val ringWidth = outerRadius * .19f
-        repeat(120) { index ->
-            drawArc(
-                color = Color(AndroidColor.HSVToColor(floatArrayOf(index * 3f, 1f, 1f))),
-                startAngle = index * 3f,
-                sweepAngle = 3.4f,
-                useCenter = false,
-                topLeft = Offset(center.x - outerRadius + ringWidth / 2f, center.y - outerRadius + ringWidth / 2f),
-                size = Size((outerRadius - ringWidth / 2f) * 2f, (outerRadius - ringWidth / 2f) * 2f),
-                style = Stroke(ringWidth),
-            )
-        }
+        val ringRadius = outerRadius - ringWidth / 2f
+        drawCircle(
+            brush = hueRing,
+            radius = ringRadius,
+            center = center,
+            style = Stroke(width = ringWidth),
+        )
         val squareHalf = outerRadius * .42f
-        val steps = 24
-        val cell = squareHalf * 2f / steps
-        repeat(steps) { xIndex ->
-            repeat(steps) { yIndex ->
-                val sat = xIndex / (steps - 1f)
-                val v = 1f - yIndex / (steps - 1f)
-                drawRect(
-                    Color(AndroidColor.HSVToColor(floatArrayOf(hue, sat, v))),
-                    topLeft = Offset(center.x - squareHalf + xIndex * cell, center.y - squareHalf + yIndex * cell),
-                    size = Size(cell + 1f, cell + 1f),
-                )
-            }
-        }
+        val topLeft = Offset(center.x - squareHalf, center.y - squareHalf)
+        val squareSize = Size(squareHalf * 2f, squareHalf * 2f)
+        drawRect(brush = saturationBrush, topLeft = topLeft, size = squareSize)
+        drawRect(brush = valueBrush, topLeft = topLeft, size = squareSize)
         val pointerAngle = hue * PI.toFloat() / 180f
-        val pointerRadius = outerRadius - ringWidth / 2f
         drawCircle(
             color = Color.White,
             radius = 6f,
-            center = Offset(center.x + cos(pointerAngle.toDouble()).toFloat() * pointerRadius, center.y + sin(pointerAngle.toDouble()).toFloat() * pointerRadius),
+            center = Offset(
+                center.x + cos(pointerAngle.toDouble()).toFloat() * ringRadius,
+                center.y + sin(pointerAngle.toDouble()).toFloat() * ringRadius,
+            ),
             style = Stroke(2.5f),
         )
         drawCircle(
             color = Color.White,
             radius = 5f,
-            center = Offset(center.x - squareHalf + saturation * squareHalf * 2f, center.y + squareHalf - value * squareHalf * 2f),
+            center = Offset(
+                center.x - squareHalf + saturation * squareHalf * 2f,
+                center.y + squareHalf - value * squareHalf * 2f,
+            ),
             style = Stroke(2f),
         )
     }
@@ -3544,8 +3733,8 @@ private fun LayersDock(
     var propertiesExpanded by remember { mutableStateOf(false) }
     var inspectorPage by remember { mutableIntStateOf(0) }
     var actionsMenuExpanded by remember { mutableStateOf(false) }
-    val visibleLayers = layers.filter { layer ->
-        layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
+    val layerOutline = remember(layers, groups, layerQuery) {
+        buildLayerOutline(layers, groups, layerQuery)
     }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(14.dp)) {
@@ -3763,36 +3952,20 @@ private fun LayersDock(
             }
         }
         HorizontalDivider(color = StudioPalette.Border)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(10.dp)) {
-            val emittedGroups = mutableSetOf<String>()
-            val groupsById = groups.associateBy { it.id }
-            fun ancestry(groupId: String?): List<LayerGroupUiModel> {
-                val result = mutableListOf<LayerGroupUiModel>()
-                val visited = mutableSetOf<String>()
-                var currentId = groupId
-                while (currentId != null && visited.add(currentId)) {
-                    val group = groupsById[currentId] ?: break
-                    result += group
-                    currentId = group.parentGroupId
-                }
-                return result.asReversed()
-            }
-            visibleLayers.forEach { layer ->
-                val group = layer.groupId?.let { id -> groups.firstOrNull { it.id == id } }
-                val ancestors = ancestry(layer.groupId)
-                ancestors.forEach { ancestor ->
-                    if (emittedGroups.add(ancestor.id)) {
-                        LayerGroupRow(
-                            group = ancestor,
-                            onToggleVisibility = onToggleGroupVisibility,
-                            onToggleCollapsed = onToggleGroupCollapsed,
-                        )
-                        Spacer(Modifier.height(7.dp))
-                    }
-                }
-                if (ancestors.none { it.collapsed }) {
-                    LayerRow(
-                        layer = layer,
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            items(layerOutline, key = { it.key }) { entry ->
+                when (entry) {
+                    is LayerOutlineEntry.Group -> LayerGroupRow(
+                        group = entry.group,
+                        onToggleVisibility = onToggleGroupVisibility,
+                        onToggleCollapsed = onToggleGroupCollapsed,
+                    )
+                    is LayerOutlineEntry.Layer -> LayerRow(
+                        layer = entry.layer,
                         onSelect = onSelectLayer,
                         onToggleSelection = onToggleLayerSelection,
                         onToggleVisibility = onToggleVisibility,
@@ -3801,19 +3974,21 @@ private fun LayersDock(
                             onSelectLayer(id)
                             if (up) onMoveUp() else onMoveDown()
                         },
-                        indentDepth = ancestors.size,
+                        indentDepth = entry.indentDepth,
                     )
-                    Spacer(Modifier.height(7.dp))
                 }
             }
-            if (visibleLayers.isEmpty()) {
-                Text(
-                    "No hay capas que coincidan con la búsqueda.",
-                    color = StudioPalette.TextMuted,
-                    modifier = Modifier.padding(12.dp),
-                )
+            if (layerOutline.isEmpty()) {
+                item("empty") {
+                    Text(
+                        "No hay capas que coincidan con la búsqueda.",
+                        color = StudioPalette.TextMuted,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
-            Surface(
+            item("paper") {
+                Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(11.dp),
@@ -3829,6 +4004,7 @@ private fun LayersDock(
                         Text("Blanco · bloqueado", color = StudioPalette.TextMuted, fontSize = 10.sp)
                     }
                 }
+            }
             }
         }
         HorizontalDivider(color = StudioPalette.Border)

@@ -9,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import com.orbyte.canvasstudio.drawing.raster.TileCanvasScope
 import java.io.File
 import java.util.LinkedHashMap
 import kotlin.math.max
@@ -53,11 +54,23 @@ internal class SparseTileSurface(
     private val dirtyVersions = mutableMapOf<TileStorage.Key, Long>()
     private val deletedVersions = mutableMapOf<TileStorage.Key, Long>()
     private var revision = 0L
+    // Once disposed, no asynchronous batch may resurrect raster pixels.
+    private var disposed = false
     private var cacheBudgetBytes = cacheBudgetBytes.coerceAtLeast(MIN_CACHE_BYTES)
     private var evictions = 0L
     private var diskLoads = 0L
     private var residentBytes = 0L
     private val renderDestination = RectF()
+    // Tile drawing is serialized by lock; Canvas, clip and bounds stay reusable.
+    private val tileCanvasScope = TileCanvasScope()
+    // One reusable buffer per active surface: alpha-lock used to allocate and GC a full
+    // 512x512 ARGB bitmap for every tile touched by every stylus sample.
+    private var alphaScratch: Bitmap? = null
+    private val alphaCompositePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+    }
+    // Keep an exactly-sized JNI-compatible pixel buffer for the common tile dimensions.
+    private var rasterScratch = IntArray(0)
     // Rendering deliberately never decodes PNGs on the UI thread. Keep tiles from the last
     // rendered viewport resident so an autosave/cache trim cannot turn visible strokes blank.
     private val retainedVisibleBounds = RectF()
@@ -72,85 +85,65 @@ internal class SparseTileSurface(
     }
 
     fun draw(bounds: RectF, block: (Canvas) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
-            val tileCanvas = Canvas(bitmap)
-            tileCanvas.save()
-            tileCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-            tileCanvas.clipRect(
-                RectF(
-                    rect.left.toFloat(),
-                    rect.top.toFloat(),
-                    rect.right.toFloat(),
-                    rect.bottom.toFloat(),
-                ),
-            )
-            block(tileCanvas)
-            tileCanvas.restore()
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEachKeyInBounds
+            tileCanvasScope.drawTile(
+                bitmap,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+            ) { canvas, _ -> block(canvas) }
             markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
     /**
-     * Variant used by command replay so the renderer can reject segments that do
-     * not intersect the current tile instead of replaying a long stroke in full.
+     * Region-limited command replay; the temporary tile bounds belong to the
+     * synchronized callback and must not be retained by a command.
      */
     fun drawPerTile(bounds: RectF, block: (Canvas, RectF) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
-            val tileBounds = RectF(
-                rect.left.toFloat(),
-                rect.top.toFloat(),
-                rect.right.toFloat(),
-                rect.bottom.toFloat(),
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = true) ?: return@forEachKeyInBounds
+            tileCanvasScope.drawTile(
+                bitmap,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+                block,
             )
-            val tileCanvas = Canvas(bitmap)
-            tileCanvas.save()
-            tileCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-            tileCanvas.clipRect(tileBounds)
-            block(tileCanvas, tileBounds)
-            tileCanvas.restore()
             markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
-    /** Draws while preserving the alpha that already exists in each affected tile. */
+    /** Alpha lock uses one reusable scratch tile; no per-dab Canvas allocations. */
     fun drawPreservingAlpha(bounds: RectF, block: (Canvas) -> Unit): Boolean = synchronized(lock) {
-        val keys = TileStorage.keysForBounds(bounds, width, height)
-        if (keys.isEmpty()) return@synchronized false
-        keys.forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing = false) ?: return@forEach
-            val rect = TileStorage.tileRect(key, width, height)
-            val temporary = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
-            try {
-                val temporaryCanvas = Canvas(temporary)
-                temporaryCanvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-                temporaryCanvas.clipRect(
-                    RectF(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat()),
-                )
-                block(temporaryCanvas)
-                val alphaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
-                }
-                Canvas(bitmap).drawBitmap(temporary, 0f, 0f, alphaPaint)
-                alphaPaint.xfermode = null
-                markModified(key)
-            } finally {
-                temporary.recycle()
+        var changed = false
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing = false) ?: return@forEachKeyInBounds
+            val temporary = alphaScratch?.takeIf {
+                !it.isRecycled && it.width == bitmap.width && it.height == bitmap.height
+            } ?: Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also {
+                alphaScratch?.recycle()
+                alphaScratch = it
             }
+            temporary.eraseColor(android.graphics.Color.TRANSPARENT)
+            tileCanvasScope.drawTile(
+                temporary,
+                key.column * TileStorage.TILE_SIZE,
+                key.row * TileStorage.TILE_SIZE,
+            ) { canvas, _ -> block(canvas) }
+            tileCanvasScope.composite(bitmap, temporary, alphaCompositePaint)
+            markModified(key)
+            changed = true
         }
         trimCache(emptySet())
-        true
+        changed
     }
 
     /**
@@ -163,10 +156,12 @@ internal class SparseTileSurface(
         block: (TileStorage.Key, Rect, IntArray) -> Boolean,
     ): Int = synchronized(lock) {
         var changedTiles = 0
-        TileStorage.keysForBounds(bounds, width, height).forEach { key ->
-            val bitmap = obtainTile(key, createIfMissing) ?: return@forEach
+        TileStorage.forEachKeyInBounds(bounds, width, height) { key ->
+            val bitmap = obtainTile(key, createIfMissing) ?: return@forEachKeyInBounds
             val rect = TileStorage.tileRect(key, width, height)
-            val pixels = IntArray(bitmap.width * bitmap.height)
+            val requiredPixels = bitmap.width * bitmap.height
+            if (rasterScratch.size != requiredPixels) rasterScratch = IntArray(requiredPixels)
+            val pixels = rasterScratch
             bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
             if (block(key, rect, pixels)) {
                 bitmap.setPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
@@ -187,15 +182,14 @@ internal class SparseTileSurface(
         TileStorage.forEachKeyInBounds(visibleBounds, width, height) { key ->
             val bitmap = cache[key] ?: return@forEachKeyInBounds
             if (bitmap.isRecycled) return@forEachKeyInBounds
-            val rect = TileStorage.tileRect(key, width, height)
-            // Fractional canvas zoom can rasterize two mathematically adjacent quads with a
-            // sub-pixel gap. Bleed half a document pixel on every side so neighbouring tiles
-            // overlap at the compositor; this is display-only and never changes persisted PNGs.
+            // Inline tile bounds: no Rect allocations during compositing.
+            val left = key.column * TileStorage.TILE_SIZE
+            val top = key.row * TileStorage.TILE_SIZE
             renderDestination.set(
-                rect.left - TILE_EDGE_BLEED_PX,
-                rect.top - TILE_EDGE_BLEED_PX,
-                rect.right + TILE_EDGE_BLEED_PX,
-                rect.bottom + TILE_EDGE_BLEED_PX,
+                left - TILE_EDGE_BLEED_PX,
+                top - TILE_EDGE_BLEED_PX,
+                minOf(width, left + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
+                minOf(height, top + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
             )
             target.drawBitmap(bitmap, null, renderDestination, paint)
         }
@@ -249,6 +243,49 @@ internal class SparseTileSurface(
                 target.drawBitmap(bitmap, rect.left.toFloat(), rect.top.toFloat(), paint)
             }
         trimCache(emptySet())
+    }
+
+    /**
+     * Worker-only composite of detached tiles. Never holds the surface lock while
+     * decoding PNGs or drawing to the output Canvas, so preview generation cannot
+     * monopolize the same lock needed by the stylus/view renderer.
+     *
+     * The thumbnail is a best-effort point-in-time view. Project publication
+     * checks the committed document revision before accepting its result.
+     */
+    fun drawAllDetached(target: Canvas, paint: Paint?) {
+        val keys = synchronized(lock) {
+            allCurrentKeys().sortedWith(
+                compareBy<TileStorage.Key> { it.row }.thenBy { it.column },
+            )
+        }
+        keys.forEach { key ->
+            val residentCopy = synchronized(lock) {
+                cache[key]?.takeUnless(Bitmap::isRecycled)?.copy(Bitmap.Config.ARGB_8888, false)
+            }
+            val snapshot = residentCopy ?: run {
+                // Tile PNGs are immutable once atomically published. Never decode under lock.
+                val file = File(workingDirectory, key.fileName)
+                val diskCopy = if (file.isFile) TileStorage.loadTile(file) else null
+                // An in-memory dirty tile may have appeared during decoding.
+                val latestCopy = synchronized(lock) {
+                    cache[key]?.takeUnless(Bitmap::isRecycled)?.copy(Bitmap.Config.ARGB_8888, false)
+                }
+                if (latestCopy != null) {
+                    diskCopy?.recycle()
+                    latestCopy
+                } else diskCopy
+            }
+            if (snapshot != null) {
+                try {
+                    val left = (key.column * TileStorage.TILE_SIZE).toFloat()
+                    val top = (key.row * TileStorage.TILE_SIZE).toFloat()
+                    target.drawBitmap(snapshot, left, top, paint)
+                } finally {
+                    snapshot.recycle()
+                }
+            }
+        }
     }
 
     fun drawAtPoint(target: Canvas, x: Float, y: Float, paint: Paint?) = synchronized(lock) {
@@ -337,6 +374,7 @@ internal class SparseTileSurface(
     }
 
     fun clearAll() = synchronized(lock) {
+        revision += 1L // Invalidate detached work even if no tiles existed.
         val affected = allCurrentKeys()
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
@@ -354,6 +392,7 @@ internal class SparseTileSurface(
 
     /** Restores the working raster while preserving project-dirty bookkeeping for undo/redo. */
     fun resetWorkingFrom(sourceDirectory: File?) = synchronized(lock) {
+        revision += 1L // Undo/rebuild must invalidate snapshots made before reset.
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
         residentBytes = 0L
@@ -399,6 +438,7 @@ internal class SparseTileSurface(
     }
 
     fun replaceFromBitmap(bitmap: Bitmap, markProjectDirty: Boolean) = synchronized(lock) {
+        revision += 1L // Imports invalidate pending raster regardless of project-dirty flag.
         cache.values.forEach(Bitmap::recycle)
         cache.clear()
         residentBytes = 0L
@@ -537,6 +577,49 @@ internal class SparseTileSurface(
         obtainTile(key, createIfMissing = false)?.copy(Bitmap.Config.ARGB_8888, false)
     }
 
+    /** Monotonic version of this surface's authoritative raster. */
+    fun rasterRevision(): Long = synchronized(lock) { revision }
+
+    /**
+     * Atomically publishes a complete immutable-stroke tile batch.
+     *
+     * The caller retains ownership of every bitmap when false is returned.
+     * On success, ownership of the mutable tile bitmaps transfers to this
+     * surface; callers must NOT recycle or mutate them afterwards.
+     *
+     * Revision check and all replacements share a lock, so undo/redo,
+     * concurrent inking, and background snapshots cannot partially overwrite
+     * a newer revision. Tile encoding remains deferred.
+     */
+    fun publishDetachedTiles(
+        expectedRevision: Long,
+        patches: List<Pair<TileStorage.Key, Bitmap>>,
+    ): Boolean = synchronized(lock) {
+        if (disposed || revision != expectedRevision) return@synchronized false
+        if (patches.isEmpty()) return@synchronized true
+        val unique = HashSet<TileStorage.Key>(patches.size)
+        for ((key, bitmap) in patches) {
+            if (!unique.add(key) || bitmap.isRecycled || !bitmap.isMutable ||
+                bitmap.config != Bitmap.Config.ARGB_8888) return@synchronized false
+            val rect = TileStorage.tileRect(key, width, height)
+            if (rect.isEmpty || bitmap.width != rect.width() || bitmap.height != rect.height()) {
+                return@synchronized false
+            }
+        }
+        patches.forEach { (key, bitmap) ->
+            cache.remove(key)?.let { old ->
+                residentBytes = (residentBytes - bitmapBytes(old)).coerceAtLeast(0L)
+                if (old !== bitmap) old.recycle()
+            }
+            cache[key] = bitmap
+            residentBytes += bitmapBytes(bitmap)
+            knownKeys += key
+            markModified(key)
+        }
+        trimCache(unique)
+        true
+    }
+
     /** Replaces exactly one tile from a detached checkpoint copy. */
     fun restoreTile(key: TileStorage.Key, snapshot: Bitmap?) = synchronized(lock) {
         cache.remove(key)?.let { residentBytes = (residentBytes - bitmapBytes(it)).coerceAtLeast(0L); it.recycle() }
@@ -568,10 +651,15 @@ internal class SparseTileSurface(
     fun recycle() {
         flushPending()
         synchronized(lock) {
+            disposed = true
+            revision += 1L
             cache.values.forEach(Bitmap::recycle)
             cache.clear()
             residentBytes = 0L
             pendingWriteKeys.clear()
+            alphaScratch?.recycle()
+            alphaScratch = null
+            rasterScratch = IntArray(0)
         }
     }
 

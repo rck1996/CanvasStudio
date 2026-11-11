@@ -1,0 +1,88 @@
+name: Canvas Studio design screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["audit/**"]
+    paths:
+      - ".github/workflows/android-screenshots.yml"
+      - "app/src/androidTest/java/com/orbyte/canvasstudio/ui/screens/DesignScreenshotTest.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/EditorScreen.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/GalleryScreen.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/ui/screens/LayerOutlinePolicy.kt"
+      - "app/src/main/java/com/orbyte/canvasstudio/drawing/DrawingView.kt"
+
+concurrency:
+  group: canvas-design-capture-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-tablet-screenshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Render actual gallery, editor, brush and color screens
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_c
+          cores: 2
+          ram-size: 4096M
+          heap-size: 512M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -camera-front none
+          disable-animations: true
+          script: |
+            set -e
+            ./gradlew :app:connectedDebugAndroidTest "-Pandroid.testInstrumentationRunnerArguments.class=com.orbyte.canvasstudio.ui.screens.DesignScreenshotTest" --stacktrace
+            mkdir -p design-screenshots
+            adb shell ls -lh /sdcard/Pictures/CanvasStudioCaptures/
+            adb pull /sdcard/Pictures/CanvasStudioCaptures/. design-screenshots/
+            ls -lh design-screenshots
+            test "$(find design-screenshots -maxdepth 1 -name '*.png' | wc -l)" -ge 4
+
+      - name: Publish real Android tablet screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvas-studio-ui-real-emulator
+          path: design-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish screenshot test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvas-studio-ui-capture-logs
+          path: |
+            app/build/reports/androidTests/connected/
+            app/build/outputs/androidTest-results/connected/
+          if-no-files-found: warn
+          retention-days: 14

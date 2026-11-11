@@ -19,6 +19,7 @@ import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
 import com.orbyte.canvasstudio.model.ProjectRepository
+import com.orbyte.canvasstudio.model.ProjectTrashStore
 import com.orbyte.canvasstudio.model.ProjectVersionStore
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.defaultProjects
@@ -58,6 +59,9 @@ fun StudioApp() {
     var projects by remember {
         mutableStateOf(ProjectRepository.loadLocalProjects(context) + defaultProjects)
     }
+    var trashedProjects by remember {
+        mutableStateOf(ProjectTrashStore.list(context))
+    }
     var showNewCanvas by rememberSaveable { mutableStateOf(false) }
 
     fun addOrRefreshLocalCard(document: EditorDocument) {
@@ -85,6 +89,7 @@ fun StudioApp() {
         when (destination) {
             Destination.GALLERY -> GalleryScreen(
                 projects = projects,
+                trashedProjects = trashedProjects,
                 onNewCanvas = { showNewCanvas = true },
                 onOpenProject = { project ->
                     if (project.isLocal) {
@@ -98,7 +103,7 @@ fun StudioApp() {
                             isLocal = true,
                         )
                     } else {
-                        val localId = "${project.id}-${System.currentTimeMillis()}"
+                        val localId = ProjectRepository.newProjectId()
                         activeDocument = EditorDocument(
                             id = localId,
                             title = project.title,
@@ -119,7 +124,7 @@ fun StudioApp() {
                         }
                     } else {
                         activeDocument = EditorDocument(
-                            id = "project-${System.currentTimeMillis()}",
+                            id = ProjectRepository.newProjectId(),
                             title = "${project.title} copia",
                             width = project.width,
                             height = project.height,
@@ -132,13 +137,32 @@ fun StudioApp() {
                     }
                 },
                 onDeleteProject = { project ->
-                    if (project.isLocal && ProjectRepository.deleteProject(context, project.id)) {
+                    if (project.isLocal && ProjectTrashStore.moveToTrash(context, project.id)) {
                         projects = projects.filterNot { it.id == project.id }
+                        trashedProjects = ProjectTrashStore.list(context)
+                    }
+                },
+                onRestoreTrashedProject = { trashed ->
+                    if (ProjectTrashStore.restore(context, trashed.id)) {
+                        projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
+                        trashedProjects = ProjectTrashStore.list(context)
+                    }
+                },
+                onDeleteTrashedProjectForever = { trashed ->
+                    if (ProjectTrashStore.deleteForever(context, trashed.id)) {
+                        trashedProjects = ProjectTrashStore.list(context)
                     }
                 },
                 onRestoreLatestVersion = { project ->
                     val latest = ProjectVersionStore.list(context, project.id).firstOrNull()
                     if (latest != null && ProjectVersionStore.restore(context, latest)) {
+                        projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
+                    }
+                },
+                onRestoreSpecificVersion = { project, version ->
+                    if (project.id == version.projectId &&
+                        ProjectVersionStore.restore(context, version)
+                    ) {
                         projects = ProjectRepository.loadLocalProjects(context) + defaultProjects
                     }
                 },
@@ -183,7 +207,7 @@ fun StudioApp() {
             onDismiss = { showNewCanvas = false },
             onCreate = { draft ->
                 activeDocument = draft.copy(
-                    id = "project-${System.currentTimeMillis()}",
+                    id = ProjectRepository.newProjectId(),
                     isLocal = true,
                     preview = null,
                 )

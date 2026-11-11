@@ -1,7 +1,6 @@
 package com.orbyte.canvasstudio.ui.screens
 
 import android.app.ActivityManager
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -48,6 +47,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,6 +65,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -75,6 +76,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -89,14 +91,18 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.orbyte.canvasstudio.R
+import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import com.orbyte.canvasstudio.drawing.ShortcutPreferences
 import com.orbyte.canvasstudio.drawing.ShortcutProfile
 import com.orbyte.canvasstudio.model.CanvasPreset
+import com.orbyte.canvasstudio.model.CanvasPresetRepository
 import com.orbyte.canvasstudio.model.EditorDocument
 import com.orbyte.canvasstudio.model.MAX_NEW_CANVAS_DIMENSION
 import com.orbyte.canvasstudio.model.PreviewStyle
 import com.orbyte.canvasstudio.model.ProjectCard
+import com.orbyte.canvasstudio.model.LocalProjectVersion
 import com.orbyte.canvasstudio.model.ProjectVersionStore
+import com.orbyte.canvasstudio.model.TrashedProject
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.model.canvasPresets
 import com.orbyte.canvasstudio.model.constrainCanvasSize
@@ -109,22 +115,25 @@ import kotlin.math.min
 @Composable
 fun GalleryScreen(
     projects: List<ProjectCard>,
+    trashedProjects: List<TrashedProject> = emptyList(),
     onNewCanvas: () -> Unit,
     onOpenProject: (ProjectCard) -> Unit,
     onDuplicateProject: (ProjectCard) -> Unit,
     onDeleteProject: (ProjectCard) -> Unit,
     onRestoreLatestVersion: (ProjectCard) -> Unit,
+    onRestoreTrashedProject: (TrashedProject) -> Unit = {},
+    onDeleteTrashedProjectForever: (TrashedProject) -> Unit = {},
+    onRestoreSpecificVersion: (ProjectCard, LocalProjectVersion) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
+    var sortOrder by remember { mutableStateOf(GallerySortOrder.RECENT) }
     var showSettings by remember { mutableStateOf(false) }
+    var showTrash by remember { mutableStateOf(false) }
+    var pendingPermanentDelete by remember { mutableStateOf<TrashedProject?>(null) }
     var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
-    val filteredProjects = remember(projects, searchQuery) {
-        val query = searchQuery.trim()
-        if (query.isBlank()) projects else projects.filter { project ->
-            project.title.contains(query, ignoreCase = true) ||
-                "${project.width}x${project.height}".contains(query.replace(" ", ""), ignoreCase = true)
-        }
+    val filteredProjects = remember(projects, searchQuery, sortOrder) {
+        sortGalleryProjects(projects, searchQuery, sortOrder)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(StudioPalette.Background)) {
@@ -133,7 +142,12 @@ fun GalleryScreen(
         GallerySidebar(onNewCanvas = onNewCanvas, compact = compactLayout, onSettings = { showSettings = true })
         Column(Modifier.weight(1f).fillMaxHeight()) {
             GalleryTopBar(onSettings = { showSettings = true })
-            Column(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 20.dp)) {
+            Column(
+                Modifier.fillMaxSize().padding(
+                    horizontal = if (compactLayout) 12.dp else 28.dp,
+                    vertical = if (compactLayout) 12.dp else 20.dp,
+                ),
+            ) {
                 if (compactLayout) {
                     Column {
                         Text("Mis proyectos", style = MaterialTheme.typography.headlineMedium, color = StudioPalette.Text)
@@ -177,11 +191,46 @@ fun GalleryScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(22.dp))
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    GallerySortOrder.entries.forEach { order ->
+                        FilterChip(
+                            selected = sortOrder == order,
+                            onClick = { sortOrder = order },
+                            label = { Text(order.label) },
+                            modifier = Modifier.testTag("gallery_sort_${order.name.lowercase()}"),
+                        )
+                    }
+                    TextButton(onClick = { showTrash = true }) {
+                        Icon(Icons.Outlined.DeleteOutline, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Papelera (${trashedProjects.size})")
+                    }
+                }
+                if (filteredProjects.isEmpty() && searchQuery.isNotBlank()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Sin resultados", style = MaterialTheme.typography.titleMedium, color = StudioPalette.Text)
+                        Text(
+                            "Prueba otro nombre o resolución de lienzo.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = StudioPalette.TextMuted,
+                        )
+                        TextButton(onClick = { searchQuery = "" }) { Text("Limpiar búsqueda") }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 260.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(18.dp),
+                    columns = GridCells.Adaptive(minSize = if (compactLayout) 180.dp else 260.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (compactLayout) 10.dp else 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compactLayout) 10.dp else 18.dp),
                     contentPadding = PaddingValues(bottom = 28.dp),
                 ) {
                     item {
@@ -194,6 +243,9 @@ fun GalleryScreen(
                             onDuplicate = { onDuplicateProject(project) },
                             onDelete = { onDeleteProject(project) },
                             onRestoreLatestVersion = { onRestoreLatestVersion(project) },
+                            onRestoreSpecificVersion = { version ->
+                                onRestoreSpecificVersion(project, version)
+                            },
                         )
                     }
                 }
@@ -202,13 +254,81 @@ fun GalleryScreen(
         }
     }
 
+    if (showTrash) {
+        AlertDialog(
+            onDismissRequest = { showTrash = false },
+            title = { Text("Papelera de proyectos") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().height(360.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        "Los proyectos eliminados se conservan hasta que decidas borrarlos definitivamente.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (trashedProjects.isEmpty()) {
+                        Text("La papelera está vacía.", color = StudioPalette.TextMuted)
+                    }
+                    trashedProjects.forEach { trashed ->
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(
+                                trashed.title,
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(onClick = { onRestoreTrashedProject(trashed) }) {
+                                    Text("Restaurar")
+                                }
+                                TextButton(onClick = { pendingPermanentDelete = trashed }) {
+                                    Text("Borrar")
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTrash = false }) { Text("Cerrar") }
+            },
+        )
+    }
+
+    pendingPermanentDelete?.let { trashed ->
+        AlertDialog(
+            onDismissRequest = { pendingPermanentDelete = null },
+            title = { Text("Borrar definitivamente") },
+            text = { Text("Se eliminarán ${trashed.title}, sus capas y versiones locales. Esta acción no se puede deshacer.") },
+            confirmButton = {
+                TextButton(
+                    modifier = Modifier.testTag("gallery_trash_confirm_permanent_delete"),
+                    onClick = {
+                        onDeleteTrashedProjectForever(trashed)
+                        pendingPermanentDelete = null
+                    },
+                ) { Text("Borrar definitivamente") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPermanentDelete = null }) { Text("Cancelar") }
+            },
+        )
+    }
+
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { showSettings = false },
             title = { Text("Canvas Studio") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Canvas Studio 1.6", fontWeight = FontWeight.SemiBold)
+                    Text("Canvas Studio 2.5.0", fontWeight = FontWeight.SemiBold)
                     Text("Guardado local, sin cuenta y sin servicios en segundo plano.")
                     Text("Perfil de atajos", fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -400,14 +520,17 @@ private fun GalleryProjectCard(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
     onRestoreLatestVersion: () -> Unit,
+    onRestoreSpecificVersion: (LocalProjectVersion) -> Unit,
 ) {
     val context = LocalContext.current
-    val hasLocalVersion = remember(project.id, project.modifiedEpoch) {
-        project.isLocal && ProjectVersionStore.list(context, project.id).isNotEmpty()
+    val localVersions = remember(project.id, project.modifiedEpoch) {
+        if (project.isLocal) ProjectVersionStore.list(context, project.id) else emptyList()
     }
+    val hasLocalVersion = localVersions.isNotEmpty()
     var menuExpanded by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var confirmRestore by remember { mutableStateOf(false) }
+    var showVersionHistory by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -471,7 +594,12 @@ private fun GalleryProjectCard(
                                 onClick = { menuExpanded = false; confirmRestore = true },
                             )
                             DropdownMenuItem(
-                                text = { Text("Eliminar del dispositivo") },
+                                text = { Text("Explorar historial (${localVersions.size})") },
+                                enabled = hasLocalVersion,
+                                onClick = { menuExpanded = false; showVersionHistory = true },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Mover a papelera") },
                                 onClick = { menuExpanded = false; confirmDelete = true },
                             )
                         }
@@ -484,19 +612,28 @@ private fun GalleryProjectCard(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Eliminar proyecto") },
-            text = { Text("Se eliminará ${project.title} y sus capas guardadas en este dispositivo.") },
+            title = { Text("Mover a papelera") },
+            text = { Text("${project.title} se guardará en la papelera. Podrás restaurarlo después.") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         confirmDelete = false
                         onDelete()
                     },
-                ) { Text("Eliminar") }
+                ) { Text("Mover a papelera") }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancelar") }
             },
+        )
+    }
+
+    if (showVersionHistory) {
+        ProjectVersionHistoryDialog(
+            project = project,
+            versions = localVersions,
+            onDismiss = { showVersionHistory = false },
+            onRestore = onRestoreSpecificVersion,
         )
     }
 
@@ -531,8 +668,11 @@ private fun ProjectArtworkPreview(project: ProjectCard, modifier: Modifier = Mod
         repeat(6) {
             val file = File(previewPath)
             if (file.isFile) {
-                previewBitmap = BitmapFactory.decodeFile(file.absolutePath)?.asImageBitmap()
-                if (previewBitmap != null) return@LaunchedEffect
+                val decoded = PreviewBitmapRepository.load(file, project.modifiedEpoch)
+                if (decoded != null) {
+                    previewBitmap = decoded.asImageBitmap()
+                    return@LaunchedEffect
+                }
             }
             delay(250)
         }
@@ -631,8 +771,10 @@ fun NewCanvasDialog(
         context.getSystemService(ActivityManager::class.java)?.memoryClass ?: 256
     }
     val maxCanvasPixels = remember(memoryClassMb) { recommendedNewCanvasPixels(memoryClassMb) }
-    val availablePresets = remember(maxCanvasPixels) {
-        canvasPresets.filter { it.width.toLong() * it.height <= maxCanvasPixels }
+    var userPresets by remember { mutableStateOf(CanvasPresetRepository.load(context)) }
+    val availablePresets = remember(maxCanvasPixels, userPresets) {
+        (canvasPresets + userPresets)
+            .filter { it.width.toLong() * it.height <= maxCanvasPixels }
     }
     var selectedPreset by remember(maxCanvasPixels) {
         mutableStateOf(
@@ -644,6 +786,9 @@ fun NewCanvasDialog(
     var height by remember { mutableIntStateOf(selectedPreset.height) }
     var dpi by remember { mutableIntStateOf(selectedPreset.dpi) }
     var title by remember { mutableStateOf("Ilustración sin título") }
+    var showSavePreset by remember { mutableStateOf(false) }
+    var presetName by remember { mutableStateOf("") }
+    var presetError by remember { mutableStateOf<String?>(null) }
     val constrainedSize = constrainCanvasSize(
         width = width,
         height = height,
@@ -698,7 +843,20 @@ fun NewCanvasDialog(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             availablePresets.forEach { preset ->
-                                PresetCard(preset, selected = preset == selectedPreset) {
+                                PresetCard(
+                                    preset = preset,
+                                    selected = preset == selectedPreset,
+                                    onDelete = if (userPresets.any { it.title == preset.title }) {
+                                        {
+                                            if (CanvasPresetRepository.remove(context, preset.title)) {
+                                                userPresets = CanvasPresetRepository.load(context)
+                                                if (selectedPreset.title == preset.title) {
+                                                    selectedPreset = canvasPresets.first()
+                                                }
+                                            }
+                                        }
+                                    } else null,
+                                ) {
                                     selectedPreset = preset
                                     width = preset.width
                                     height = preset.height
@@ -707,6 +865,22 @@ fun NewCanvasDialog(
                             }
                         }
 
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "${userPresets.size} formatos personales · máximo ${CanvasPresetRepository.MAX_CUSTOM_PRESETS}",
+                                color = StudioPalette.TextMuted,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = {
+                                presetName = ""
+                                presetError = null
+                                showSavePreset = true
+                            }) { Text("Guardar formato") }
+                        }
                         Spacer(Modifier.height(if (compactLandscape) 12.dp else 20.dp))
                         androidx.compose.material3.OutlinedTextField(
                             value = title,
@@ -721,6 +895,14 @@ fun NewCanvasDialog(
                             NumberField("Alto", height, Modifier.weight(1f)) { height = it }
                             NumberField("DPI", dpi, Modifier.weight(1f)) { dpi = it }
                         }
+                        TextButton(
+                            modifier = Modifier.testTag("canvas_swap_orientation"),
+                            onClick = {
+                                val previousWidth = width
+                                width = height
+                                height = previousWidth
+                            },
+                        ) { Text("Intercambiar ancho y alto") }
                         Spacer(Modifier.height(8.dp))
                         Text(
                             buildString {
@@ -782,10 +964,68 @@ fun NewCanvasDialog(
             }
         }
     }
+
+    if (showSavePreset) {
+        AlertDialog(
+            onDismissRequest = { showSavePreset = false },
+            title = { Text("Guardar formato de lienzo") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Se guardarán ${constrainedSize.first} × ${constrainedSize.second} px a ${dpi.coerceIn(72, 600)} DPI. No se creará un dibujo.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedTextField(
+                        value = presetName,
+                        onValueChange = { presetName = it.take(40); presetError = null },
+                        label = { Text("Nombre del formato") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    presetError?.let {
+                        Text(it, color = StudioPalette.Warning, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = presetName.isNotBlank(),
+                    onClick = {
+                        if (CanvasPresetRepository.upsert(
+                                context,
+                                presetName,
+                                constrainedSize.first,
+                                constrainedSize.second,
+                                dpi.coerceIn(72, 600),
+                            )
+                        ) {
+                            userPresets = CanvasPresetRepository.load(context)
+                            selectedPreset = userPresets.firstOrNull {
+                                it.title.equals(presetName.trim(), ignoreCase = true)
+                            } ?: selectedPreset
+                            width = constrainedSize.first
+                            height = constrainedSize.second
+                            showSavePreset = false
+                        } else {
+                            presetError = "Nombre reservado, medidas inválidas o límite alcanzado."
+                        }
+                    },
+                ) { Text("Guardar formato") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSavePreset = false }) { Text("Cancelar") }
+            },
+        )
+    }
 }
 
 @Composable
-private fun PresetCard(preset: CanvasPreset, selected: Boolean, onClick: () -> Unit) {
+private fun PresetCard(
+    preset: CanvasPreset,
+    selected: Boolean,
+    onDelete: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Surface(
         modifier = Modifier.width(170.dp).clickable(onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
@@ -793,7 +1033,26 @@ private fun PresetCard(preset: CanvasPreset, selected: Boolean, onClick: () -> U
         border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) StudioPalette.Accent else StudioPalette.Border),
     ) {
         Column(Modifier.padding(13.dp)) {
-            Text(preset.title, color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    preset.title,
+                    modifier = Modifier.weight(1f),
+                    color = StudioPalette.Text,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                onDelete?.let { delete ->
+                    IconButton(onClick = delete, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Outlined.DeleteOutline,
+                            contentDescription = "Eliminar formato ${preset.title}",
+                            tint = StudioPalette.TextMuted,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                }
+            }
             Spacer(Modifier.height(3.dp))
             Text(preset.subtitle, color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(9.dp))
@@ -803,13 +1062,50 @@ private fun PresetCard(preset: CanvasPreset, selected: Boolean, onClick: () -> U
 }
 
 @Composable
-private fun NumberField(label: String, value: Int, modifier: Modifier, onValueChange: (Int) -> Unit) {
+internal fun NumberField(label: String, value: Int, modifier: Modifier, onValueChange: (Int) -> Unit) {
+    // Keep the draft text locally: the field must allow the user to clear 4096
+    // before typing 2048, without the first backspace being rejected.
+    var draft by remember { mutableStateOf(value.toString()) }
+    LaunchedEffect(value) {
+        if (draft.toIntOrNull() != value) draft = value.toString()
+    }
     androidx.compose.material3.OutlinedTextField(
-        value = value.toString(),
-        onValueChange = { text -> text.filter(Char::isDigit).toIntOrNull()?.let(onValueChange) },
-        modifier = modifier,
+        value = draft,
+        onValueChange = { text ->
+            draft = text.filter(Char::isDigit).take(5)
+            draft.toIntOrNull()?.let(onValueChange)
+        },
+        modifier = modifier
+            .testTag("canvas_field_${label.lowercase()}")
+            .onFocusChanged { if (!it.isFocused) draft = value.toString() },
         label = { Text(label) },
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
     )
+}
+
+/** Pure ordering/search policy to keep filtering out of individual card compositions. */
+internal enum class GallerySortOrder(val label: String) {
+    RECENT("Recientes"), NAME("Nombre"), LARGEST("Resolución"),
+}
+
+internal fun sortGalleryProjects(
+    projects: List<ProjectCard>,
+    query: String,
+    order: GallerySortOrder,
+): List<ProjectCard> {
+    val term = query.trim()
+    val normalizedDimensions = term.replace(" ", "")
+    val matching = if (term.isBlank()) projects else projects.filter { project ->
+        project.title.contains(term, ignoreCase = true) ||
+            "${project.width}x${project.height}".contains(normalizedDimensions, ignoreCase = true)
+    }
+    return when (order) {
+        GallerySortOrder.RECENT -> matching
+        GallerySortOrder.NAME -> matching.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        GallerySortOrder.LARGEST -> matching.sortedWith(
+            compareByDescending<ProjectCard> { it.width.toLong() * it.height.toLong() }
+                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+        )
+    }
 }

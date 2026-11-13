@@ -1,5 +1,7 @@
 package com.orbyte.canvasstudio.ui.workspace
 
+import java.text.Normalizer
+
 /**
  * Stable action identities for the editor's configurable radial quick menu.
  * Keeping this model independent from Compose makes availability and ordering
@@ -14,6 +16,10 @@ internal enum class QuickAccessAction {
     TOGGLE_ALPHA_LOCK,
     MASK_WORKFLOW,
     OPEN_LAYERS,
+    UNDO,
+    REDO,
+    FIT_CANVAS,
+    TOGGLE_CANVAS_MODE,
 }
 
 internal enum class QuickAccessProfile(val label: String) {
@@ -120,6 +126,10 @@ internal fun quickAccessItems(
         QuickAccessAction.BRUSH_LIBRARY,
         QuickAccessAction.EYEDROPPER,
         QuickAccessAction.ADD_LAYER,
+        QuickAccessAction.UNDO,
+        QuickAccessAction.REDO,
+        QuickAccessAction.FIT_CANVAS,
+        QuickAccessAction.TOGGLE_CANVAS_MODE,
         QuickAccessAction.OPEN_LAYERS -> QuickAccessItem(action, enabled = true)
         QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> QuickAccessItem(
             action,
@@ -138,4 +148,14 @@ internal fun quickAccessItems(
             selected = context.hasActiveLayer && context.editingMask,
         )
     }
+}
+
+internal fun matchesWorkspaceAction(query: String, title: String, description: String): Boolean {
+    fun searchable(value: String): String =
+        Normalizer.normalize(value, Normalizer.Form.NFD)
+            .filterNot { Character.getType(it) == Character.NON_SPACING_MARK.toInt() }
+            .lowercase()
+    val words = searchable(query).split(' ').filter(String::isNotBlank)
+    val searchableAction = searchable("$title $description")
+    return words.all { it in searchableAction }
 }

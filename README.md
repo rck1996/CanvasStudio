@@ -1,41 +1,50 @@
+<div align="center">
+
+<img src="docs/canvas-studio-logo.png" alt="Canvas Studio" width="380">
+
 # Canvas Studio
 
-Aplicación Android **local-first** de dibujo, pintura e ilustración digital, diseñada principalmente para tablets y lápices sensibles a presión como el S Pen.
+**Tu estudio de dibujo en Android. Tus proyectos, en tu tablet.**
 
-Canvas Studio combina una interfaz adaptativa creada con Jetpack Compose con un motor raster propio basado en tiles. El objetivo del proyecto es ofrecer una experiencia de dibujo profesional, rápida y sin dependencia de cuentas, servidores ni conexión permanente a Internet. La interfaz está diseñada exclusivamente para tablets: requiere un ancho disponible mínimo de `600dp` y no se distribuye para teléfonos.
+Ilustración y pintura con S Pen, capas y exportación editable. Sin cuenta y sin conexión permanente.
 
-> **Estado del proyecto:** Release 2.5.0 certificada para tablets
-> **Versión incluida en este repositorio:** `2.5.0`
-> **Formato de documento actual:** v7  
-> **Plataforma:** tablets Android 8.0 o superior (mínimo `sw600dp`)
+[Descargas](https://github.com/rck1996/CanvasStudio/releases) · [Recorrido](#recorrido-en-la-tab-s8) · [Primeros pasos](#primeros-pasos) · [Compilar](#compilar-desde-terminal) · [Pruebas](#pruebas-recomendadas) · [Documentación](#documentación-adicional)
 
-Descarga verificable: [Canvas Studio 2.5.0](https://github.com/rck1996/CanvasStudio/releases/tag/v2.5.0).
+</div>
 
-![Identidad visual de Canvas Studio](docs/canvas-studio-logo.png)
+> **Versión del código: 2.6.0.** Diseñada para tablets Android 8.0 o superior, formato nativo v7. Los teléfonos no están soportados. Consulta las [notas de 2.6.0](docs/RELEASE_2.6.0.md) para ver los cambios, resultados y límites. El tutorial de 2.5.0 se retiró del editor.
 
-## Capturas en dispositivo real
+## Recorrido en la Tab S8
 
-Las siguientes capturas fueron obtenidas directamente de una Samsung Galaxy Tab S8 (`SM-X700`). Muestran la interfaz de tablet y el lienzo con trazos reales; no son renders promocionales.
+![Ilustración de montaña abierta en el editor, sin líneas blancas de tiles](docs/images/canvasstudio-mountain-no-tile-lines.png)
 
-![Galería local de Canvas Studio 2.4.0 en Galaxy Tab S8](docs/images/canvasstudio-gallery-2.4-tab-s8.png)
+| Quiero… | Abro… |
+|---|---|
+| Crear, buscar u organizar dibujos | **Galería → Mis proyectos** |
+| Probar un pincel antes de pintar | **Pinceles → Biblioteca → Probar pincel** |
+| Esconder parte de una capa sin borrarla | **Capas → Crear máscara → Ocultar** |
+| Recuperar la pintura original | **Capas → Editar máscara → Recuperar** |
+| Usar atajos sin abrir paneles | **Estrella** para abrir la rueda configurable |
+| Compartir o seguir editando en otra app | **Exportar → PNG, PSD u OpenRaster** |
 
-![Flujo simplificado para ocultar sin borrar en Canvas Studio 2.4.0](docs/images/canvasstudio-mask-ux-2.4-tab-s8.png)
+<details>
+<summary><strong>Ver seis pinceles dibujados en el editor</strong></summary>
 
-![Academia interactiva de pinceles de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-tutorial-2.2.0.png)
+![Marcador, rotulador plano, carboncillo, óleo espeso, cerda impasto y acuarela granulada](docs/images/canvasstudio-pinceles-en-el-editor.png)
 
-![Biblioteca Brush Studio 4.0 de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-brush-studio-4-tab-s8.png)
+De arriba abajo: Marcador, Rotulador plano, Carboncillo, Óleo espeso, Cerda impasto y Acuarela granulada. La cuadrícula gris de esta captura indica transparencia; no es una costura entre tiles.
 
-![Editor de punta y material de la release 2.2.0 en Galaxy Tab S8](docs/images/canvasstudio-brush-material-4-tab-s8.png)
+</details>
 
-![Editor de Canvas Studio en una Galaxy Tab S8](docs/images/editor-tab-s8.png)
+[Galería de capturas y muestrario de materiales](docs/SCREENSHOTS.md). Las imágenes actuales provienen de pruebas en una Galaxy Tab S8; no son mockups.
 
-![Trazos reales en Canvas Studio sobre una Galaxy Tab S8](docs/images/drawing-tab-s8.png)
+## Primeros pasos
 
-![Biblioteca de pinceles 2.1 con preview reactivo a 135 px en una Galaxy Tab S8](docs/canvasstudio-library-reactive.png)
-
-![Comparación ciega de los 14 pinceles de producción 2.4 renderizada en una Galaxy Tab S8](docs/images/brush-certification/blind-comparison.png)
-
-![Dinámicas y curva gráfica de presión en una Galaxy Tab S8](docs/canvasstudio-library-dynamics.png)
+1. Instala el **APK** desde [GitHub Releases](https://github.com/rck1996/CanvasStudio/releases). Si actualizas una instalación existente, [no la desinstales](#actualizar-sin-perder-proyectos).
+2. En la galería, crea un lienzo con **Nuevo lienzo** o explora la pestaña **Ejemplos**.
+3. Toca el pincel activo para abrir **Biblioteca**. Activa **Mostrar óleo y acuarela (en prueba)** si quieres usar esos materiales.
+4. Dibuja en una capa nueva. Usa **Ocultar** y **Recuperar** para practicar con una máscara sin borrar la pintura.
+5. Exporta a **PNG** para compartir o a **PSD/OpenRaster** para continuar en otra app. Revisa los [límites de intercambio](#documentos-guardado-y-exportación).
 
 ---
 
@@ -104,7 +113,7 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 ### Edición no destructiva cuando es posible
 
 - Capas independientes.
-- Máscaras raster por capa.
+- Máscaras raster por capa con intensidad independiente de la opacidad.
 - Bloqueo alfa.
 - Clipping.
 - Grupos de capas.
@@ -126,15 +135,15 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 
 | Área | Implementación actual |
 |---|---|
-| Galería | Proyectos locales, búsqueda, duplicado, eliminación y tarjetas de demostración |
+| Galería | «Mis proyectos» y «Ejemplos» separados, búsqueda, favoritos, colecciones, papelera y versiones |
 | Creación de lienzo | Presets, medidas personalizadas, orientación, DPI y límites defensivos |
 | Navegación | Zoom, desplazamiento, rotación, restablecimiento y modo zen |
 | Dibujo | Pincel, borrador, línea, rectángulo, elipse, relleno, degradado y cuentagotas |
-| Pinceles | 14 presets profesionales, 4 experimentales ocultables, favoritos, recientes, búsqueda, duplicado, administración e intercambio JSON |
+| Pinceles | 14 presets profesionales, 4 experimentales opcionales desde la biblioteca o Ajustes, muestras de presión, favoritos, recientes e intercambio JSON |
 | Capas | Crear, duplicar, borrar, limpiar, renombrar, reordenar, ocultar y cambiar opacidad |
 | Composición | Siete modos de fusión, bloqueo alfa y clipping |
 | Grupos | Grupos de un nivel con visibilidad, opacidad y colapso |
-| Máscaras | Máscara raster por capa, activación, edición, eliminación e historial separado |
+| Máscaras | Ocultar, recuperar, comparar, ajustar la intensidad e invertir sin modificar los trazos de máscara |
 | Selección | Rectangular, elíptica, lazo, seleccionar todo, expandir y contraer |
 | Transformación | Mover, escalar, rotar, voltear y borrar contenido seleccionado |
 | Asistencias | Cuadrícula opcional, reglas, ajuste angular de 15°, simetría y perspectiva editable |
@@ -142,6 +151,41 @@ Los documentos se almacenan dentro del espacio privado de la aplicación. El usu
 | Exportación | PNG aplanado y OpenRaster `.ora` con capas |
 | Persistencia | Autoguardado incremental, metadata transaccional y recuperación de respaldo |
 | Documentos grandes | Nuevos lienzos adaptados a la memoria del equipo, hasta 40 Mpx y 8.192 px por lado; lectura compatible hasta 64 Mpx |
+
+En el editor, **Exportar** reúne los formatos y explica sus límites. **Más opciones → Guías y asistencia**
+reúne cuadrícula, reglas, simetría, perspectiva y ajuste angular. El guardado conserva un espacio fijo
+en la barra superior; si falla, se puede reintentar desde su indicador.
+
+Para suavizar una máscara, abre **Capas → Editar máscara → Intensidad**. Al 0% se muestra
+el dibujo original; al 100% se aplica toda la máscara. **Ver original** permite comparar
+temporalmente sin cambiar el porcentaje. El proyecto conserva el ajuste, y los archivos
+exportados incluyen el efecto. PSD y OpenRaster aplican la máscara a la transparencia de
+la capa exportada; no la guardan como una máscara editable.
+
+En **Más opciones de máscara → Invertir máscara** puedes intercambiar qué partes se ocultan
+y cuáles se muestran. **Quitar inversión** restaura el sentido original sin repintar.
+
+En **Pinceles → Ajustar**, la muestra usa el color actual y comparte el fondo claro u oscuro
+del papel de prueba. Mientras dibujas en el lienzo, los pinceles complejos pueden mostrar
+una guía rápida que sigue la presión y el flujo. El motor completa la textura y la mezcla
+al levantar el lápiz. Para evaluar un material húmedo, superpón dos trazos en el papel de prueba.
+
+En **Pincel de cerdas → Ajustar**, la **Densidad de cerdas** cambia el número de grupos de
+fibras y el **Flujo de pintura** cuánto deposita cada pasada. A presión firme, el centro gana
+cobertura sin rellenar los huecos entre fibras ni igualar los bordes a una punta de tinta.
+
+**Marcador** y **Rotulador plano** depositan pigmento translúcido a intervalos de distancia
+regulares, con una punta redonda y otra biselada que responde a la orientación.
+**Óleo espeso** usa una punta plana cargada con bordes suaves para dejar una franja densa.
+**Cerda impasto** gana cuerpo en el centro a presión firme, conserva surcos en los bordes
+y recoge más color al pasar sobre pintura. **Acuarela granulada** deja un depósito irregular
+anclado al papel; **Carboncillo** usa un grano fino que gana cobertura con la presión.
+Para activar los óleos y las acuarelas, abre **Pinceles → Biblioteca → Mostrar óleo y acuarela (en prueba)**.
+
+La prueba `ProfessionalBrushVisualMatrixTest` genera un muestrario de los 18 presets
+de biblioteca con una rampa de presión, una mancha y dos pasadas de colores superpuestas.
+Usa el motor de dibujo y, en pinceles húmedos, captura el pigmento de la primera pasada
+antes de dibujar la segunda.
 
 El detalle de lo implementado y lo pendiente se mantiene en [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md).
 
@@ -353,7 +397,7 @@ Operaciones disponibles:
 - modificar opacidad;
 - cambiar modo de fusión.
 
-El editor incluye una rueda de **Acceso rápido** de seis posiciones. Se abre manteniendo un dedo quieto sobre el lienzo y aparece centrada en ese punto; al deslizar y soltar se ejecuta directamente el sector elegido. La estrella discreta permanece como alternativa accesible. Cada posición puede reasignarse manteniéndola pulsada y existen perfiles **Dibujo**, **Color** y **Capas**; tanto el perfil como el gesto se configuran localmente. Las opciones disponibles incluyen biblioteca, cuentagotas, capa nueva, visibilidad, duplicado, pintar dentro, ocultación reversible y panel de capas.
+El editor incluye una rueda de **Acceso rápido** de seis posiciones. Se abre manteniendo un dedo quieto sobre el lienzo y aparece centrada en ese punto; al deslizar y soltar se ejecuta directamente el sector elegido. La estrella es una alternativa accesible. Para reasignar una posición, toca **Editar rueda** y elige un puesto, o mantén pulsado ese puesto. Los perfiles **Dibujo**, **Color** y **Capas** y el gesto se configuran localmente.
 
 El panel de Capas prioriza la capa activa y adapta sus acciones en filas de ancho completo. El inspector se divide en **General**, **Molde** y **Ocultar**, por lo que la lista y los controles mantienen una jerarquía predecible aun con texto grande. Las capas molde muestran una conexión visual hacia la capa inferior; contenido y ocultación usan miniaturas emparejadas, y la miniatura de ocultación permite entrar o salir de su edición. Un asa dedicada permite reordenar manteniendo y arrastrando sin convertir toda la fila en un gesto ambiguo.
 
@@ -411,22 +455,6 @@ El panel presenta esta función por su resultado: **Ocultar partes sin borrar**.
 - Se guarda como una superficie tiled dispersa.
 
 No se incluyen todavía feather configurable, inversión, niveles, máscaras vectoriales ni máscaras de grupo.
-
-### Tutorial interactivo sobre el editor real
-
-El tutorial abre un documento temporal `2048 × 1536` dentro del editor principal y comienza siempre en la lección 1. Las acciones se realizan con las herramientas, paneles, capas y motor raster reales; el documento de práctica no se carga ni se guarda como proyecto.
-
-- 14 lecciones guiadas por evidencia de dominio, no por simples pulsaciones;
-- foco calculado desde los límites reales de cada control;
-- tarjeta colocada por intersección geométrica para no tapar el objetivo, con coordenadas corregidas respecto de barras del sistema y opción de minimizar;
-- pistas contextuales de dos niveles, confirmación visible del resultado y repetición segura de la lección actual;
-- exportación simulada mediante preview segura, sin crear archivos durante el tutorial;
-- cada paso separa **Acción guiada** de **Comprueba** para explicar el resultado esperado;
-- el tutorial enseña el gesto que abre la rueda, practica sus acciones y después pasa al panel completo de capas;
-- molde inferior explicado por su resultado visual;
-- máscaras explicadas como **Ocultar** con Pincel y **Recuperar** con Borrador, sin lenguaje técnico sobre canales o colores de máscara.
-- limpieza centralizada entre lecciones: Ocultación se cierra antes de Selección, las selecciones antiguas no contaminan Formas y la simetría no permanece activa en lecciones posteriores;
-- si el usuario sale de Ocultación a mitad del ejercicio, la guía detecta el estado y muestra cómo reanudarlo.
 
 ---
 
@@ -527,7 +555,7 @@ Formatos habituales como PNG y JPEG dependen del soporte de Android y del provee
 
 ### Exportación PNG
 
-Genera una imagen aplanada mediante `ActivityResultContracts.CreateDocument("image/png")` y permite escoger la ubicación con el selector del sistema.
+Genera una imagen aplanada por bandas de 512 filas. La app valida el PNG temporal contra las revisiones del documento antes de copiarlo al destino elegido con el selector del sistema. [Integración y protocolo de rendimiento](docs/TABLET_INTEGRATION_2026-11-11.md).
 
 ### Exportación OpenRaster
 
@@ -546,8 +574,7 @@ Durante esta etapa, OpenRaster limita defensivamente la exportación a 24 millon
 
 ### PSD
 
-La importación y exportación PSD intercambian actualmente el compuesto RGBA del documento.
-No preservan capas, máscaras ni modos de fusión; para ese caso debe usarse OpenRaster.
+PSD intercambia **capas raster editables RGB de 8 bits** y un compuesto de referencia. La exportación escribe por bandas. Conserva nombres, orden, transparencia y los modos de fusión compatibles. Las máscaras se aplican a la transparencia y las carpetas se aplanan en la copia exportada. Consulta [el alcance de compatibilidad PSD](docs/PSD_LAYER_EXCHANGE.md) antes de intercambiar documentos con estructuras o perfiles avanzados.
 
 ---
 
@@ -686,7 +713,7 @@ Los proyectos se almacenan bajo una estructura equivalente a:
 - grupos y sus propiedades;
 - modo y puntos de perspectiva;
 - orden y propiedades de capas;
-- rutas relativas de contenido y máscara.
+- rutas relativas de contenido y máscara, intensidad opcional (100% por defecto) e inversión opcional (desactivada por defecto).
 
 ### Escritura transaccional
 
@@ -1066,7 +1093,7 @@ La certificación de `2.1.0` ejecutó 28 pruebas durante 20 ciclos en una Galaxy
 pincel, HB modificado con trazos largos, transición a navegación con dos dedos y
 exportación de un lienzo 8K.
 
-La certificación más reciente ejecutó `133/133` pruebas instrumentadas, agrupadas en `34/34` clases, en la misma Tab S8. Incluyó 500 trazos largos, 200 trazos gruesos, cruce de cuatro tiles, máscaras, historial indexado y Vulkan experimental. Un paquete enfocado de `41/41` regresiones valida el tutorial real, el inicio limpio en `1/14`, la transición Ocultación → Selección, el gesto radial, la salida explícita de máscara y la colocación no bloqueante de la guía. La sesión continua de diez minutos se ejecuta por separado y solo bajo solicitud explícita, para no bloquear el ciclo cotidiano. La evidencia reproducible está en [`docs/test-results/premium-ux-tab-s8-2026-08-09.md`](docs/test-results/premium-ux-tab-s8-2026-08-09.md).
+Consulta [los resultados de 2.6.0 en la Galaxy Tab S8](docs/RELEASE_2.6.0.md#validación). La [certificación de 2.5.0](docs/test-results/premium-ux-tab-s8-2026-08-09.md) se conserva como referencia histórica. La sesión Vulkan continua de diez minutos se ejecuta aparte.
 
 ### Prueba de documentos
 
@@ -1133,14 +1160,14 @@ Canvas Studio `2.4.0` es una release para distribución directa y evaluación en
 ### Selección y transformación
 
 - Sin perspectiva, deformación o warp de contenido.
-- Sin transformación numérica exacta.
+- En integración, **Precisión** permite introducir desplazamiento, giro y escala uniforme. No incluye deformación libre.
 
 ### Formatos
 
 - Sin TIFF.
 - Sin PDF.
 - Sin importación OpenRaster.
-- PSD intercambia por ahora el compuesto RGBA, no capas editables.
+- El intercambio PSD por capas no conserva máscaras editables, grupos, CMYK ni conversión ICC.
 - PNG, PSD y OpenRaster aplican límites defensivos para evitar `OutOfMemoryError`.
 
 ### Experiencia de producto
@@ -1248,7 +1275,7 @@ Comprueba:
 - perfiles authored por preset para diferenciar 2H, HB, 6B, tintas, acuarelas y óleos;
 - bounds conservadores que incluyen partículas, blur, sangrado y Dual Brush;
 - replay filtrado por tile para evitar el costo `tiles × trazo completo`;
-- tutorial interactivo de catorce módulos, accesible desde **Más opciones → Tutorial interactivo**;
+- tutorial interactivo de catorce módulos en la versión publicada;
 - 45 pruebas instrumentadas y una carga adicional de 500 trazos largos de 180 px en Galaxy Tab S8.
 
 ### Integración final 2.4 y mejoras posteriores
@@ -1283,6 +1310,10 @@ La hoja de ruta no garantiza fechas ni que todas las funciones se implementen co
 | Documento | Contenido |
 |---|---|
 | [`docs/FEATURE_MATRIX.md`](docs/FEATURE_MATRIX.md) | Estado funcional por área |
+| [`docs/ROADMAP_2D.md`](docs/ROADMAP_2D.md) | Roadmap 2D y criterios de auditoría |
+| [`docs/PSD_LAYER_EXCHANGE.md`](docs/PSD_LAYER_EXCHANGE.md) | Intercambio PSD por capas, límites y verificación |
+| [`docs/RELEASE_2.6.0.md`](docs/RELEASE_2.6.0.md) | Novedades, compatibilidad y evidencia de la versión actual |
+| [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md) | Capturas reales del editor y muestrario de pinceles |
 | [`docs/PHASE_3B_SPARSE_RENDERER.md`](docs/PHASE_3B_SPARSE_RENDERER.md) | Renderer disperso y tiles |
 | [`docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md`](docs/PHASE_3_RENDERER_BRUSHES_TUTORIAL.md) | Vulkan experimental, materiales y tutorial modular |
 | [`docs/TUTORIAL_INTERACTIVE_CERTIFICATION.md`](docs/TUTORIAL_INTERACTIVE_CERTIFICATION.md) | Auditoria de 14 modulos, ejercicios visibles, validacion y certificacion en Tab S8 |

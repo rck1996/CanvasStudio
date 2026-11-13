@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.AtomicFile
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.ceil
@@ -122,23 +123,26 @@ internal object TileStorage {
     }
 
     fun saveTileBitmapAtomically(tile: Bitmap, key: Key, destinationDirectory: File): WriteResult {
-        destinationDirectory.mkdirs()
+        if (!destinationDirectory.isDirectory && !destinationDirectory.mkdirs()) return WriteResult.FAILED
         val destination = File(destinationDirectory, key.fileName)
+        val atomic = AtomicFile(destination)
         if (isFullyTransparent(tile)) {
+            atomic.delete() // Includes unfinished .new and legacy .bak variants.
             File(destinationDirectory, "${key.fileName}.tmp").delete()
-            return if (!destination.exists() || destination.delete()) WriteResult.DELETED else WriteResult.FAILED
+            return if (!destination.exists()) WriteResult.DELETED else WriteResult.FAILED
         }
-        val temporary = File(destinationDirectory, "${key.fileName}.tmp")
-        return runCatching {
-            FileOutputStream(temporary).use { output ->
-                check(tile.compress(Bitmap.CompressFormat.PNG, 100, output))
-                output.fd.sync()
+
+        var output: FileOutputStream? = null
+        return try {
+            output = atomic.startWrite()
+            check(tile.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                "No se pudo codificar el tile"
             }
-            if (destination.exists() && !destination.delete()) error("No se pudo reemplazar el tile")
-            if (!temporary.renameTo(destination)) error("No se pudo completar el tile")
+            atomic.finishWrite(output)
+            File(destinationDirectory, "${key.fileName}.tmp").delete()
             WriteResult.WRITTEN
-        }.getOrElse {
-            temporary.delete()
+        } catch (_: Exception) {
+            output?.let(atomic::failWrite)
             WriteResult.FAILED
         }
     }

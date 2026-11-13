@@ -12,12 +12,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -56,6 +60,9 @@ import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.CropSquare
+import androidx.compose.material.icons.outlined.ArrowDropDown
+import androidx.compose.material.icons.outlined.ChangeHistory
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FileDownload
@@ -86,9 +93,9 @@ import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.ZoomIn
 import androidx.compose.material.icons.outlined.ZoomOut
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -111,23 +118,28 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
@@ -148,10 +160,9 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.drawing.BrushPreset
 import com.orbyte.canvasstudio.drawing.BrushSettings
-import com.orbyte.canvasstudio.drawing.BrushRenderMode
 import com.orbyte.canvasstudio.drawing.BrushTipShape
-import com.orbyte.canvasstudio.drawing.brush.BrushPreviewModel
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
+import com.orbyte.canvasstudio.drawing.PsdLayerReader
 import com.orbyte.canvasstudio.drawing.DrawingTool
 import com.orbyte.canvasstudio.drawing.DrawingView
 import com.orbyte.canvasstudio.drawing.GuideMode
@@ -165,6 +176,7 @@ import com.orbyte.canvasstudio.drawing.sanitized
 import com.orbyte.canvasstudio.drawing.raster.RendererMode
 import com.orbyte.canvasstudio.BuildConfig
 import com.orbyte.canvasstudio.model.EditorDocument
+import com.orbyte.canvasstudio.model.RecentColorRepository
 import com.orbyte.canvasstudio.model.StudioPalette
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialFocusProvider
 import com.orbyte.canvasstudio.ui.tutorial.EditorTutorialOverlay
@@ -176,16 +188,22 @@ import com.orbyte.canvasstudio.ui.tutorial.freshEditorTutorialState
 import com.orbyte.canvasstudio.ui.tutorial.rememberTutorialFocusRegistry
 import com.orbyte.canvasstudio.ui.tutorial.tutorialRuntimePolicy
 import com.orbyte.canvasstudio.ui.tutorial.tutorialShouldExitMaskEditing
+import com.orbyte.canvasstudio.ui.workspace.QuickBrushSizing
+import com.orbyte.canvasstudio.ui.workspace.ColorWheelSelection
+import com.orbyte.canvasstudio.ui.workspace.colorWheelSelection
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessAction
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessContext
 import com.orbyte.canvasstudio.ui.workspace.QuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.BrushStrokePreview
 import com.orbyte.canvasstudio.ui.workspace.defaultQuickAccessActions
 import com.orbyte.canvasstudio.ui.workspace.matchingQuickAccessProfile
+import com.orbyte.canvasstudio.ui.workspace.matchesWorkspaceAction
 import com.orbyte.canvasstudio.ui.workspace.normalizedQuickAccessActions
 import com.orbyte.canvasstudio.ui.workspace.quickAccessActionsFor
 import com.orbyte.canvasstudio.ui.workspace.quickAccessItems
 import com.orbyte.canvasstudio.ui.workspace.quickMenuTopLeft
 import com.orbyte.canvasstudio.ui.workspace.reassignQuickAccessAction
+import com.orbyte.canvasstudio.ui.workspace.shouldShowInspector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -224,46 +242,34 @@ private fun decodeBitmapForImport(
 private enum class DockTab { BRUSHES, COLOR, LAYERS }
 
 @Composable
-private fun RendererDebugSelector(
+private fun RendererDebugDialog(
     mode: RendererMode,
     onModeSelected: (RendererMode) -> Unit,
-    modifier: Modifier = Modifier,
+    onDismiss: () -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        Surface(
-            modifier = Modifier
-                .semantics {
-                    contentDescription = "Selector de renderer de desarrollo"
-                    stateDescription = mode.label
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Motor de renderizado") },
+        text = {
+            Column {
+                RendererMode.entries.forEach { candidate ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.RadioButton) { onModeSelected(candidate) }
+                            .semantics { selected = candidate == mode }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = candidate == mode, onClick = null)
+                        Spacer(Modifier.width(10.dp))
+                        Text(candidate.label)
+                    }
                 }
-                .clickable(role = Role.Button) { expanded = true },
-            color = StudioPalette.Surface.copy(alpha = .94f),
-            shape = RoundedCornerShape(10.dp),
-            tonalElevation = 4.dp,
-        ) {
-            Text(
-                text = "Renderer · ${mode.label}",
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                color = StudioPalette.Text,
-                style = MaterialTheme.typography.labelMedium,
-            )
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            RendererMode.entries.forEach { candidate ->
-                DropdownMenuItem(
-                    text = { Text(candidate.label) },
-                    onClick = {
-                        expanded = false
-                        onModeSelected(candidate)
-                    },
-                    leadingIcon = {
-                        if (candidate == mode) Icon(Icons.Outlined.RadioButtonUnchecked, null)
-                    },
-                )
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cerrar") } },
+    )
 }
 
 private data class ToolSpec(val tool: DrawingTool, val label: String, val icon: ImageVector)
@@ -277,18 +283,21 @@ private val toolSpecs = listOf(
     ToolSpec(DrawingTool.SELECT_ELLIPSE, "Selec. elíptica", Icons.Outlined.RadioButtonUnchecked),
     ToolSpec(DrawingTool.SELECT_LASSO, "Lazo", Icons.Outlined.Gesture),
     ToolSpec(DrawingTool.TRANSFORM, "Transformar", Icons.Outlined.Transform),
-    ToolSpec(DrawingTool.LINE, "Línea", Icons.AutoMirrored.Outlined.ShowChart),
-    ToolSpec(DrawingTool.RECTANGLE, "Rectángulo", Icons.Outlined.CropSquare),
-    ToolSpec(DrawingTool.ELLIPSE, "Elipse", Icons.Outlined.RadioButtonUnchecked),
-    ToolSpec(DrawingTool.EYEDROPPER, "Color", Icons.Outlined.Colorize),
+    ToolSpec(DrawingTool.EYEDROPPER, "Cuentagotas", Icons.Outlined.Colorize),
     ToolSpec(DrawingTool.HAND, "Mover", Icons.Outlined.PanTool),
+)
+
+private val shapeToolSpecs = listOf(
+    ToolSpec(DrawingTool.RECTANGLE, "Rectángulo", Icons.Outlined.CropSquare),
+    ToolSpec(DrawingTool.TRIANGLE, "Triángulo", Icons.Outlined.ChangeHistory),
+    ToolSpec(DrawingTool.ELLIPSE, "Elipse", Icons.Outlined.RadioButtonUnchecked),
+    ToolSpec(DrawingTool.LINE, "Línea", Icons.AutoMirrored.Outlined.ShowChart),
 )
 
 @Composable
 fun EditorScreen(
     document: EditorDocument,
     onBackToGallery: () -> Unit,
-    onOpenTutorial: () -> Unit,
     tutorialMode: Boolean = false,
     onTutorialFinish: () -> Unit = {},
     onTutorialExit: () -> Unit = {},
@@ -345,14 +354,40 @@ fun EditorScreen(
     var layerModels by remember { mutableStateOf<List<LayerUiModel>>(emptyList()) }
     var layerGroups by remember { mutableStateOf<List<LayerGroupUiModel>>(emptyList()) }
     var changeTick by remember { mutableIntStateOf(0) }
-    var saveLabel by remember { mutableStateOf(if (tutorialMode) "Sesión temporal" else "Guardado automático") }
+    var saveState by remember(document.id, tutorialMode) {
+        mutableStateOf(if (tutorialMode) EditorSaveState.TEMPORARY else EditorSaveState.AUTO)
+    }
     var zenMode by remember { mutableStateOf(false) }
+    // Keep the painting area open by default in either orientation.
+    var inspectorExpanded by remember(tutorialMode) { mutableStateOf(tutorialMode) }
     val workspacePreferences = remember {
         context.getSharedPreferences("canvas_studio_workspace", android.content.Context.MODE_PRIVATE)
+    }
+    var controlsOnRight by remember { mutableStateOf(workspacePreferences.getBoolean("brush_controls_on_right", false)) }
+    var quickShapeEnabled by remember(tutorialMode) {
+        mutableStateOf(!tutorialMode && workspacePreferences.getBoolean("quick_shape_enabled", false))
+    }
+    var editQuickShape by remember(tutorialMode) {
+        mutableStateOf(!tutorialMode && workspacePreferences.getBoolean("quick_shape_edit_before_apply", false))
+    }
+    var preciseShapeTool by remember(document.id) { mutableStateOf<DrawingTool?>(null) }
+    var preciseShapeReady by remember(document.id) { mutableStateOf(false) }
+    var lastShapeTool by remember(document.id) { mutableStateOf(DrawingTool.RECTANGLE) }
+    var recentColors by remember { mutableStateOf(RecentColorRepository.load(context)) }
+    var lastRecordedColor by remember { mutableIntStateOf(brushSettings.color) }
+    // Color-wheel and HSV sliders can emit dozens of changes per second. Persist the
+    // final selected color only after the gesture settles instead of doing disk I/O per move.
+    LaunchedEffect(brushSettings.color, tutorialMode) {
+        if (tutorialMode || brushSettings.color == lastRecordedColor) return@LaunchedEffect
+        delay(550)
+        recentColors = RecentColorRepository.record(context, brushSettings.color)
+        lastRecordedColor = brushSettings.color
     }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var quickMenuAnchor by remember { mutableStateOf<Offset?>(null) }
     var quickMenuEditSlot by remember { mutableStateOf<Int?>(null) }
+    var workspaceActionSearchOpen by remember { mutableStateOf(false) }
+    var maskToDeleteId by remember(document.id) { mutableStateOf<String?>(null) }
     var quickMenuTouchHoldEnabled by remember {
         mutableStateOf(workspacePreferences.getBoolean("quick_access_touch_hold", true))
     }
@@ -377,18 +412,21 @@ fun EditorScreen(
     var guideMode by remember { mutableStateOf(GuideMode.NONE) }
     var perspectiveEditing by remember { mutableStateOf(false) }
     var selectionActive by remember { mutableStateOf(false) }
+    var numericTransformOpen by remember(document.id) { mutableStateOf(false) }
     var selectionFeatherPx by remember { mutableFloatStateOf(0f) }
     var rendererMode by remember { mutableStateOf(RendererMode.CANVAS_BITMAP) }
+    var showRendererDebug by remember { mutableStateOf(false) }
     var renameLayerOpen by remember { mutableStateOf(false) }
     var renameLayerText by remember { mutableStateOf("") }
     var showHelp by remember { mutableStateOf(false) }
+    var confirmPsdExport by remember(document.id) { mutableStateOf(false) }
     var brushLibraryOpen by remember { mutableStateOf(false) }
+    var floatingBrushPaletteOpen by remember { mutableStateOf(false) }
+    val brushWorkspaceState = rememberSaveableStateHolder()
     var brushDockResetTick by remember { mutableIntStateOf(0) }
     var favoriteBrushIds by remember { mutableStateOf(BrushRepository.loadFavorites(context)) }
     var recentBrushIds by remember { mutableStateOf(BrushRepository.loadRecents(context)) }
-    var showExperimentalBrushes by remember {
-        mutableStateOf(BrushRepository.loadExperimentalVisibility(context))
-    }
+    var showExperimentalBrushes by remember(context) { mutableStateOf(BrushRepository.loadExperimentalVisibility(context)) }
     val availableBrushes = remember(customBrushes, showExperimentalBrushes) {
         premiumBrushes + (if (showExperimentalBrushes) experimentalBrushes else emptyList()) + customBrushes
     }
@@ -433,9 +471,11 @@ fun EditorScreen(
 
     LaunchedEffect(changeTick) {
         if (changeTick == 0 || tutorialMode) return@LaunchedEffect
-        saveLabel = "Guardando…"
+        saveState = EditorSaveState.SAVING
         delay(3_000)
-        drawingView?.saveProject(
+        // Autosave waits for the ordered raster lane without rasterizing
+        // pending strokes synchronously during a drawing gesture.
+        drawingView?.saveProjectWhenIdle(
             projectId = document.id,
             title = document.title,
             dpi = document.dpi,
@@ -469,62 +509,7 @@ fun EditorScreen(
         }
     }
 
-    val exportLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/png"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            val bitmap = runCatching { view.exportCompositeBitmap(includePaper = true) }
-                .getOrElse { error ->
-                    Toast.makeText(
-                        context,
-                        error.message ?: "No se pudo preparar la exportación.",
-                        Toast.LENGTH_LONG,
-                    ).show()
-                    return@rememberLauncherForActivityResult
-                }
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { output ->
-                        check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 96, output)) {
-                            "No se pudo codificar la imagen PNG."
-                        }
-                    } ?: error("No se pudo abrir el archivo de destino.")
-                }
-                bitmap.recycle()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PNG exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar PNG.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
-
-    val openRasterLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/openraster"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportOpenRaster)
-                        ?: error("No se pudo abrir el archivo de destino.")
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "OpenRaster exportado" else result.exceptionOrNull()?.message
-                            ?: "No se pudo exportar OpenRaster.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
+    val exportActions = rememberEditorExportActions(drawingView)
 
     val importImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -550,49 +535,40 @@ fun EditorScreen(
         }
     }
 
-    val exportPsdLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("image/vnd.adobe.photoshop"),
-    ) { uri ->
-        val view = drawingView ?: return@rememberLauncherForActivityResult
-        if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use(view::exportBasicPsd)
-                        ?: error("No se pudo abrir el archivo de destino.")
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        if (result.isSuccess) "PSD compuesto exportado"
-                        else result.exceptionOrNull()?.message ?: "No se pudo exportar PSD.",
-                        if (result.isSuccess) Toast.LENGTH_SHORT else Toast.LENGTH_LONG,
-                    ).show()
-                }
-            }
-        }
-    }
-
     val importPsdLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
         if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                val result = runCatching {
-                    context.contentResolver.openInputStream(uri)?.use(BasicPsdCodec::read)
-                        ?: error("No se pudo abrir el PSD.")
-                }
-                withContext(Dispatchers.Main) {
-                    result.onSuccess { bitmap ->
-                        drawingView?.importBitmapAsLayer(bitmap, "PSD importado")
-                        bitmap.recycle()
+            scope.launch {
+                var layered: PsdLayerReader.Imported? = null
+                var composite: Bitmap? = null
+                try {
+                    withContext(Dispatchers.IO) {
+                        val resolver = context.contentResolver
+                        val input = resolver.openInputStream(uri) ?: error("No se pudo abrir el PSD.")
+                        layered = input.use(PsdLayerReader::read)
+                        if (layered == null) {
+                            composite = resolver.openInputStream(uri)?.use(BasicPsdCodec::read)
+                                ?: error("No se pudo abrir la imagen compuesta del PSD.")
+                        }
                     }
-                    if (result.isFailure) {
-                        Toast.makeText(
-                            context,
-                            result.exceptionOrNull()?.message ?: "No se pudo importar PSD.",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                    val view = requireNotNull(drawingView) { "El editor ya no está disponible." }
+                    val imported = layered
+                    if (imported != null) {
+                        val count = view.importLayeredPsd(imported)
+                        val profileNote = if (imported.hasEmbeddedProfile) " · perfil ICC sin convertir" else ""
+                        Toast.makeText(context, "PSD importado · $count capas$profileNote",
+                            if (imported.hasEmbeddedProfile) Toast.LENGTH_LONG else Toast.LENGTH_SHORT).show()
+                    } else {
+                        composite?.let { view.importBitmapAsLayer(it, "PSD compuesto importado") }
                     }
+                } catch (cancel: java.util.concurrent.CancellationException) {
+                    throw cancel
+                } catch (error: Exception) {
+                    Toast.makeText(context, error.message ?: "No se pudo importar PSD.", Toast.LENGTH_LONG).show()
+                } finally {
+                    layered?.close()
+                    composite?.recycle()
                 }
             }
         }
@@ -695,6 +671,7 @@ fun EditorScreen(
         if (policy.closeTransientUi) {
             quickMenuOpen = false
             brushLibraryOpen = false
+            floatingBrushPaletteOpen = false
             quickMenuEditSlot = null
             zenMode = false
         }
@@ -744,16 +721,33 @@ fun EditorScreen(
             } else {
                 drawingView?.setEditingLayerMask(layer.id, !layer.editingMask)
             }
-            if (!layer.hasMask || !layer.editingMask) selectedTool = DrawingTool.BRUSH
+            selectedTool = if (layer.maskInverted && !layer.editingMask) DrawingTool.ERASER else DrawingTool.BRUSH
+            if (!tutorialMode && (!layer.hasMask || !layer.editingMask)) inspectorExpanded = false
         }
     }
     val setLayerClippingFromWorkspace: (String, Boolean) -> Unit = { id, clipping ->
         drawingView?.setLayerClipping(id, clipping)
         tutorialSession?.observe(StudioTutorialEvent.LayerClippingChanged(id, clipping))
     }
+    val paintMask: (String, Boolean) -> Unit = { id, recover ->
+        layerModels.firstOrNull { it.id == id && it.hasMask }?.let { layer ->
+            if (!layer.editingMask) drawingView?.setEditingLayerMask(id, true)
+            if (!layer.maskEnabled) drawingView?.toggleLayerMaskEnabled(id)
+            drawingView?.setMaskOriginalPreview(false)
+            selectedTool = if (recover != layer.maskInverted) DrawingTool.ERASER else DrawingTool.BRUSH
+            if (!tutorialMode && !layer.editingMask) inspectorExpanded = false
+        }
+    }
     val performQuickAccessAction: (QuickAccessAction) -> Unit = { action ->
         when (action) {
-            QuickAccessAction.BRUSH_LIBRARY -> brushLibraryOpen = true
+            QuickAccessAction.BRUSH_LIBRARY -> {
+                if (tutorialMode) brushLibraryOpen = true
+                else {
+                    zenMode = false
+                    inspectorExpanded = false
+                    floatingBrushPaletteOpen = true
+                }
+            }
             QuickAccessAction.EYEDROPPER -> selectedTool = DrawingTool.EYEDROPPER
             QuickAccessAction.ADD_LAYER -> addLayerFromWorkspace()
             QuickAccessAction.TOGGLE_LAYER_VISIBILITY -> toggleActiveLayerVisibility()
@@ -762,13 +756,40 @@ fun EditorScreen(
                 drawingView?.setLayerAlphaLocked(it.id, !it.alphaLocked)
             }
             QuickAccessAction.MASK_WORKFLOW -> openActiveMaskWorkflow()
+            QuickAccessAction.UNDO -> drawingView?.undo()
+            QuickAccessAction.REDO -> drawingView?.redo()
+            QuickAccessAction.FIT_CANVAS -> drawingView?.resetView()
+            QuickAccessAction.TOGGLE_CANVAS_MODE -> zenMode = !zenMode
             QuickAccessAction.OPEN_LAYERS -> {
                 zenMode = false
+                floatingBrushPaletteOpen = false
+                inspectorExpanded = true
                 selectedDock = DockTab.LAYERS
             }
         }
         quickMenuOpen = false
         quickMenuAnchor = null
+    }
+    val toggleDock: (DockTab) -> Unit = { tab ->
+        if (shouldShowInspector(inspectorExpanded, zenMode) && selectedDock == tab) {
+            inspectorExpanded = false
+        } else {
+            floatingBrushPaletteOpen = false
+            selectedDock = tab
+            inspectorExpanded = true
+            zenMode = false
+        }
+    }
+    val toggleBrushPalette: () -> Unit = {
+        if (tutorialMode) {
+            brushLibraryOpen = true
+        } else {
+            floatingBrushPaletteOpen = zenMode || !floatingBrushPaletteOpen
+            if (floatingBrushPaletteOpen) {
+                inspectorExpanded = false
+                zenMode = false
+            }
+        }
     }
     Box(Modifier.fillMaxSize()) {
     EditorTutorialFocusProvider(tutorialFocus, tutorialSession?.guide?.target) {
@@ -777,7 +798,9 @@ fun EditorScreen(
             document = document,
             zoom = zoomLabel,
             rotation = rotationLabel,
-            saveLabel = saveLabel,
+            saveState = saveState,
+            tutorialMode = tutorialMode,
+            canExportOpenRaster = layerModels.none { it.clipping },
             onBack = {
                 if (tutorialMode) onTutorialExit() else {
                     drawingView?.saveProject(document.id, document.title, document.dpi)
@@ -807,24 +830,25 @@ fun EditorScreen(
                     tutorialSession?.observe(StudioTutorialEvent.ExportFormatSelected("PNG"))
                     tutorialSession?.observe(StudioTutorialEvent.ExportPreviewGenerated("PNG", document.width, document.height))
                 } else {
-                    val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                    exportLauncher.launch("$safeName.png")
+                    exportActions.png(document.title)
                 }
             },
             onExportOpenRaster = {
                 drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                openRasterLauncher.launch("$safeName.ora")
+                exportActions.openRaster(document.title)
             },
             onExportPsd = {
-                drawingView?.commitPendingTransform()
-                val safeName = document.title.replace(Regex("[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ _-]"), "").ifBlank { "Canvas Studio" }
-                exportPsdLauncher.launch("$safeName.psd")
+                if (layerGroups.isNotEmpty() || layerModels.any { it.hasMask }) {
+                    confirmPsdExport = true
+                } else {
+                    drawingView?.commitPendingTransform()
+                    exportActions.psd(document.title)
+                }
             },
             onImportImage = { importImageLauncher.launch("image/*") },
             onImportPsd = { importPsdLauncher.launch(arrayOf("image/vnd.adobe.photoshop", "application/octet-stream")) },
             onSaveNow = {
-                saveLabel = "Guardando…"
+                saveState = EditorSaveState.SAVING
                 drawingView?.saveProject(document.id, document.title, document.dpi)
             },
             gridVisible = gridVisible,
@@ -846,6 +870,22 @@ fun EditorScreen(
             onToggleAngleSnapping = {
                 angleSnappingEnabled = !angleSnappingEnabled
                 drawingView?.setAngleSnappingEnabled(angleSnappingEnabled)
+            },
+            quickShapeEnabled = quickShapeEnabled,
+            onToggleQuickShape = {
+                quickShapeEnabled = !quickShapeEnabled
+                drawingView?.quickShapeEnabled = quickShapeEnabled
+                if (!tutorialMode) {
+                    workspacePreferences.edit()
+                        .putBoolean("quick_shape_enabled", quickShapeEnabled)
+                        .apply()
+                }
+            },
+            editQuickShape = editQuickShape,
+            onToggleEditQuickShape = {
+                editQuickShape = !editQuickShape
+                drawingView?.quickShapeEditBeforeApply = editQuickShape
+                if (!tutorialMode) workspacePreferences.edit().putBoolean("quick_shape_edit_before_apply", editQuickShape).apply()
             },
             symmetryLabel = when (symmetryMode) {
                 1 -> "Simetría vertical"
@@ -885,23 +925,110 @@ fun EditorScreen(
             },
             zenMode = zenMode,
             onToggleZen = { zenMode = !zenMode },
+            layersVisible = shouldShowInspector(inspectorExpanded, zenMode) && selectedDock == DockTab.LAYERS,
+            onToggleLayers = { toggleDock(DockTab.LAYERS) },
+            colorVisible = shouldShowInspector(inspectorExpanded, zenMode) && selectedDock == DockTab.COLOR,
+            currentColor = Color(brushSettings.color),
+            onToggleColor = { toggleDock(DockTab.COLOR) },
+            brushPaletteVisible = floatingBrushPaletteOpen && !zenMode,
+            brushName = selectedPreset.name,
+            onToggleBrushPalette = toggleBrushPalette,
             onShowHelp = { showHelp = true },
-            onOpenTutorial = onOpenTutorial,
+            onSearchActions = { workspaceActionSearchOpen = true },
+            onShowRendererDebug = if (BuildConfig.DEBUG) ({ showRendererDebug = true }) else null,
         )
 
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-            val compactWorkspace = maxWidth < 1080.dp
-            Row(Modifier.fillMaxSize()) {
-            if (!zenMode) {
+            val compactWorkspace = maxWidth < 1120.dp
+            val brushWorkspaceWidth = (maxWidth * .34f).coerceIn(272.dp, 390.dp).coerceAtMost(maxWidth * .60f)
+            val useSideControls = maxHeight >= 500.dp && !tutorialMode
+            val sideOnRight = useSideControls && controlsOnRight
+            val rail: @Composable () -> Unit = {
                 EditorToolRail(
                     selectedTool = selectedTool,
+                    preciseShapeTool = preciseShapeTool,
+                    lastShapeTool = lastShapeTool,
                     compact = compactWorkspace,
-                    onSelect = { selectedTool = it },
-                    onTune = { brushLibraryOpen = true },
+                    showAllTools = tutorialMode,
+                    onSelect = { kind ->
+                        drawingView?.cancelPreciseShape()
+                        selectedTool = kind
+                    },
+                    onSelectShape = { kind ->
+                        if (tutorialMode && kind != DrawingTool.TRIANGLE) {
+                            drawingView?.cancelPreciseShape()
+                            selectedTool = kind
+                            lastShapeTool = kind
+                        } else if (drawingView?.startPreciseShape(kind) == true) {
+                            lastShapeTool = kind
+                        }
+                    },
+                    bottomContent = if (useSideControls) ({
+                        BrushSideControls(
+                            settings = brushSettings,
+                            onSettingsChanged = { brushSettings = it },
+                            onRight = controlsOnRight,
+                            onSwitchSide = {
+                                controlsOnRight = !controlsOnRight
+                                workspacePreferences.edit().putBoolean("brush_controls_on_right", controlsOnRight).apply()
+                            },
+                        )
+                    }) else null,
                 )
             }
+            Row(Modifier.fillMaxSize()) {
+            if (!zenMode && !sideOnRight) rail()
 
-            Box(Modifier.weight(1f).fillMaxHeight()) {
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+            activeLayer?.takeIf { it.editingMask }?.let { maskLayer ->
+                MaskEditingControls(
+                    layerId = maskLayer.id,
+                    layerName = maskLayer.name,
+                    recovering = (selectedTool == DrawingTool.ERASER) != maskLayer.maskInverted,
+                    maskEnabled = maskLayer.maskEnabled,
+                    maskStrength = maskLayer.maskStrength,
+                    maskInverted = maskLayer.maskInverted,
+                    showingOriginal = maskLayer.maskPreviewOriginal,
+                    onPaint = { recover -> paintMask(maskLayer.id, recover) },
+                    onStrengthChange = { drawingView?.setLayerMaskStrength(maskLayer.id, it) },
+                    onInvert = {
+                        drawingView?.toggleLayerMaskInverted(maskLayer.id)
+                        selectedTool = when (selectedTool) {
+                            DrawingTool.BRUSH -> DrawingTool.ERASER
+                            DrawingTool.ERASER -> DrawingTool.BRUSH
+                            else -> selectedTool
+                        }
+                    },
+                    onCompare = { drawingView?.setMaskOriginalPreview(!maskLayer.maskPreviewOriginal) },
+                    onDone = {
+                        drawingView?.finishMaskEditing()
+                        selectedTool = DrawingTool.BRUSH
+                    },
+                )
+            }
+            preciseShapeTool?.let { kind ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().background(StudioPalette.Surface)
+                        .heightIn(min = 56.dp)
+                        .padding(horizontal = 12.dp, vertical = 3.dp)
+                        .testTag("precise_shape_controls"),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(shapeToolSpecs.first { it.tool == kind }.label,
+                            color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
+                        Text(if (preciseShapeReady) "Ajusta los bordes o arrastra el centro para mover"
+                            else "Arrastra en el lienzo para crear la figura",
+                            color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick = { drawingView?.cancelPreciseShape() }) { Text("Cancelar") }
+                    Button(enabled = preciseShapeReady, onClick = { drawingView?.applyPreciseShape() }) {
+                        Text("Aplicar")
+                    }
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth().testTag("editor_artwork_viewport")) {
                 AndroidView(
                     factory = { viewContext ->
                         InkDrawingContainer(viewContext).also { container ->
@@ -930,6 +1057,8 @@ fun EditorScreen(
                             }
                             tool = selectedTool
                             brushSettings = brushSettings
+                            quickShapeEnabled = quickShapeEnabled
+                            quickShapeEditBeforeApply = editQuickShape
                             onLayersChanged = { layerModels = it }
                             onLayerGroupsChanged = { layerGroups = it }
                             onDocumentChanged = { changeTick++ }
@@ -944,15 +1073,19 @@ fun EditorScreen(
                             onToolShortcut = { selectedTool = it }
                             onBrushSettingsShortcut = { brushSettings = it }
                             onSaveShortcut = {
-                                saveLabel = "Guardando…"
+                                saveState = EditorSaveState.SAVING
                                 saveProject(document.id, document.title, document.dpi)
                             }
                             onTogglePanelsShortcut = { zenMode = !zenMode }
                             onProjectSaved = { success ->
-                                saveLabel = if (success) "Guardado" else "Error al guardar"
+                                saveState = if (success) EditorSaveState.SAVED else EditorSaveState.FAILED
                             }
                             onEngineMessage = { message ->
                                 Toast.makeText(viewContext, message, Toast.LENGTH_LONG).show()
+                            }
+                            onPreciseShapeChanged = { kind, ready ->
+                                preciseShapeTool = kind
+                                preciseShapeReady = ready
                             }
                             onSelectionChanged = {
                                 selectionActive = it
@@ -993,6 +1126,8 @@ fun EditorScreen(
                         val view = container.drawingView
                         view.tool = selectedTool
                         view.brushSettings = brushSettings
+                        view.quickShapeEnabled = quickShapeEnabled
+                        view.quickShapeEditBeforeApply = editQuickShape
                         view.setGridVisible(gridVisible)
                         view.setRulersVisible(rulersVisible)
                         view.setDocumentDpi(document.dpi)
@@ -1064,6 +1199,7 @@ fun EditorScreen(
                             quickMenuAnchor = null
                         },
                         onAction = performQuickAccessAction,
+                        canEdit = !tutorialMode,
                         onEditSlot = { slot ->
                             if (tutorialMode) {
                                 Toast.makeText(context, "Personaliza la rueda fuera del tutorial.", Toast.LENGTH_SHORT).show()
@@ -1073,59 +1209,11 @@ fun EditorScreen(
                     )
                 }
 
-                if (BuildConfig.DEBUG && !zenMode) {
-                    RendererDebugSelector(
-                        mode = rendererMode,
-                        onModeSelected = { selected ->
-                            rendererMode = selected
-                            val available = drawingView?.setRendererMode(selected) ?: true
-                            if (!available && selected == RendererMode.VULKAN_EXPERIMENTAL) {
-                                Toast.makeText(
-                                    context,
-                                    "Vulkan no disponible; los trazos usarán Canvas/Bitmap.",
-                                    Toast.LENGTH_LONG,
-                                ).show()
-                            }
-                        },
-                        modifier = Modifier.align(Alignment.TopEnd).padding(top = 82.dp, end = 14.dp),
-                    )
-                }
-
-                if (!zenMode) {
-                    Column(
-                        modifier = Modifier.align(Alignment.BottomStart).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        QuickDial(
-                            label = "Tamaño",
-                            progress = brushSettings.sizePx / 180f,
-                            value = "${brushSettings.sizePx.toInt()} px",
-                            onDecrease = {
-                                val before = brushSettings.sizePx
-                                brushSettings = brushSettings.copy(sizePx = (before / 1.16f).coerceAtLeast(2f))
-                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
-                            },
-                            onIncrease = {
-                                val before = brushSettings.sizePx
-                                brushSettings = brushSettings.copy(sizePx = (before * 1.16f).coerceAtMost(180f))
-                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
-                            },
-                        )
-                        QuickDial(
-                            label = "Opacidad",
-                            progress = brushSettings.opacity,
-                            value = "${(brushSettings.opacity * 100).toInt()}%",
-                            onDecrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity - .1f).coerceAtLeast(.05f)) },
-                            onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
-                            color = Color(brushSettings.color),
-                        )
-                    }
-                }
-
                 if (selectionActive && !zenMode) {
                     SelectionToolbar(
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 14.dp),
                         onTransform = { selectedTool = DrawingTool.TRANSFORM },
+                        onPreciseTransform = { numericTransformOpen = true },
                         onExpand = { drawingView?.adjustSelectionBounds(16f) },
                         onContract = { drawingView?.adjustSelectionBounds(-16f) },
                         onInvert = { drawingView?.invertSelection() },
@@ -1163,27 +1251,123 @@ fun EditorScreen(
                         onReset = { drawingView?.resetPerspectiveGuides() },
                     )
                 }
-
-                CanvasStatusBar(
-                    document = document,
-                    rotation = rotationLabel,
-                    compact = compactWorkspace,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = 14.dp),
-                )
             }
 
-            if (!zenMode) {
+            if (!zenMode && !useSideControls) {
+                HorizontalDivider(color = StudioPalette.Border)
+                Box(
+                    Modifier.fillMaxWidth().background(StudioPalette.Surface)
+                        .testTag("editor_brush_bar").padding(horizontal = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(
+                        modifier = Modifier.widthIn(max = 600.dp).fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        QuickDial(
+                            modifier = Modifier.weight(1f),
+                            label = "Tamaño",
+                            progress = QuickBrushSizing.sizeProgress(brushSettings.sizePx),
+                            value = "${brushSettings.sizePx.toInt()} px",
+                            onProgressChanged = { progress ->
+                                val before = brushSettings.sizePx
+                                val after = QuickBrushSizing.sizeFromProgress(progress)
+                                brushSettings = brushSettings.copy(sizePx = after)
+                                if (abs(after - before) >= 0.1f) {
+                                    tutorialSession?.observe(
+                                        StudioTutorialEvent.BrushParameterChanged("size", before, after),
+                                    )
+                                }
+                            },
+                            onDecrease = {
+                                val before = brushSettings.sizePx
+                                brushSettings = brushSettings.copy(sizePx = (before / 1.16f).coerceAtLeast(2f))
+                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
+                            },
+                            onIncrease = {
+                                val before = brushSettings.sizePx
+                                brushSettings = brushSettings.copy(sizePx = (before * 1.16f).coerceAtMost(180f))
+                                tutorialSession?.observe(StudioTutorialEvent.BrushParameterChanged("size", before, brushSettings.sizePx))
+                            },
+                        )
+                        QuickDial(
+                            modifier = Modifier.weight(1f),
+                            label = "Opacidad",
+                            progress = QuickBrushSizing.opacityProgress(brushSettings.opacity),
+                            value = "${(brushSettings.opacity * 100).toInt()}%",
+                            onProgressChanged = { progress ->
+                                brushSettings = brushSettings.copy(
+                                    opacity = QuickBrushSizing.opacityFromProgress(progress),
+                                )
+                            },
+                            onDecrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity - .1f).coerceAtLeast(.05f)) },
+                            onIncrease = { brushSettings = brushSettings.copy(opacity = (brushSettings.opacity + .1f).coerceAtMost(1f)) },
+                        )
+                    }
+                }
+            }
+            }
+
+            if (!zenMode && sideOnRight) rail()
+
+            if (floatingBrushPaletteOpen && !zenMode) {
+                brushWorkspaceState.SaveableStateProvider("brush_workspace") {
+                    BrushWorkspacePanel(
+                        presets = availableBrushes,
+                        activePreset = selectedPreset,
+                        settings = brushSettings,
+                        favorites = favoriteBrushIds,
+                        recents = recentBrushIds,
+                        showExperimental = showExperimentalBrushes,
+                        onShowExperimental = {
+                            showExperimentalBrushes = it
+                            BrushRepository.saveExperimentalVisibility(context, it)
+                        },
+                        onSelect = applyBrushPreset,
+                        onFavorite = { preset ->
+                            favoriteBrushIds = if (preset.id in favoriteBrushIds) favoriteBrushIds - preset.id
+                            else favoriteBrushIds + preset.id
+                            BrushRepository.saveFavorites(context, favoriteBrushIds)
+                        },
+                        onAdjust = { brushSettings = it.sanitized() },
+                        onSaveCopy = {
+                            val copy = selectedPreset.withSettings(brushSettings).copy(
+                                id = "custom-${java.util.UUID.randomUUID()}",
+                                name = "${selectedPreset.name.take(42)} copia",
+                                category = "Personalizados",
+                            )
+                            updateCustomBrushes(customBrushes + copy)
+                            applyBrushPreset(copy)
+                            Toast.makeText(context, "Copia guardada", Toast.LENGTH_SHORT).show()
+                        },
+                        onReset = { applyBrushPreset(selectedPreset) },
+                        onAdvanced = { brushLibraryOpen = true },
+                        onClose = { floatingBrushPaletteOpen = false },
+                        modifier = Modifier.width(brushWorkspaceWidth).fillMaxHeight(),
+                    )
+                }
+            } else if (shouldShowInspector(inspectorExpanded, zenMode)) {
                 RightDock(
-                    dockWidth = if (compactWorkspace) 316.dp else 360.dp,
+                    dockWidth = if (compactWorkspace) 286.dp else 320.dp,
                     selectedTab = selectedDock,
                     onSelectTab = {
-                        selectedDock = it
-                        if (it == DockTab.BRUSHES) brushDockResetTick += 1
+                        if (it == DockTab.BRUSHES && !tutorialMode) {
+                            inspectorExpanded = false
+                            floatingBrushPaletteOpen = true
+                        } else {
+                            selectedDock = it
+                            if (it == DockTab.BRUSHES) brushDockResetTick += 1
+                        }
                     },
                     brushDockResetTick = brushDockResetTick,
                     selectedPreset = selectedPreset,
                     brushes = availableBrushes,
                     brushSettings = brushSettings,
+                    recentColors = recentColors,
+                    onClearRecentColors = {
+                        RecentColorRepository.clear(context)
+                        recentColors = emptyList()
+                    },
                     onPresetSelected = applyBrushPreset,
                     onBrushSettingsChanged = { updated ->
                         val before = brushSettings.sizePx
@@ -1245,18 +1429,16 @@ fun EditorScreen(
                     onAddMask = openActiveMaskWorkflow,
                     onEditMask = { id, editing ->
                         drawingView?.setEditingLayerMask(id, editing)
-                        if (editing || selectedTool == DrawingTool.ERASER) selectedTool = DrawingTool.BRUSH
+                        if (editing || selectedTool == DrawingTool.ERASER) {
+                            val inverted = layerModels.firstOrNull { it.id == id }?.maskInverted == true
+                            selectedTool = if (editing && inverted) DrawingTool.ERASER else DrawingTool.BRUSH
+                        }
+                        if (editing && !tutorialMode) inspectorExpanded = false
                     },
-                    onHideWithMask = { id ->
-                        drawingView?.setEditingLayerMask(id, true)
-                        selectedTool = DrawingTool.BRUSH
-                    },
-                    onRevealWithMask = { id ->
-                        drawingView?.setEditingLayerMask(id, true)
-                        selectedTool = DrawingTool.ERASER
-                    },
+                    onHideWithMask = { id -> paintMask(id, false) },
+                    onRevealWithMask = { id -> paintMask(id, true) },
                     onToggleMask = { drawingView?.toggleLayerMaskEnabled(it) },
-                    onDeleteMask = { drawingView?.deleteActiveLayerMask() },
+                    onDeleteMask = { maskToDeleteId = activeLayer?.id },
                     onAddLayer = addLayerFromWorkspace,
                     onDuplicateLayer = { drawingView?.duplicateActiveLayer() },
                     onDeleteLayer = { drawingView?.deleteActiveLayer() },
@@ -1286,60 +1468,86 @@ fun EditorScreen(
     }
     }
 
-    quickMenuEditSlot?.let { slot ->
+    if (workspaceActionSearchOpen || quickMenuEditSlot != null) {
+        val slot = quickMenuEditSlot
+        var actionQuery by remember(slot) { mutableStateOf("") }
+        val dismissActions = {
+            quickMenuEditSlot = null
+            workspaceActionSearchOpen = false
+        }
+        val matchingActions = remember(actionQuery) {
+            QuickAccessAction.entries.filter { action ->
+                matchesWorkspaceAction(actionQuery, quickAccessShortLabel(action), quickAccessDescription(action))
+            }
+        }
         AlertDialog(
-            onDismissRequest = { quickMenuEditSlot = null },
-            title = { Text("Acción ${slot + 1} de ${defaultQuickAccessActions.size}") },
+            onDismissRequest = dismissActions,
+            title = { Text(if (slot == null) "Buscar acciones" else "Configurar acceso ${slot + 1}") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Perfiles", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        QuickAccessProfile.entries.filterNot { it == QuickAccessProfile.CUSTOM }.forEach { profile ->
-                            FilterChip(
-                                selected = matchingQuickAccessProfile(quickAccessActions) == profile,
-                                onClick = {
-                                    val updated = quickAccessActionsFor(profile)
-                                    quickAccessActions = updated
-                                    workspacePreferences.edit()
-                                        .putString("quick_access_actions", updated.joinToString(",") { it.name })
-                                        .apply()
+                    OutlinedTextField(
+                        value = actionQuery,
+                        onValueChange = { actionQuery = it.take(80) },
+                        label = { Text("Buscar acción") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (slot != null) {
+                        Text("Perfiles", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            QuickAccessProfile.entries.filterNot { it == QuickAccessProfile.CUSTOM }.forEach { profile ->
+                                FilterChip(
+                                    selected = matchingQuickAccessProfile(quickAccessActions) == profile,
+                                    onClick = {
+                                        val updated = quickAccessActionsFor(profile)
+                                        quickAccessActions = updated
+                                        workspacePreferences.edit()
+                                            .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                            .apply()
+                                    },
+                                    label = { Text(profile.label) },
+                                )
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Mantener un dedo en el lienzo", color = StudioPalette.Text)
+                                Text("Abre la rueda en el punto de contacto; el botón estrella siempre queda disponible.", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(
+                                checked = quickMenuTouchHoldEnabled,
+                                onCheckedChange = { enabled ->
+                                    quickMenuTouchHoldEnabled = enabled
+                                    workspacePreferences.edit().putBoolean("quick_access_touch_hold", enabled).apply()
                                 },
-                                label = { Text(profile.label) },
                             )
                         }
                     }
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Mantener un dedo en el lienzo", color = StudioPalette.Text)
-                            Text("Abre la rueda en el punto de contacto; el botón estrella siempre queda disponible.", color = StudioPalette.TextMuted, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Switch(
-                            checked = quickMenuTouchHoldEnabled,
-                            onCheckedChange = { enabled ->
-                                quickMenuTouchHoldEnabled = enabled
-                                workspacePreferences.edit().putBoolean("quick_access_touch_hold", enabled).apply()
-                            },
-                        )
-                    }
+                    if (matchingActions.isEmpty()) Text("No hay acciones que coincidan.", color = StudioPalette.TextMuted)
                     LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 210.dp),
                         modifier = Modifier.heightIn(max = 340.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        gridItems(QuickAccessAction.entries) { action ->
+                        gridItems(matchingActions, key = { it.name }) { action ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        val updated = reassignQuickAccessAction(quickAccessActions, slot, action)
-                                        quickAccessActions = updated
-                                        workspacePreferences.edit()
-                                            .putString("quick_access_actions", updated.joinToString(",") { it.name })
-                                            .apply()
-                                        quickMenuEditSlot = null
+                                        if (slot == null) {
+                                            performQuickAccessAction(action)
+                                        } else {
+                                            val updated = reassignQuickAccessAction(quickAccessActions, slot, action)
+                                            quickAccessActions = updated
+                                            workspacePreferences.edit()
+                                                .putString("quick_access_actions", updated.joinToString(",") { it.name })
+                                                .apply()
+                                        }
+                                        dismissActions()
                                     },
-                                color = if (quickAccessActions.getOrNull(slot) == action) StudioPalette.AccentSoft else Color.Transparent,
+                                color = if (slot != null && quickAccessActions.getOrNull(slot) == action) StudioPalette.AccentSoft else Color.Transparent,
                                 shape = RoundedCornerShape(10.dp),
                             ) {
                                 Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1360,7 +1568,7 @@ fun EditorScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { quickMenuEditSlot = null }) { Text("Cerrar") }
+                TextButton(onClick = dismissActions) { Text("Cerrar") }
             },
         )
     }
@@ -1373,11 +1581,6 @@ fun EditorScreen(
             recentBrushIds = recentBrushIds,
             selectedPreset = selectedPreset,
             settings = brushSettings,
-            showExperimental = showExperimentalBrushes,
-            onShowExperimentalChanged = { visible ->
-                showExperimentalBrushes = visible
-                BrushRepository.saveExperimentalVisibility(context, visible)
-            },
             onPresetSelected = applyBrushPreset,
             onSettingsChanged = { brushSettings = it.sanitized() },
             onToggleFavorite = { preset ->
@@ -1415,6 +1618,35 @@ fun EditorScreen(
         )
     }
 
+    if (numericTransformOpen && selectionActive) {
+        NumericSelectionTransformDialog(
+            onDismiss = { numericTransformOpen = false },
+            onApply = { x, y, scale, angle ->
+                if (drawingView?.applyNumericSelectionTransform(x, y, scale, angle) == true) {
+                    numericTransformOpen = false
+                }
+            },
+        )
+    }
+
+    if (confirmPsdExport) {
+        AlertDialog(
+            onDismissRequest = { confirmPsdExport = false },
+            title = { Text("Exportar PSD por capas") },
+            text = { Text("Las capas raster siguen editables. Las máscaras visibles se aplican a sus píxeles y las carpetas se aplanan. Tu proyecto original no cambia.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmPsdExport = false
+                    drawingView?.commitPendingTransform()
+                    exportActions.psd(document.title)
+                }) { Text("Exportar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmPsdExport = false }) { Text("Cancelar") }
+            },
+        )
+    }
+
     if (showHelp) {
         AlertDialog(
             onDismissRequest = { showHelp = false },
@@ -1423,7 +1655,9 @@ fun EditorScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("S Pen: presión e inclinación controlan el trazo; el botón lateral activa el borrador temporal.")
                     Text("Vista: usa dos dedos para mover, ampliar y girar. Restablecer vista vuelve al encuadre inicial.")
-                    Text("Rendimiento: los tiles visibles permanecen en memoria y se guardan incrementalmente.")
+                    Text("QuickShape: dibuja una línea o cierra un círculo, óvalo, rectángulo o triángulo. Mantén el lápiz apoyado hasta que la figura se ajuste y luego levántalo.")
+                    Text("Toca Rectángulo en la barra lateral para elegir una figura. Arrastra para crearla, ajusta sus puntos y pulsa Aplicar.")
+                    Text("Pinceles con textura: la guía bajo la punta es rápida; al soltar se completa el grano y la mezcla con el dibujo.")
                     Text("Teclado: B pincel, E borrador, H mano, Ctrl+Z deshacer. El perfil puede cambiarse en Ajustes.")
                     Text("La cuadrícula solo es una guía visual y nunca se exporta.")
                 }
@@ -1431,6 +1665,43 @@ fun EditorScreen(
             confirmButton = {
                 TextButton(onClick = { showHelp = false }) { Text("Entendido") }
             },
+        )
+    }
+
+    maskToDeleteId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { maskToDeleteId = null },
+            title = { Text("Quitar máscara") },
+            text = { Text("Se descarta la máscara y vuelve a verse el dibujo original de la capa.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (activeLayer?.id == id) {
+                        drawingView?.deleteActiveLayerMask()
+                        selectedTool = DrawingTool.BRUSH
+                    }
+                    maskToDeleteId = null
+                }) { Text("Quitar máscara") }
+            },
+            dismissButton = { TextButton(onClick = { maskToDeleteId = null }) { Text("Cancelar") } },
+        )
+    }
+
+    if (BuildConfig.DEBUG && showRendererDebug) {
+        RendererDebugDialog(
+            mode = rendererMode,
+            onModeSelected = { selected ->
+                showRendererDebug = false
+                rendererMode = selected
+                val available = drawingView?.setRendererMode(selected) ?: true
+                if (!available && selected == RendererMode.VULKAN_EXPERIMENTAL) {
+                    Toast.makeText(
+                        context,
+                        "Vulkan no disponible; los trazos usarán Canvas/Bitmap.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            },
+            onDismiss = { showRendererDebug = false },
         )
     }
 
@@ -1466,7 +1737,9 @@ private fun EditorTopBar(
     document: EditorDocument,
     zoom: Int,
     rotation: Int,
-    saveLabel: String,
+    saveState: EditorSaveState,
+    tutorialMode: Boolean,
+    canExportOpenRaster: Boolean,
     onBack: () -> Unit,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
@@ -1489,16 +1762,31 @@ private fun EditorTopBar(
     onToggleRulerUnits: () -> Unit,
     angleSnappingEnabled: Boolean,
     onToggleAngleSnapping: () -> Unit,
+    quickShapeEnabled: Boolean,
+    onToggleQuickShape: () -> Unit,
+    editQuickShape: Boolean,
+    onToggleEditQuickShape: () -> Unit,
     symmetryLabel: String,
     onCycleSymmetry: () -> Unit,
     guideLabel: String,
     onCycleGuides: () -> Unit,
     zenMode: Boolean,
     onToggleZen: () -> Unit,
+    layersVisible: Boolean,
+    onToggleLayers: () -> Unit,
+    colorVisible: Boolean,
+    currentColor: Color,
+    onToggleColor: () -> Unit,
+    brushPaletteVisible: Boolean,
+    brushName: String,
+    onToggleBrushPalette: () -> Unit,
     onShowHelp: () -> Unit,
-    onOpenTutorial: () -> Unit,
+    onSearchActions: () -> Unit,
+    onShowRendererDebug: (() -> Unit)?,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    var guidesExpanded by remember { mutableStateOf(false) }
+    var exportExpanded by remember { mutableStateOf(false) }
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
@@ -1506,13 +1794,14 @@ private fun EditorTopBar(
             .background(StudioPalette.Surface)
             .border(1.dp, StudioPalette.Border),
     ) {
-        val compact = maxWidth < 1120.dp
+        val narrow = maxWidth < 760.dp
+        val wideDetails = maxWidth >= 1280.dp
         Row(
             modifier = Modifier.fillMaxSize().padding(horizontal = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null, tint = StudioPalette.Text) }
-            Column(Modifier.width(if (compact) 148.dp else 230.dp)) {
+            Column(Modifier.width(if (wideDetails) 212.dp else if (narrow) 104.dp else 118.dp)) {
                 Text(
                     document.title,
                     color = StudioPalette.Text,
@@ -1520,18 +1809,27 @@ private fun EditorTopBar(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (!compact) {
+                if (wideDetails) {
                     Text(
                         "${document.width} × ${document.height}px · ${document.dpi} dpi",
                         color = StudioPalette.TextMuted,
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                } else {
+                    SaveStatus(saveState, onSaveNow)
                 }
             }
             TopIconButton(Icons.AutoMirrored.Outlined.Undo, "Deshacer", "undo", onUndo)
             TopIconButton(Icons.AutoMirrored.Outlined.Redo, "Rehacer", "redo", onRedo)
             Spacer(Modifier.width(6.dp))
-            Surface(
+            if (narrow) {
+                TopIconButton(
+                    Icons.Outlined.CenterFocusStrong,
+                    "Restablecer vista",
+                    "view_reset",
+                    onResetView,
+                )
+            } else Surface(
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(10.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
@@ -1544,7 +1842,7 @@ private fun EditorTopBar(
                     IconButton(onClick = onZoomIn, modifier = Modifier.size(38.dp)) {
                         Icon(Icons.Outlined.ZoomIn, null, tint = StudioPalette.TextMuted)
                     }
-                    if (!compact) {
+                    if (wideDetails) {
                         IconButton(onClick = onRotateLeft, modifier = Modifier.size(38.dp)) {
                             Icon(Icons.AutoMirrored.Outlined.RotateLeft, "Rotar a la izquierda", tint = StudioPalette.TextMuted)
                         }
@@ -1559,55 +1857,126 @@ private fun EditorTopBar(
                 }
             }
             Spacer(Modifier.weight(1f))
-            if (!compact) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(7.dp).background(StudioPalette.Success, CircleShape))
-                    Spacer(Modifier.width(7.dp))
-                    Text(saveLabel, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+            if (wideDetails) {
+                Box(Modifier.width(110.dp).padding(end = 8.dp)) {
+                    SaveStatus(saveState, onSaveNow)
                 }
-                Spacer(Modifier.width(10.dp))
+            }
+            Row(
+                modifier = Modifier
+                    .height(48.dp)
+                    .widthIn(min = 48.dp)
+                    .background(if (brushPaletteVisible) StudioPalette.SurfaceHover else Color.Transparent, RoundedCornerShape(10.dp))
+                    .semantics {
+                        contentDescription = if (brushPaletteVisible) "Cerrar ajustes de pincel" else "Ajustes de pincel"
+                        stateDescription = brushName
+                        selected = brushPaletteVisible
+                    }
+                    .clickable(role = Role.Button, onClick = onToggleBrushPalette)
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Brush, null, tint = if (brushPaletteVisible) StudioPalette.Accent else StudioPalette.Text)
+                if (wideDetails) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        brushName,
+                        modifier = Modifier.widthIn(max = 92.dp),
+                        color = StudioPalette.Text,
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(
+                onClick = onToggleLayers,
+                modifier = Modifier.size(48.dp).semantics { selected = layersVisible },
+            ) {
+                Icon(
+                    Icons.Outlined.Layers,
+                    contentDescription = if (layersVisible) "Cerrar panel de capas" else "Abrir panel de capas",
+                    tint = if (layersVisible) StudioPalette.Accent else StudioPalette.Text,
+                    modifier = Modifier.size(23.dp),
+                )
+            }
+            IconButton(
+                onClick = onToggleColor,
+                modifier = Modifier.size(48.dp).semantics {
+                    contentDescription = if (colorVisible) "Cerrar panel de color" else "Abrir panel de color"
+                    selected = colorVisible
+                },
+            ) {
+                Box(
+                    Modifier.size(26.dp)
+                        .background(currentColor, CircleShape)
+                        .border(2.dp, if (colorVisible) StudioPalette.Accent else StudioPalette.TextMuted, CircleShape),
+                )
             }
             TopIconButton(Icons.Outlined.Fullscreen, if (zenMode) "Mostrar paneles" else "Modo lienzo", null, onToggleZen)
-            Button(
-                onClick = onExport,
-                modifier = Modifier.editorTutorialAnchor("export_png"),
-                colors = ButtonDefaults.buttonColors(containerColor = StudioPalette.Accent),
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = if (compact) 10.dp else 14.dp, vertical = 9.dp),
-            ) {
-                Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
-                if (!compact) {
-                    Spacer(Modifier.width(7.dp))
-                    Text("Exportar PNG")
+            Box {
+                Button(
+                    onClick = { if (tutorialMode) onExport() else exportExpanded = true },
+                    modifier = Modifier.testTag("editor_export_menu").editorTutorialAnchor("export_png"),
+                    colors = ButtonDefaults.buttonColors(containerColor = StudioPalette.Accent),
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = if (wideDetails) 14.dp else 10.dp, vertical = 9.dp),
+                ) {
+                    Icon(Icons.Outlined.FileDownload, if (wideDetails) null else "Exportar", modifier = Modifier.size(18.dp))
+                    if (wideDetails) {
+                        Spacer(Modifier.width(7.dp))
+                        Text("Exportar")
+                    }
+                }
+                DropdownMenu(expanded = exportExpanded, onDismissRequest = { exportExpanded = false }) {
+                    Text(
+                        "${document.width} × ${document.height} px",
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 7.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = StudioPalette.TextMuted,
+                    )
+                    ExportChoice("PNG", "Una sola imagen") {
+                        exportExpanded = false
+                        onExport()
+                    }
+                    ExportChoice("PSD por capas", "Capas raster · máscaras aplicadas") {
+                        exportExpanded = false
+                        onExportPsd()
+                    }
+                    ExportChoice(
+                        "OpenRaster (.ora)",
+                        if (canExportOpenRaster) "Capas raster · máscaras aplicadas" else "No disponible con capas recortadas",
+                        enabled = canExportOpenRaster,
+                    ) {
+                        exportExpanded = false
+                        onExportOpenRaster()
+                    }
                 }
             }
             Box {
-                IconButton(onClick = { menuExpanded = true }, modifier = Modifier.editorTutorialAnchor("more_menu")) {
+                IconButton(onClick = { guidesExpanded = false; menuExpanded = true }, modifier = Modifier.editorTutorialAnchor("more_menu")) {
                     Icon(Icons.Outlined.MoreHoriz, "Más opciones", tint = StudioPalette.TextMuted)
                 }
                 DropdownMenu(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false },
                 ) {
+                    if (!guidesExpanded) {
+                    DropdownMenuItem(
+                        text = { Text("Buscar acciones") },
+                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        onClick = { menuExpanded = false; onSearchActions() },
+                    )
                     DropdownMenuItem(
                         text = { Text("Importar imagen como capa") },
                         leadingIcon = { Icon(Icons.Outlined.Image, null) },
                         onClick = { menuExpanded = false; onImportImage() },
                     )
                     DropdownMenuItem(
-                        text = { Text("Exportar OpenRaster (.ora)") },
-                        leadingIcon = { Icon(Icons.Outlined.Layers, null) },
-                        onClick = { menuExpanded = false; onExportOpenRaster() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Importar PSD compuesto") },
+                        text = { Text("Importar PSD") },
                         leadingIcon = { Icon(Icons.Outlined.FileUpload, null) },
                         onClick = { menuExpanded = false; onImportPsd() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Exportar PSD compuesto") },
-                        leadingIcon = { Icon(Icons.Outlined.FileDownload, null) },
-                        onClick = { menuExpanded = false; onExportPsd() },
                     )
                     DropdownMenuItem(
                         text = { Text("Guardar ahora") },
@@ -1619,11 +1988,48 @@ private fun EditorTopBar(
                         leadingIcon = { Icon(Icons.AutoMirrored.Outlined.HelpOutline, null) },
                         onClick = { menuExpanded = false; onShowHelp() },
                     )
+                    onShowRendererDebug?.let { showDebug ->
+                        DropdownMenuItem(
+                            text = { Text("Motor de renderizado · diagnóstico") },
+                            onClick = { menuExpanded = false; showDebug() },
+                        )
+                    }
                     DropdownMenuItem(
-                        text = { Text("Tutorial interactivo") },
-                        leadingIcon = { Icon(Icons.Outlined.Brush, null) },
-                        onClick = { menuExpanded = false; onOpenTutorial() },
+                        text = {
+                            Text(if (quickShapeEnabled) "Desactivar QuickShape" else "Activar QuickShape")
+                        },
+                        leadingIcon = { Icon(Icons.Outlined.AutoFixNormal, null) },
+                        onClick = { menuExpanded = false; onToggleQuickShape() },
                     )
+                    if (quickShapeEnabled) DropdownMenuItem(
+                        text = { Text(if (editQuickShape) "QuickShape: aplicar al soltar" else "QuickShape: ajustar antes de aplicar") },
+                        leadingIcon = { Icon(Icons.Outlined.Transform, null) },
+                        onClick = { menuExpanded = false; onToggleEditQuickShape() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Guías y asistencia") },
+                        leadingIcon = { Icon(Icons.Outlined.CropSquare, null) },
+                        onClick = { guidesExpanded = true },
+                    )
+                    if (!wideDetails) {
+                        DropdownMenuItem(
+                            text = { Text("Rotar -15°") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.RotateLeft, null) },
+                            onClick = { menuExpanded = false; onRotateLeft() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Rotar +15°") },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.RotateRight, null) },
+                            onClick = { menuExpanded = false; onRotateRight() },
+                        )
+                    }
+                    } else {
+                    DropdownMenuItem(
+                        text = { Text("Volver a más opciones") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ArrowBack, null) },
+                        onClick = { guidesExpanded = false },
+                    )
+                    HorizontalDivider(color = StudioPalette.Border)
                     DropdownMenuItem(
                         text = { Text(if (gridVisible) "Ocultar cuadrícula" else "Mostrar cuadrícula") },
                         leadingIcon = { Icon(Icons.Outlined.CropSquare, null) },
@@ -1659,22 +2065,54 @@ private fun EditorTopBar(
                         leadingIcon = { Icon(Icons.AutoMirrored.Outlined.ShowChart, null) },
                         onClick = { menuExpanded = false; onCycleGuides() },
                     )
-                    if (compact) {
-                        DropdownMenuItem(
-                            text = { Text("Rotar -15°") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.RotateLeft, null) },
-                            onClick = { menuExpanded = false; onRotateLeft() },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Rotar +15°") },
-                            leadingIcon = { Icon(Icons.AutoMirrored.Outlined.RotateRight, null) },
-                            onClick = { menuExpanded = false; onRotateRight() },
-                        )
                     }
                 }
             }
         }
     }
+}
+
+private enum class EditorSaveState(val label: String) {
+    AUTO("Autoguardado"), SAVING("Guardando…"), SAVED("Guardado"), FAILED("Reintentar guardado"),
+    TEMPORARY("Sesión temporal"),
+}
+
+@Composable
+private fun SaveStatus(state: EditorSaveState, onRetry: () -> Unit) {
+    val tint = when (state) {
+        EditorSaveState.FAILED -> StudioPalette.Warning
+        EditorSaveState.SAVING -> StudioPalette.Accent
+        EditorSaveState.SAVED -> StudioPalette.Success
+        else -> StudioPalette.TextMuted
+    }
+    Row(
+        modifier = Modifier.testTag("editor_save_status")
+            .then(if (state == EditorSaveState.FAILED) {
+                Modifier.clickable(role = Role.Button, onClickLabel = "Reintentar guardado", onClick = onRetry)
+            } else Modifier),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(6.dp).background(tint, CircleShape))
+        Spacer(Modifier.width(5.dp))
+        Text(
+            state.label, color = if (state == EditorSaveState.FAILED) tint else StudioPalette.TextMuted,
+            style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun ExportChoice(title: String, detail: String, enabled: Boolean = true, onClick: () -> Unit) {
+    DropdownMenuItem(
+        enabled = enabled,
+        onClick = onClick,
+        text = {
+            Column {
+                Text(title)
+                Text(detail, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        },
+    )
 }
 
 @Composable
@@ -1687,47 +2125,117 @@ private fun TopIconButton(icon: ImageVector, description: String, anchorId: Stri
 @Composable
 private fun EditorToolRail(
     selectedTool: DrawingTool,
+    preciseShapeTool: DrawingTool?,
+    lastShapeTool: DrawingTool,
     compact: Boolean,
+    showAllTools: Boolean,
     onSelect: (DrawingTool) -> Unit,
-    onTune: () -> Unit,
+    onSelectShape: (DrawingTool) -> Unit,
+    bottomContent: (@Composable () -> Unit)? = null,
 ) {
+    val primaryTools = remember {
+        setOf(DrawingTool.BRUSH, DrawingTool.ERASER, DrawingTool.EYEDROPPER,
+            DrawingTool.SELECT_RECTANGLE, DrawingTool.TRANSFORM)
+    }
+    var moreToolsOpen by remember { mutableStateOf(false) }
+    var shapeToolsOpen by remember { mutableStateOf(false) }
+    val activeShape = preciseShapeTool ?: selectedTool.takeIf { tool -> shapeToolSpecs.any { it.tool == tool } }
+    val shapeSpec = shapeToolSpecs.first { it.tool == (activeShape ?: lastShapeTool) }
     Column(
         modifier = Modifier
-            .width(if (compact) 72.dp else 92.dp)
+            .width(if (compact) 64.dp else 76.dp)
             .fillMaxHeight()
             .background(StudioPalette.Surface)
             .border(1.dp, StudioPalette.Border)
-            .padding(horizontal = if (compact) 6.dp else 9.dp, vertical = 12.dp),
+            .padding(horizontal = if (compact) 4.dp else 6.dp, vertical = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            toolSpecs.forEach { spec ->
+            toolSpecs.filter { showAllTools || it.tool in primaryTools }.forEach { spec ->
                 ToolRailButton(
                     spec = spec,
-                    selected = selectedTool == spec.tool,
+                    selected = preciseShapeTool == null && selectedTool == spec.tool,
                     showLabel = !compact,
                     onClick = { onSelect(spec.tool) },
                 )
                 Spacer(Modifier.height(5.dp))
+                if (spec.tool == DrawingTool.TRANSFORM) {
+                    Box {
+                        ToolRailButton(
+                            spec = shapeSpec,
+                            selected = activeShape != null,
+                            showLabel = !compact,
+                            shapeGroup = true,
+                            onClick = { shapeToolsOpen = true },
+                        )
+                        DropdownMenu(
+                            expanded = shapeToolsOpen,
+                            onDismissRequest = { shapeToolsOpen = false },
+                            modifier = Modifier.testTag("shape_tool_menu"),
+                        ) {
+                            shapeToolSpecs.forEach { item ->
+                                DropdownMenuItem(
+                                    text = { Text(item.label) },
+                                    leadingIcon = { Icon(item.icon, null) },
+                                    trailingIcon = if (activeShape == item.tool) ({
+                                        Icon(Icons.Outlined.Check, null)
+                                    }) else null,
+                                    modifier = Modifier.testTag("shape_tool_${item.tool.name.lowercase(Locale.ROOT)}")
+                                        .semantics { selected = activeShape == item.tool },
+                                    onClick = { shapeToolsOpen = false; onSelectShape(item.tool) },
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(5.dp))
+                }
+            }
+            if (!showAllTools) {
+                Box {
+                    IconButton(
+                        onClick = { moreToolsOpen = true },
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.MoreHoriz,
+                            contentDescription = "Más herramientas",
+                            tint = if (selectedTool !in primaryTools && activeShape == null) StudioPalette.Accent
+                                else StudioPalette.TextMuted,
+                        )
+                    }
+                    DropdownMenu(expanded = moreToolsOpen, onDismissRequest = { moreToolsOpen = false }) {
+                        toolSpecs.filterNot { it.tool in primaryTools }.forEach { spec ->
+                            DropdownMenuItem(
+                                text = { Text(spec.label) },
+                                leadingIcon = { Icon(spec.icon, null) },
+                                modifier = Modifier.semantics { selected = selectedTool == spec.tool },
+                                onClick = {
+                                    onSelect(spec.tool)
+                                    moreToolsOpen = false
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
-        IconButton(onClick = onTune) {
-            Icon(Icons.Outlined.Tune, "Ajustes de pincel", tint = StudioPalette.TextMuted)
-        }
+        bottomContent?.invoke()
     }
 }
 
 @Composable
-private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean, onClick: () -> Unit) {
+private fun ToolRailButton(
+    spec: ToolSpec, selected: Boolean, showLabel: Boolean, shapeGroup: Boolean = false, onClick: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .editorTutorialAnchor(
-                when (spec.tool) {
+                if (shapeGroup) "tool_rectangle" else when (spec.tool) {
                     DrawingTool.BRUSH -> "tool_brush"
                     DrawingTool.ERASER -> "tool_eraser"
                     DrawingTool.EYEDROPPER -> "tool_eyedropper"
@@ -1739,17 +2247,26 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
                     else -> "tool_${spec.tool.name.lowercase(Locale.ROOT)}"
                 },
             )
+            .then(if (shapeGroup) Modifier.testTag("shape_tool_group") else Modifier)
             .background(if (selected) StudioPalette.Accent else Color.Transparent, RoundedCornerShape(11.dp))
             .semantics {
                 this.selected = selected
                 role = Role.Button
-                contentDescription = "${spec.label}${if (selected) ", seleccionada" else ""}"
+                contentDescription = if (shapeGroup) "${spec.label}, abrir menú de figuras"
+                    else "${spec.label}${if (selected) ", seleccionada" else ""}"
             }
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(spec.icon, spec.label, tint = if (selected) Color.White else StudioPalette.TextMuted, modifier = Modifier.size(21.dp))
+        val tint = if (selected) Color.White else StudioPalette.TextMuted
+        if (shapeGroup) {
+            Box(Modifier.fillMaxWidth()) {
+                Icon(spec.icon, null, tint = tint, modifier = Modifier.align(Alignment.Center).size(21.dp))
+                Icon(Icons.Outlined.ArrowDropDown, null, tint = tint,
+                    modifier = Modifier.align(Alignment.CenterEnd).size(13.dp))
+            }
+        } else Icon(spec.icon, spec.label, tint = tint, modifier = Modifier.size(21.dp))
         if (showLabel) {
             Spacer(Modifier.height(3.dp))
             Text(spec.label, color = if (selected) Color.White else StudioPalette.TextMuted, fontSize = 10.sp, maxLines = 1)
@@ -1758,48 +2275,62 @@ private fun ToolRailButton(spec: ToolSpec, selected: Boolean, showLabel: Boolean
 }
 
 @Composable
-private fun QuickDial(
+internal fun QuickDial(
     label: String,
     progress: Float,
     value: String,
     onDecrease: () -> Unit,
     onIncrease: () -> Unit,
-    color: Color? = null,
+    onProgressChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier.width(252.dp),
 ) {
-    Surface(
-        modifier = Modifier.editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
-        color = Color(0xEA171A1F),
-        shape = RoundedCornerShape(15.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
+    BoxWithConstraints(
+        modifier.editorTutorialAnchor(if (label == "Tamaño") "brush_size" else "brush_opacity"),
     ) {
-        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(35.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxSize(),
-                    strokeWidth = 3.dp,
-                    color = StudioPalette.Accent,
-                    trackColor = StudioPalette.SurfaceHover,
-                )
-                Text(value.substringBefore(" ").substringBefore("%"), color = StudioPalette.Text, fontSize = 9.sp)
-            }
-            Spacer(Modifier.width(9.dp))
-            Column {
-                Text(label, color = StudioPalette.TextMuted, fontSize = 10.sp)
+        val showSteppers = maxWidth >= 235.dp
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.padding(end = 6.dp)) {
+                Text(label, color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelSmall)
                 Text(value, color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
             }
-            color?.let {
-                Spacer(Modifier.width(8.dp))
-                Box(Modifier.size(22.dp).background(it, CircleShape).border(1.dp, Color.White.copy(alpha = .6f), CircleShape))
+            if (showSteppers) {
+                IconButton(onClick = onDecrease, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
+                }
             }
-            IconButton(onClick = onDecrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Remove, "Reducir $label", tint = StudioPalette.TextMuted)
-            }
-            IconButton(onClick = onIncrease, modifier = Modifier.size(40.dp)) {
-                Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
+            QuickBrushSlider(label, progress, value, onProgressChanged, Modifier.weight(1f))
+            if (showSteppers) {
+                IconButton(onClick = onIncrease, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Outlined.Add, "Aumentar $label", tint = StudioPalette.Text)
+                }
             }
         }
     }
+}
+
+@Composable
+private fun QuickBrushSlider(
+    label: String,
+    progress: Float,
+    value: String,
+    onProgressChanged: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Slider(
+        value = progress.coerceIn(0f, 1f),
+        onValueChange = onProgressChanged,
+        modifier = modifier.height(48.dp)
+            .testTag(if (label == "Tamaño") "quick_slider_size" else "quick_slider_opacity")
+            .semantics {
+                contentDescription = "Deslizar $label"
+                stateDescription = value
+            },
+        colors = SliderDefaults.colors(
+            thumbColor = StudioPalette.Accent,
+            activeTrackColor = StudioPalette.Accent,
+            inactiveTrackColor = StudioPalette.SurfaceHover,
+        ),
+    )
 }
 
 @Composable
@@ -1837,9 +2368,11 @@ private fun RadialQuickMenu(
     anchor: Offset?,
     onDismiss: () -> Unit,
     onAction: (QuickAccessAction) -> Unit,
+    canEdit: Boolean,
     onEditSlot: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var editing by remember { mutableStateOf(false) }
     val items = quickAccessItems(
         QuickAccessContext(
             hasActiveLayer = activeLayer != null,
@@ -1889,16 +2422,28 @@ private fun RadialQuickMenu(
                             y = (sin(angle) * 112.0).toFloat().dp,
                         )
                         .size(78.dp)
+                        .testTag("quick_access_slot_$index")
                         .let { if (anchor != null) it.editorTutorialAnchor(anchor) else it }
                         .semantics {
-                            contentDescription = quickAccessLabel(item.action, activeLayer)
+                            val label = quickAccessLabel(item.action, activeLayer)
+                            contentDescription = if (editing) "Cambiar acceso ${index + 1}: $label" else label
                             this.selected = selected
                             role = Role.Button
+                            if (editing || item.enabled) onClick {
+                                if (editing) onEditSlot(index) else onAction(item.action)
+                                true
+                            }
+                            if (canEdit) onLongClick("Cambiar este acceso") {
+                                onEditSlot(index)
+                                true
+                            }
                         }
-                        .pointerInput(item.action, item.enabled) {
+                        .pointerInput(item.action, item.enabled, editing, canEdit) {
                             detectTapGestures(
-                                onTap = { if (item.enabled) onAction(item.action) },
-                                onLongPress = { onEditSlot(index) },
+                                onTap = {
+                                    if (editing) onEditSlot(index) else if (item.enabled) onAction(item.action)
+                                },
+                                onLongPress = if (canEdit) ({ onEditSlot(index) }) else null,
                             )
                         },
                     color = if (selected) StudioPalette.AccentSoft else Color(0xFA1A1E24),
@@ -1917,7 +2462,7 @@ private fun RadialQuickMenu(
                         Icon(
                             quickAccessIcon(item.action, activeLayer),
                             null,
-                            tint = if (item.enabled) Color.White else StudioPalette.TextMuted.copy(alpha = .35f),
+                            tint = if (item.enabled || editing) Color.White else StudioPalette.TextMuted.copy(alpha = .35f),
                             modifier = Modifier.size(22.dp),
                         )
                         Spacer(Modifier.height(3.dp))
@@ -1927,7 +2472,7 @@ private fun RadialQuickMenu(
                                 item.action == QuickAccessAction.MASK_WORKFLOW && activeLayer?.hasMask == true -> "Editar"
                                 else -> quickAccessShortLabel(item.action)
                             },
-                            color = if (item.enabled) StudioPalette.Text else StudioPalette.TextMuted.copy(alpha = .35f),
+                            color = if (item.enabled || editing) StudioPalette.Text else StudioPalette.TextMuted.copy(alpha = .35f),
                             fontSize = 9.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -1946,9 +2491,16 @@ private fun RadialQuickMenu(
                 shadowElevation = 12.dp,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                    Icon(Icons.Outlined.Star, null, tint = StudioPalette.Accent, modifier = Modifier.size(24.dp))
-                    Text("Acceso rápido", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
-                    Text("Desliza y suelta", color = StudioPalette.TextMuted, fontSize = 9.sp)
+                    Text(if (editing) "Elige un puesto" else "Acceso rápido", color = StudioPalette.Text, style = MaterialTheme.typography.labelMedium)
+                    if (canEdit) {
+                        TextButton(
+                            onClick = { editing = !editing },
+                            modifier = Modifier.testTag("quick_access_edit"),
+                            contentPadding = PaddingValues(horizontal = 4.dp),
+                        ) {
+                            Text(if (editing) "Listo" else "Editar rueda", fontSize = 10.sp)
+                        }
+                    } else Text("Desliza y suelta", color = StudioPalette.TextMuted, fontSize = 9.sp)
                 }
             }
         }
@@ -1964,6 +2516,10 @@ private fun quickAccessIcon(action: QuickAccessAction, layer: LayerUiModel?): Im
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> if (layer?.alphaLocked == true) Icons.Outlined.Lock else Icons.Outlined.LockOpen
     QuickAccessAction.MASK_WORKFLOW -> Icons.Outlined.AutoFixNormal
     QuickAccessAction.OPEN_LAYERS -> Icons.Outlined.Layers
+    QuickAccessAction.UNDO -> Icons.AutoMirrored.Outlined.Undo
+    QuickAccessAction.REDO -> Icons.AutoMirrored.Outlined.Redo
+    QuickAccessAction.FIT_CANVAS -> Icons.Outlined.CenterFocusStrong
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> Icons.Outlined.Fullscreen
 }
 
 private fun quickAccessShortLabel(action: QuickAccessAction): String = when (action) {
@@ -1975,6 +2531,10 @@ private fun quickAccessShortLabel(action: QuickAccessAction): String = when (act
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar dentro"
     QuickAccessAction.MASK_WORKFLOW -> "Ocultar"
     QuickAccessAction.OPEN_LAYERS -> "Capas"
+    QuickAccessAction.UNDO -> "Deshacer"
+    QuickAccessAction.REDO -> "Rehacer"
+    QuickAccessAction.FIT_CANVAS -> "Ajustar lienzo"
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> "Modo lienzo"
 }
 
 private fun quickAccessLabel(action: QuickAccessAction, layer: LayerUiModel?): String = when (action) {
@@ -1997,6 +2557,119 @@ private fun quickAccessDescription(action: QuickAccessAction): String = when (ac
     QuickAccessAction.TOGGLE_ALPHA_LOCK -> "Pintar únicamente sobre píxeles existentes."
     QuickAccessAction.MASK_WORKFLOW -> "Ocultar o recuperar sin borrar el original."
     QuickAccessAction.OPEN_LAYERS -> "Abrir el panel completo de capas."
+    QuickAccessAction.UNDO -> "Deshacer el último cambio del dibujo."
+    QuickAccessAction.REDO -> "Rehacer el cambio deshecho."
+    QuickAccessAction.FIT_CANVAS -> "Encuadrar el dibujo y restablecer zoom y rotación."
+    QuickAccessAction.TOGGLE_CANVAS_MODE -> "Ocultar o mostrar los paneles del editor."
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MaskEditingControls(
+    layerId: String,
+    layerName: String,
+    recovering: Boolean,
+    maskEnabled: Boolean,
+    maskStrength: Int,
+    maskInverted: Boolean,
+    showingOriginal: Boolean,
+    onPaint: (Boolean) -> Unit,
+    onStrengthChange: (Int) -> Unit,
+    onInvert: () -> Unit,
+    onCompare: () -> Unit,
+    onDone: () -> Unit,
+) {
+    val paintActive = maskEnabled && !showingOriginal
+    var showStrength by remember(layerId) { mutableStateOf(false) }
+    var showMore by remember(layerId) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth().testTag("mask_editing_bar"),
+        color = StudioPalette.Surface,
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 5.dp)) {
+            Text(
+                if (maskInverted) "Editando máscara invertida · $layerName" else "Editando máscara · $layerName",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelMedium,
+                color = StudioPalette.Accent,
+            )
+            Text(
+                when {
+                    !maskEnabled -> "Máscara pausada. Elige Ocultar o Recuperar para reactivarla."
+                    showingOriginal -> "Viendo el original. Pulsa Ver resultado para seguir pintando."
+                    maskStrength == 0 -> "Al 0% puedes pintar la máscara, pero solo verás el efecto al subir la intensidad."
+                    recovering -> "Pinta sobre la zona oculta para volver a mostrarla."
+                    else -> "Pinta sobre lo que quieres ocultar. Tu dibujo no se borra."
+                },
+                color = StudioPalette.TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(
+                    onClick = { onPaint(false) },
+                    modifier = Modifier.semantics { selected = paintActive && !recovering },
+                ) { Text("Ocultar", color = if (paintActive && !recovering) StudioPalette.Accent else StudioPalette.Text) }
+                TextButton(
+                    onClick = { onPaint(true) },
+                    modifier = Modifier.semantics { selected = paintActive && recovering },
+                ) { Text("Recuperar", color = if (paintActive && recovering) StudioPalette.Accent else StudioPalette.Text) }
+                if (maskEnabled) {
+                    TextButton(onClick = onCompare) { Text(if (showingOriginal) "Ver resultado" else "Ver original") }
+                }
+                TextButton(
+                    onClick = { showStrength = !showStrength },
+                    modifier = Modifier.testTag("mask_strength_toggle").semantics {
+                        stateDescription = if (showStrength) "Expandido" else "Contraído"
+                    },
+                ) {
+                    Text("Intensidad · $maskStrength%")
+                    if (!showStrength) Icon(Icons.Outlined.ArrowDropDown, null, Modifier.size(16.dp))
+                }
+                TextButton(onClick = onDone) { Text("Listo") }
+                Box {
+                    IconButton(onClick = { showMore = true }) {
+                        Icon(Icons.Outlined.MoreHoriz, "Más opciones de máscara", tint = StudioPalette.TextMuted)
+                    }
+                    DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (maskInverted) "Quitar inversión" else "Invertir máscara") },
+                            onClick = { showMore = false; onInvert() },
+                        )
+                    }
+                }
+            }
+            if (showStrength) {
+                Surface(
+                    modifier = Modifier.widthIn(max = 520.dp).fillMaxWidth(),
+                    color = StudioPalette.SurfaceRaised,
+                    shape = RoundedCornerShape(10.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+                        Slider(
+                            value = maskStrength.toFloat(),
+                            onValueChange = { onStrengthChange(it.roundToInt()) },
+                            valueRange = 0f..100f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = StudioPalette.Accent,
+                                activeTrackColor = StudioPalette.Accent,
+                                inactiveTrackColor = StudioPalette.SurfaceHover,
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("mask_strength_slider").semantics {
+                                contentDescription = "Intensidad de la máscara"
+                                stateDescription = "$maskStrength%"
+                            },
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("0% · Original", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelSmall)
+                            Text("100% · Máscara completa", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(color = StudioPalette.Border)
+        }
+    }
 }
 
 @Composable
@@ -2034,6 +2707,7 @@ private fun PerspectiveToolbar(
 private fun SelectionToolbar(
     modifier: Modifier = Modifier,
     onTransform: () -> Unit,
+    onPreciseTransform: () -> Unit,
     onExpand: () -> Unit,
     onContract: () -> Unit,
     onInvert: () -> Unit,
@@ -2058,6 +2732,7 @@ private fun SelectionToolbar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = onTransform) { Text("Transformar") }
+            TextButton(onClick = onPreciseTransform) { Text("Precisión") }
             TextButton(onClick = onExpand) { Text("Expandir 16 px") }
             TextButton(onClick = onContract) { Text("Contraer 16 px") }
             TextButton(onClick = onInvert) { Text("Invertir") }
@@ -2073,26 +2748,41 @@ private fun SelectionToolbar(
 }
 
 @Composable
-private fun CanvasStatusBar(
-    document: EditorDocument,
-    rotation: Int,
-    compact: Boolean,
-    modifier: Modifier = Modifier,
+private fun NumericSelectionTransformDialog(
+    onDismiss: () -> Unit,
+    onApply: (Float, Float, Float, Float) -> Unit,
 ) {
-    Surface(
-        modifier = modifier,
-        color = Color(0xEA171A1F),
-        shape = RoundedCornerShape(13.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, StudioPalette.Border),
-    ) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("${document.width} × ${document.height}", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
-            if (!compact) {
-                Spacer(Modifier.width(18.dp))
-                Text("Rotación ${rotation}°", color = StudioPalette.TextMuted, style = MaterialTheme.typography.labelMedium)
+    var x by remember { mutableStateOf("0") }
+    var y by remember { mutableStateOf("0") }
+    var scale by remember { mutableStateOf("100") }
+    var angle by remember { mutableStateOf("0") }
+    fun number(value: String): Float? = value.trim().replace(',', '.').toFloatOrNull()?.takeIf(Float::isFinite)
+    val dx = number(x)
+    val dy = number(y)
+    val percent = number(scale)
+    val degrees = number(angle)
+    val valid = dx != null && dx in -30_000f..30_000f && dy != null && dy in -30_000f..30_000f &&
+        percent != null && percent in 5f..400f && degrees != null && degrees in -360f..360f &&
+        (dx != 0f || dy != 0f || percent != 100f || degrees % 360f != 0f)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Transformar con precisión") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("El giro y la escala se aplican desde el centro de la selección.")
+                OutlinedTextField(x, { x = it }, label = { Text("Mover horizontal (px)") }, singleLine = true)
+                OutlinedTextField(y, { y = it }, label = { Text("Mover vertical (px)") }, singleLine = true)
+                OutlinedTextField(scale, { scale = it }, label = { Text("Escala uniforme (5–400 %)") }, singleLine = true)
+                OutlinedTextField(angle, { angle = it }, label = { Text("Giro (−360° a 360°)") }, singleLine = true)
             }
-        }
-    }
+        },
+        confirmButton = {
+            TextButton(enabled = valid, onClick = {
+                onApply(requireNotNull(dx), requireNotNull(dy), requireNotNull(percent), requireNotNull(degrees))
+            }) { Text("Aplicar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 @Composable
@@ -2104,6 +2794,8 @@ private fun RightDock(
     selectedPreset: BrushPreset,
     brushes: List<BrushPreset>,
     brushSettings: BrushSettings,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
     onPresetSelected: (BrushPreset) -> Unit,
     onBrushSettingsChanged: (BrushSettings) -> Unit,
     onSaveCustomBrush: (String) -> Unit,
@@ -2175,6 +2867,8 @@ private fun RightDock(
             )
             DockTab.COLOR -> ColorDock(
                 currentColor = brushSettings.color,
+                recentColors = recentColors,
+                onClearRecentColors = onClearRecentColors,
                 onColorChanged = { onBrushSettingsChanged(brushSettings.copy(color = it)) },
             )
             DockTab.LAYERS -> LayersDock(
@@ -2253,8 +2947,6 @@ private fun ExpandedBrushLibraryDialog(
     recentBrushIds: List<String>,
     selectedPreset: BrushPreset,
     settings: BrushSettings,
-    showExperimental: Boolean,
-    onShowExperimentalChanged: (Boolean) -> Unit,
     onPresetSelected: (BrushPreset) -> Unit,
     onSettingsChanged: (BrushSettings) -> Unit,
     onToggleFavorite: (BrushPreset) -> Unit,
@@ -2351,19 +3043,6 @@ private fun ExpandedBrushLibraryDialog(
                         Icon(Icons.Outlined.FileDownload, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(5.dp))
                         Text("Exportar")
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.semantics(mergeDescendants = true) {
-                            contentDescription = "Mostrar pinceles experimentales"
-                            stateDescription = if (showExperimental) "Activado" else "Desactivado"
-                        },
-                    ) {
-                        Text("Experimentales", color = StudioPalette.TextMuted, fontSize = 12.sp)
-                        Switch(
-                            checked = showExperimental,
-                            onCheckedChange = onShowExperimentalChanged,
-                        )
                     }
                     TextButton(onClick = onDismiss) { Text("Listo") }
                 }
@@ -3157,7 +3836,7 @@ private fun BrushToggle(label: String, checked: Boolean, onCheckedChange: (Boole
 }
 
 @Composable
-private fun BrushPresetRow(
+internal fun BrushPresetRow(
     preset: BrushPreset,
     selected: Boolean,
     favorite: Boolean = false,
@@ -3232,7 +3911,7 @@ private fun BrushKind.displayName(): String = when (this) {
     BrushKind.OIL -> "Óleo"
 }
 
-private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = copy(
+internal fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = copy(
     kind = settings.kind,
     sizePx = settings.sizePx,
     opacity = settings.opacity,
@@ -3259,76 +3938,7 @@ private fun BrushPreset.withSettings(settings: BrushSettings): BrushPreset = cop
 )
 
 @Composable
-private fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifier) {
-    val dabs = remember(preset) {
-        BrushPreviewModel.dabs(preset)
-    }
-    Canvas(modifier) {
-        drawRoundRect(
-            color = Color(0xFF1A1D22),
-            cornerRadius = androidx.compose.ui.geometry.CornerRadius(9f, 9f),
-        )
-        if (dabs.isEmpty()) return@Canvas
-        val scaleX = (size.width - 12f) / 820f
-        val scaleY = (size.height - 12f) / 220f
-        val radiusScale = minOf(scaleX, scaleY).coerceAtLeast(.08f)
-        dabs.forEach { dab ->
-            val center = Offset(
-                6f + (dab.x - 60f) * scaleX,
-                size.height / 2f + (dab.y - 160f) * scaleY,
-            )
-            val grainUnit = ((dab.randomSeed ushr 8) and 0xff) / 255f
-            val grainCoverage = 1f - preset.grainProfile.depth * (.12f + grainUnit * .42f)
-            val materialCoverage = when (preset.renderProfile.mode) {
-                BrushRenderMode.LIGHT_GLAZE -> .58f
-                BrushRenderMode.UNIFORM_GLAZE -> .78f
-                BrushRenderMode.INTENSE_GLAZE -> .96f
-                BrushRenderMode.BLENDING -> .72f
-            }
-            val alpha = (dab.opacity * dab.flow * grainCoverage * materialCoverage)
-                .coerceIn(.012f, 1f)
-            val radiusX = (dab.radiusX * radiusScale).coerceAtLeast(.45f)
-            val radiusY = (dab.radiusY * radiusScale).coerceAtLeast(.45f)
-            val strandCount = when (preset.tipProfile.shape) {
-                BrushTipShape.BRISTLE -> preset.tipProfile.count.coerceIn(2, 10)
-                BrushTipShape.PARTICLE -> preset.tipProfile.count.coerceIn(2, 7)
-                else -> 1
-            }
-            rotate(
-                degrees = Math.toDegrees(dab.rotationRadians.toDouble()).toFloat(),
-                pivot = center,
-            ) {
-                repeat(strandCount) { strand ->
-                    val unit = if (strandCount == 1) .5f else strand / (strandCount - 1f)
-                    val offset = (unit - .5f) * radiusY * 1.18f
-                    val strandAlpha = if (strandCount == 1) alpha else alpha / kotlin.math.sqrt(strandCount.toFloat())
-                    drawOval(
-                        color = Color.White.copy(alpha = strandAlpha.coerceIn(.01f, 1f)),
-                        topLeft = Offset(
-                            center.x - radiusX,
-                            center.y - radiusY / strandCount.coerceAtLeast(1) + offset,
-                        ),
-                        size = androidx.compose.ui.geometry.Size(
-                            radiusX * 2f,
-                            (radiusY * 2f / strandCount.coerceAtLeast(1)).coerceAtLeast(.65f),
-                        ),
-                    )
-                }
-            }
-            if (preset.kind == BrushKind.AIRBRUSH) {
-                drawCircle(
-                    color = Color.White.copy(alpha = (alpha * .035f).coerceAtLeast(.004f)),
-                    radius = radiusX * (1.5f + (1f - preset.hardness)),
-                    center = center,
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
-private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, display: String, onValueChange: (Float) -> Unit) {
+internal fun SettingSlider(label: String, value: Float, range: ClosedFloatingPointRange<Float>, display: String, onValueChange: (Float) -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
@@ -3357,7 +3967,12 @@ private fun SettingSlider(label: String, value: Float, range: ClosedFloatingPoin
 }
 
 @Composable
-private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
+private fun ColorDock(
+    currentColor: Int,
+    recentColors: List<Int>,
+    onClearRecentColors: () -> Unit,
+    onColorChanged: (Int) -> Unit,
+) {
     val hsv = remember(currentColor) {
         FloatArray(3).also { AndroidColor.colorToHSV(currentColor, it) }
     }
@@ -3407,8 +4022,42 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             emitColor(newValue = it)
         }
         Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Colores recientes", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.weight(1f))
+            if (recentColors.isNotEmpty()) {
+                TextButton(onClick = onClearRecentColors) { Text("Limpiar") }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (recentColors.isEmpty()) {
+            Text(
+                "Aquí aparecerán los colores que uses al pintar.",
+                color = StudioPalette.TextMuted,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                recentColors.forEach { swatch ->
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .background(Color(swatch), RoundedCornerShape(8.dp))
+                            .border(1.dp, StudioPalette.Border, RoundedCornerShape(8.dp))
+                            .semantics {
+                                contentDescription = String.format(Locale.US, "Color reciente #%06X", swatch and 0xFFFFFF)
+                            }
+                            .clickable { onColorChanged(swatch) },
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
         Row(Modifier.fillMaxWidth()) {
-            Text("Paleta reciente", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
+            Text("Paleta básica", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
             Text(
                 String.format(Locale.US, "#%06X", 0xFFFFFF and currentColor),
@@ -3417,9 +4066,11 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
             )
         }
         Spacer(Modifier.height(10.dp))
-        val swatches = listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        val baseSwatches = remember {
+            listOf(0xFF20242B, 0xFFF4F1E8, 0xFFE25555, 0xFFF2A65A, 0xFFE6D04A, 0xFF57B879, 0xFF4A90E2, 0xFF7257D9, 0xFFB052A1, 0xFF8A6751)
+        }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            swatches.forEach { swatch ->
+            baseSwatches.forEach { swatch ->
                 Box(
                     Modifier
                         .size(25.dp)
@@ -3433,7 +4084,7 @@ private fun ColorDock(currentColor: Int, onColorChanged: (Int) -> Unit) {
 }
 
 @Composable
-private fun HueWheel(
+internal fun HueWheel(
     hue: Float,
     saturation: Float,
     value: Float,
@@ -3441,67 +4092,98 @@ private fun HueWheel(
     onHueChanged: (Float) -> Unit,
     onSaturationValueChanged: (Float, Float) -> Unit,
 ) {
+    val latestOnHueChanged by rememberUpdatedState(onHueChanged)
+    val latestOnSaturationValueChanged by rememberUpdatedState(onSaturationValueChanged)
+    // Three gradient draws replace the old 120 arcs + 576 swatch rectangles per frame.
+    // The two composited gradients are mathematically equivalent to HSV(saturation, value).
+    val hueRing = remember {
+        Brush.sweepGradient((0..6).map { step ->
+            Color(AndroidColor.HSVToColor(floatArrayOf(step * 60f, 1f, 1f)))
+        })
+    }
+    val saturationBrush = remember(hue) {
+        Brush.horizontalGradient(
+            listOf(Color.White, Color(AndroidColor.HSVToColor(floatArrayOf(hue, 1f, 1f)))),
+        )
+    }
+    val valueBrush = remember { Brush.verticalGradient(listOf(Color.Transparent, Color.Black)) }
+
     Canvas(
         modifier = modifier
+            .testTag("hsv_color_wheel")
             .pointerInput(Unit) {
                 detectTapGestures { point ->
-                    val center = Offset(size.width / 2f, size.height / 2f)
-                    val dx = point.x - center.x
-                    val dy = point.y - center.y
-                    val radius = min(size.width, size.height) / 2f
-                    val distanceSquared = dx * dx + dy * dy
-                    if (distanceSquared > (radius * .62f) * (radius * .62f)) {
-                        val angle = (atan2(dy.toDouble(), dx.toDouble()).toFloat() * 180f / PI.toFloat() + 360f) % 360f
-                        onHueChanged(angle)
-                    } else {
-                        val squareHalf = radius * .42f
-                        val sat = ((point.x - (center.x - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        val v = (1f - (point.y - (center.y - squareHalf)) / (squareHalf * 2f)).coerceIn(0f, 1f)
-                        onSaturationValueChanged(sat, v)
+                    when (val selection = colorWheelSelection(
+                        point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                    )) {
+                        is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                        is ColorWheelSelection.SaturationValue ->
+                            latestOnSaturationValueChanged(selection.saturation, selection.value)
+                        null -> Unit
                     }
                 }
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { point ->
+                        when (val selection = colorWheelSelection(
+                            point.x, point.y, size.width.toFloat(), size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                    },
+                    onDrag = { change, _ ->
+                        when (val selection = colorWheelSelection(
+                            change.position.x,
+                            change.position.y,
+                            size.width.toFloat(),
+                            size.height.toFloat(),
+                        )) {
+                            is ColorWheelSelection.Hue -> latestOnHueChanged(selection.degrees)
+                            is ColorWheelSelection.SaturationValue ->
+                                latestOnSaturationValueChanged(selection.saturation, selection.value)
+                            null -> Unit
+                        }
+                        change.consume()
+                    },
+                )
             },
     ) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val outerRadius = min(size.width, size.height) / 2f
         val ringWidth = outerRadius * .19f
-        repeat(120) { index ->
-            drawArc(
-                color = Color(AndroidColor.HSVToColor(floatArrayOf(index * 3f, 1f, 1f))),
-                startAngle = index * 3f,
-                sweepAngle = 3.4f,
-                useCenter = false,
-                topLeft = Offset(center.x - outerRadius + ringWidth / 2f, center.y - outerRadius + ringWidth / 2f),
-                size = Size((outerRadius - ringWidth / 2f) * 2f, (outerRadius - ringWidth / 2f) * 2f),
-                style = Stroke(ringWidth),
-            )
-        }
+        val ringRadius = outerRadius - ringWidth / 2f
+        drawCircle(
+            brush = hueRing,
+            radius = ringRadius,
+            center = center,
+            style = Stroke(width = ringWidth),
+        )
         val squareHalf = outerRadius * .42f
-        val steps = 24
-        val cell = squareHalf * 2f / steps
-        repeat(steps) { xIndex ->
-            repeat(steps) { yIndex ->
-                val sat = xIndex / (steps - 1f)
-                val v = 1f - yIndex / (steps - 1f)
-                drawRect(
-                    Color(AndroidColor.HSVToColor(floatArrayOf(hue, sat, v))),
-                    topLeft = Offset(center.x - squareHalf + xIndex * cell, center.y - squareHalf + yIndex * cell),
-                    size = Size(cell + 1f, cell + 1f),
-                )
-            }
-        }
+        val topLeft = Offset(center.x - squareHalf, center.y - squareHalf)
+        val squareSize = Size(squareHalf * 2f, squareHalf * 2f)
+        drawRect(brush = saturationBrush, topLeft = topLeft, size = squareSize)
+        drawRect(brush = valueBrush, topLeft = topLeft, size = squareSize)
         val pointerAngle = hue * PI.toFloat() / 180f
-        val pointerRadius = outerRadius - ringWidth / 2f
         drawCircle(
             color = Color.White,
             radius = 6f,
-            center = Offset(center.x + cos(pointerAngle.toDouble()).toFloat() * pointerRadius, center.y + sin(pointerAngle.toDouble()).toFloat() * pointerRadius),
+            center = Offset(
+                center.x + cos(pointerAngle.toDouble()).toFloat() * ringRadius,
+                center.y + sin(pointerAngle.toDouble()).toFloat() * ringRadius,
+            ),
             style = Stroke(2.5f),
         )
         drawCircle(
             color = Color.White,
             radius = 5f,
-            center = Offset(center.x - squareHalf + saturation * squareHalf * 2f, center.y + squareHalf - value * squareHalf * 2f),
+            center = Offset(
+                center.x - squareHalf + saturation * squareHalf * 2f,
+                center.y + squareHalf - value * squareHalf * 2f,
+            ),
             style = Stroke(2f),
         )
     }
@@ -3538,14 +4220,19 @@ private fun LayersDock(
     onRename: () -> Unit,
 ) {
     val active = layers.firstOrNull { it.isActive }
+    val clippingBase = active?.let { layers.getOrNull(layers.indexOf(it) + 1) }
+    val clippingBases = remember(layers) {
+        layers.zipWithNext().filter { (layer, _) -> layer.clipping }
+            .associate { (layer, base) -> layer.id to base }
+    }
     val selectedCount = layers.count { it.isSelected }
     val activeGroup = groups.firstOrNull { it.id == active?.groupId }
     var layerQuery by remember { mutableStateOf("") }
     var propertiesExpanded by remember { mutableStateOf(false) }
     var inspectorPage by remember { mutableIntStateOf(0) }
     var actionsMenuExpanded by remember { mutableStateOf(false) }
-    val visibleLayers = layers.filter { layer ->
-        layerQuery.isBlank() || layer.name.contains(layerQuery.trim(), ignoreCase = true)
+    val layerOutline = remember(layers, groups, layerQuery) {
+        buildLayerOutline(layers, groups, layerQuery)
     }
     Column(Modifier.fillMaxSize()) {
         Column(Modifier.padding(14.dp)) {
@@ -3586,9 +4273,9 @@ private fun LayersDock(
                         LayerQuickChip(
                             icon = Icons.Outlined.AutoFixNormal,
                             label = when {
-                                active.editingMask -> "Salir ocultación"
-                                active.hasMask -> "Editar ocultación"
-                                else -> "Ocultar"
+                                active.editingMask -> "Salir de máscara"
+                                active.hasMask -> "Editar máscara"
+                                else -> "Crear máscara"
                             },
                             selected = active.editingMask,
                             modifier = Modifier.weight(1.15f),
@@ -3598,8 +4285,9 @@ private fun LayersDock(
                         )
                         LayerQuickChip(
                             icon = Icons.Outlined.Layers,
-                            label = "Molde",
+                            label = "Recorte",
                             selected = active.clipping,
+                            enabled = clippingBase != null || active.clipping,
                             anchorId = "layer_clipping",
                             modifier = Modifier.weight(1f),
                             onClick = { onClipping(active.id, !active.clipping) },
@@ -3613,6 +4301,16 @@ private fun LayersDock(
                         )
                     }
                 }
+            }
+            if (active?.clipping == true && clippingBase != null) {
+                Text(
+                    "Recortada a «${clippingBase.name}»",
+                    modifier = Modifier.padding(top = 6.dp),
+                    color = StudioPalette.TextMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             if (layers.size >= 6) {
                 Spacer(Modifier.height(10.dp))
@@ -3641,8 +4339,8 @@ private fun LayersDock(
                 Spacer(Modifier.height(7.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     LayerInspectorTab("General", inspectorPage == 0, Modifier.weight(1f)) { inspectorPage = 0 }
-                    LayerInspectorTab("Molde", inspectorPage == 1, Modifier.weight(1f)) { inspectorPage = 1 }
-                    LayerInspectorTab("Ocultar", inspectorPage == 2, Modifier.weight(1f)) { inspectorPage = 2 }
+                    LayerInspectorTab("Recorte", inspectorPage == 1, Modifier.weight(1f)) { inspectorPage = 1 }
+                    LayerInspectorTab("Máscara", inspectorPage == 2, Modifier.weight(1f)) { inspectorPage = 2 }
                 }
                 Spacer(Modifier.height(7.dp))
                 Column(Modifier.heightIn(max = 230.dp).verticalScroll(rememberScrollState())) {
@@ -3680,12 +4378,22 @@ private fun LayersDock(
                                 }
                             }
                         }
-                        1 -> LayerConceptToggle(
-                            title = "Usar la capa inferior como molde",
-                            explanation = "Esta capa solo se verá donde la capa de abajo tenga contenido. Úsalo para sombras, luces y color sin salirte.",
-                            checked = active.clipping,
-                            onCheckedChange = { onClipping(active.id, it) },
-                        )
+                        1 -> {
+                            if (clippingBase == null && !active.clipping) {
+                                Text("Añade una capa debajo para usarla como base del recorte.", color = StudioPalette.TextMuted)
+                            } else {
+                                LayerConceptToggle(
+                                    title = clippingBase?.let { "Recortar a «${it.name}»" } ?: "Recorte activo",
+                                    explanation = if (clippingBase?.visible == false) {
+                                        "La capa base está oculta. Muéstrala para ver el resultado."
+                                    } else {
+                                        "La capa de abajo hace de molde. Puedes pintar aquí; lo que quede fuera de su forma no se verá."
+                                    },
+                                    checked = active.clipping,
+                                    onCheckedChange = { onClipping(active.id, it) },
+                                )
+                            }
+                        }
                         else -> {
                             if (active.hasMask) {
                                 Surface(
@@ -3696,21 +4404,21 @@ private fun LayersDock(
                                 ) {
                                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                                         Text(
-                                            if (active.editingMask) "Editando ocultación reversible" else "Ocultación reversible lista",
+                                            if (active.maskEnabled) "Máscara activa · ${active.maskStrength}%" else "Máscara pausada",
                                             color = Color.White,
                                             style = MaterialTheme.typography.labelLarge,
                                         )
                                         Text(
-                                            "La imagen original no se borra. Pinta para esconder y usa Recuperar para traer de vuelta.",
+                                            "Oculta partes de esta capa sin borrarlas. Al editarla puedes ajustar su intensidad.",
                                             color = StudioPalette.Text,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                             TextButton(onClick = { onHideWithMask(active.id) }, modifier = Modifier.weight(1f)) {
-                                                Icon(Icons.Outlined.Brush, null, modifier = Modifier.size(16.dp)); Text(" Esconder")
+                                                Text("Ocultar")
                                             }
                                             TextButton(onClick = { onRevealWithMask(active.id) }, modifier = Modifier.weight(1f)) {
-                                                Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(16.dp)); Text(" Recuperar")
+                                                Text("Recuperar")
                                             }
                                         }
                                         if (active.editingMask) {
@@ -3724,19 +4432,15 @@ private fun LayersDock(
                                     }
                                 }
                                 Spacer(Modifier.height(7.dp))
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                    LayerToggle(
-                                        label = if (active.editingMask) "Pintando ocultación" else "Editar ocultación",
-                                        checked = active.editingMask,
-                                        modifier = Modifier.weight(1f),
-                                    ) { onEditMask(active.id, it) }
-                                    LayerToggle(
-                                        label = if (active.maskEnabled) "Resultado visible" else "Viendo original",
-                                        checked = active.maskEnabled,
-                                        modifier = Modifier.weight(1f),
-                                    ) { onToggleMask(active.id) }
+                                LayerConceptToggle(
+                                    title = "Usar máscara",
+                                    explanation = "Desactívala para mostrar la capa completa sin perder la máscara.",
+                                    checked = active.maskEnabled,
+                                    onCheckedChange = { onToggleMask(active.id) },
+                                )
+                                TextButton(onClick = onDeleteMask) {
+                                    Text("Quitar máscara")
                                 }
-                                TextButton(onClick = onDeleteMask) { Text("Eliminar ocultación; conservar capa") }
                             } else {
                                 Surface(
                                     modifier = Modifier.fillMaxWidth().editorTutorialAnchor("mask_add"),
@@ -3747,12 +4451,12 @@ private fun LayersDock(
                                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         Text("Ocultar partes sin borrar", color = StudioPalette.Text, style = MaterialTheme.typography.labelLarge)
                                         Text(
-                                            "1. Crea la ocultación. 2. Pinta lo que quieres esconder. 3. Recupera si cambias de idea.",
+                                            "Crea una máscara y pinta sobre lo que quieres ocultar. Puedes recuperar cualquier parte después.",
                                             color = StudioPalette.TextMuted,
                                             style = MaterialTheme.typography.bodySmall,
                                         )
                                         TextButton(onClick = onAddMask) {
-                                            Icon(Icons.Outlined.AutoFixNormal, null, modifier = Modifier.size(17.dp)); Text(" Crear y empezar")
+                                            Text("Crear máscara")
                                         }
                                     }
                                 }
@@ -3763,36 +4467,21 @@ private fun LayersDock(
             }
         }
         HorizontalDivider(color = StudioPalette.Border)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(10.dp)) {
-            val emittedGroups = mutableSetOf<String>()
-            val groupsById = groups.associateBy { it.id }
-            fun ancestry(groupId: String?): List<LayerGroupUiModel> {
-                val result = mutableListOf<LayerGroupUiModel>()
-                val visited = mutableSetOf<String>()
-                var currentId = groupId
-                while (currentId != null && visited.add(currentId)) {
-                    val group = groupsById[currentId] ?: break
-                    result += group
-                    currentId = group.parentGroupId
-                }
-                return result.asReversed()
-            }
-            visibleLayers.forEach { layer ->
-                val group = layer.groupId?.let { id -> groups.firstOrNull { it.id == id } }
-                val ancestors = ancestry(layer.groupId)
-                ancestors.forEach { ancestor ->
-                    if (emittedGroups.add(ancestor.id)) {
-                        LayerGroupRow(
-                            group = ancestor,
-                            onToggleVisibility = onToggleGroupVisibility,
-                            onToggleCollapsed = onToggleGroupCollapsed,
-                        )
-                        Spacer(Modifier.height(7.dp))
-                    }
-                }
-                if (ancestors.none { it.collapsed }) {
-                    LayerRow(
-                        layer = layer,
+        LazyColumn(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            contentPadding = PaddingValues(10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+            items(layerOutline, key = { it.key }) { entry ->
+                when (entry) {
+                    is LayerOutlineEntry.Group -> LayerGroupRow(
+                        group = entry.group,
+                        onToggleVisibility = onToggleGroupVisibility,
+                        onToggleCollapsed = onToggleGroupCollapsed,
+                    )
+                    is LayerOutlineEntry.Layer -> LayerRow(
+                        layer = entry.layer,
+                        clippingBase = clippingBases[entry.layer.id],
                         onSelect = onSelectLayer,
                         onToggleSelection = onToggleLayerSelection,
                         onToggleVisibility = onToggleVisibility,
@@ -3801,19 +4490,21 @@ private fun LayersDock(
                             onSelectLayer(id)
                             if (up) onMoveUp() else onMoveDown()
                         },
-                        indentDepth = ancestors.size,
+                        indentDepth = entry.indentDepth,
                     )
-                    Spacer(Modifier.height(7.dp))
                 }
             }
-            if (visibleLayers.isEmpty()) {
-                Text(
-                    "No hay capas que coincidan con la búsqueda.",
-                    color = StudioPalette.TextMuted,
-                    modifier = Modifier.padding(12.dp),
-                )
+            if (layerOutline.isEmpty()) {
+                item("empty") {
+                    Text(
+                        "No hay capas que coincidan con la búsqueda.",
+                        color = StudioPalette.TextMuted,
+                        modifier = Modifier.padding(12.dp),
+                    )
+                }
             }
-            Surface(
+            item("paper") {
+                Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = StudioPalette.SurfaceRaised,
                 shape = RoundedCornerShape(11.dp),
@@ -3829,6 +4520,7 @@ private fun LayersDock(
                         Text("Blanco · bloqueado", color = StudioPalette.TextMuted, fontSize = 10.sp)
                     }
                 }
+            }
             }
         }
         HorizontalDivider(color = StudioPalette.Border)
@@ -3937,6 +4629,7 @@ private fun LayerQuickChip(
     icon: ImageVector,
     label: String,
     selected: Boolean = false,
+    enabled: Boolean = true,
     anchorId: String? = null,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
@@ -3950,7 +4643,7 @@ private fun LayerQuickChip(
                 this.selected = selected
                 role = Role.Button
             }
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         color = if (selected) StudioPalette.AccentSoft else StudioPalette.SurfaceRaised,
         shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(
@@ -4085,6 +4778,7 @@ private fun LayerGroupRow(
 @Composable
 private fun LayerRow(
     layer: LayerUiModel,
+    clippingBase: LayerUiModel?,
     onSelect: (String) -> Unit,
     onToggleSelection: (String) -> Unit,
     onToggleVisibility: (String) -> Unit,
@@ -4103,8 +4797,10 @@ private fun LayerRow(
                 stateDescription = buildString {
                     append(if (layer.visible) "Visible" else "Oculta")
                     append(", ${(layer.opacity * 100).toInt()} por ciento")
-                    if (layer.hasMask) append(", con mascara")
-                    if (layer.alphaLocked) append(", alfa bloqueado")
+                    if (layer.isActive) append(if (layer.editingMask) ", pintando en la máscara" else ", pintando en la capa")
+                    if (layer.hasMask) append(if (layer.maskEnabled) ", máscara al ${layer.maskStrength}%" else ", máscara pausada")
+                    if (layer.alphaLocked) append(", pintar dentro")
+                    if (layer.clipping) append(", ${clippingBase?.let { "recortada a ${it.name}" } ?: "recorte sin base"}")
                 }
             }
             .clickable(role = Role.Button) { onSelect(layer.id) },
@@ -4125,7 +4821,7 @@ private fun LayerRow(
                     Box(Modifier.width(2.dp).height(13.dp).background(StudioPalette.Accent))
                     Icon(
                         Icons.Outlined.ArrowDownward,
-                        "Usa la capa inferior como molde",
+                        null,
                         tint = StudioPalette.Accent,
                         modifier = Modifier.size(14.dp),
                     )
@@ -4150,15 +4846,24 @@ private fun LayerRow(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            Box(
-                Modifier
+            Surface(
+                onClick = {
+                    if (layer.editingMask) onToggleMaskEditing(layer.id, false) else onSelect(layer.id)
+                },
+                modifier = Modifier
                     .size(40.dp)
-                    .background(
-                        if (layer.name.hashCode() % 2 == 0) Color(0xFF394450) else Color(0xFF55505B),
-                        RoundedCornerShape(7.dp),
-                    )
-                    .border(1.dp, if (layer.isActive) Color.White.copy(alpha = .35f) else StudioPalette.Border, RoundedCornerShape(7.dp)),
-            )
+                    .semantics { contentDescription = "Pintar en la capa ${layer.name}" },
+                color = StudioPalette.SurfaceHover,
+                shape = RoundedCornerShape(7.dp),
+                border = androidx.compose.foundation.BorderStroke(
+                    if (layer.isActive && !layer.editingMask) 2.dp else 1.dp,
+                    if (layer.isActive && !layer.editingMask) StudioPalette.Accent else StudioPalette.Border,
+                ),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.Image, null, tint = StudioPalette.TextMuted, modifier = Modifier.size(20.dp))
+                }
+            }
             if (layer.hasMask) {
                 Spacer(Modifier.width(5.dp))
                 Surface(
@@ -4166,38 +4871,50 @@ private fun LayerRow(
                         .size(40.dp)
                         .semantics {
                             role = Role.Button
-                            contentDescription = if (layer.editingMask) {
-                                "Salir de la ocultación de ${layer.name}"
-                            } else {
-                                "Editar la ocultación de ${layer.name}"
-                            }
+                            contentDescription = if (layer.editingMask) "Dejar de editar máscara de ${layer.name}"
+                            else "Editar máscara de ${layer.name}"
                             selected = layer.editingMask
                         }
                         .clickable { onToggleMaskEditing(layer.id, !layer.editingMask) },
-                    color = Color(0xFFE7E7E7),
+                    color = if (layer.maskEnabled) Color(0xFFE7E7E7) else StudioPalette.SurfaceHover,
                     shape = RoundedCornerShape(7.dp),
                     border = androidx.compose.foundation.BorderStroke(
                         2.dp,
                         if (layer.editingMask) StudioPalette.Accent else StudioPalette.Border,
                     ),
                 ) {
-                    Canvas(Modifier.fillMaxSize().padding(6.dp)) {
-                        drawRect(Color.White)
-                        drawCircle(Color(0xFF555A62), radius = size.minDimension * .28f, center = center)
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            if (layer.maskEnabled) Icons.Outlined.AutoFixNormal else Icons.Outlined.VisibilityOff,
+                            null,
+                            tint = if (layer.maskEnabled) Color(0xFF394450) else StudioPalette.TextMuted,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text(layer.name, color = Color.White, style = MaterialTheme.typography.labelLarge)
+                Text(layer.name, color = Color.White, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val attributes = buildList {
-                    add("Raster")
                     add("${(layer.opacity * 100).toInt()}%")
-                    if (layer.alphaLocked) add("Alfa")
-                    if (layer.clipping) add("Molde inferior")
-                    if (layer.hasMask) add(if (layer.editingMask) "Ocultando ahora" else "Ocultación lista")
+                    if (layer.alphaLocked) add("Pintar dentro")
+                    if (layer.hasMask) add(
+                        when {
+                            layer.editingMask -> "Editando máscara"
+                            !layer.maskEnabled -> "Máscara pausada"
+                            else -> "Máscara ${layer.maskStrength}%"
+                        },
+                    )
                 }.joinToString(" · ")
                 Text(attributes, color = if (layer.isActive) Color.White.copy(alpha = .72f) else StudioPalette.TextMuted, fontSize = 10.sp)
+                if (layer.clipping) {
+                    val relation = clippingBase?.let { "Recorte → ${it.name}" } ?: "Recorte sin base"
+                    Text(
+                        if (clippingBase?.visible == false) "$relation (oculta)" else relation,
+                        color = StudioPalette.Accent, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             Icon(
                 Icons.Outlined.DragHandle,

@@ -10,6 +10,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class QuickAccessTest {
     @Test
+    fun actionSearchMatchesAccentsAndMultipleWords() {
+        assertTrue(matchesWorkspaceAction("rotacion lienzo", "Ajustar lienzo", "Restablecer la rotación"))
+        assertFalse(matchesWorkspaceAction("rotacion mascara", "Ajustar lienzo", "Restablecer la rotación"))
+    }
+
+    @Test
     fun keepsHighFrequencyActionsInAStableOrder() {
         assertEquals(
             listOf(

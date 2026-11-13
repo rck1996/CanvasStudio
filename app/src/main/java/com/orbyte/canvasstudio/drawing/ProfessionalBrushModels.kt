@@ -145,7 +145,7 @@ internal fun mixPigmentColor(loadedColor: Int, sampledColor: Int?, pickup: Float
             ).toInt().coerceIn(0, 255)
     }
 
-    return (0xFF shl 24) or
+    return (loadedColor and 0xFF000000.toInt()) or
         (mixChannel(16) shl 16) or
         (mixChannel(8) shl 8) or
         mixChannel(0)

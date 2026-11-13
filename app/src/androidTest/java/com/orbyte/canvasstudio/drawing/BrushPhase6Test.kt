@@ -44,12 +44,22 @@ class BrushPhase6Test {
     }
 
     @Test
-    fun platformPreviewIsLimitedToVisuallyCompatibleBrushFamilies() {
-        assertTrue(platformInkPreviewCompatible(BrushKind.MARKER))
-        assertTrue(platformInkPreviewCompatible(BrushKind.PAINT))
-        assertTrue(platformInkPreviewCompatible(BrushKind.OIL))
-        assertTrue(!platformInkPreviewCompatible(BrushKind.AIRBRUSH))
-        assertTrue(!platformInkPreviewCompatible(BrushKind.CHARCOAL))
-        assertTrue(!platformInkPreviewCompatible(BrushKind.WATERCOLOR))
+    fun platformPreviewIsLimitedToSettingsTheStockPenCanRepresent() {
+        val simpleMarker = BrushSettings(
+            kind = BrushKind.MARKER, hardness = 1f, stabilization = 0f, taperStart = 0f, taperEnd = 0f,
+            tipProfile = BrushTipProfile(),
+            grainProfile = BrushGrainProfile(),
+            renderProfile = BrushRenderProfile(mode = BrushRenderMode.INTENSE_GLAZE, buildup = 1f),
+            dynamicsProfile = BrushDynamicsProfile(),
+            dualBrushProfile = DualBrushProfile(),
+        )
+        assertTrue(platformInkPreviewCompatible(simpleMarker))
+        assertTrue(!platformInkPreviewCompatible(simpleMarker.copy(pressureSize = false)))
+        assertTrue(!platformInkPreviewCompatible(simpleMarker.copy(flow = .1f)))
+        assertTrue(!platformInkPreviewCompatible(simpleMarker.copy(stabilization = .8f)))
+        assertTrue(!platformInkPreviewCompatible(simpleMarker.copy(renderProfile = BrushRenderProfile(wetness = .4f))))
+        BrushKind.entries.filterNot { it == BrushKind.MARKER }.forEach {
+            assertTrue(!platformInkPreviewCompatible(simpleMarker.copy(kind = it)))
+        }
     }
 }

@@ -1,11 +1,10 @@
 package com.orbyte.canvasstudio.ui.workspace
 
 /**
- * Tablet workspace policy: a narrow or portrait layout must prioritize the artwork.
- * A user can still open the inspector manually; zen mode always hides it.
+ * The artwork takes priority at any width. The inspector opens on demand
+ * and stays hidden in canvas mode.
  */
 internal fun shouldShowInspector(
-    compact: Boolean,
     expanded: Boolean,
     zenMode: Boolean,
-): Boolean = !zenMode && (!compact || expanded)
+): Boolean = expanded && !zenMode

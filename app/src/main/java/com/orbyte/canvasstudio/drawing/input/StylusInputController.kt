@@ -14,15 +14,25 @@ internal object StylusInputController {
         val eventTimeMillis: Long,
     )
 
-    fun stylusPointerIndex(event: MotionEvent): Int? =
-        (0 until event.pointerCount).firstOrNull { index ->
-            when (event.getToolType(index)) {
-                MotionEvent.TOOL_TYPE_STYLUS,
-                MotionEvent.TOOL_TYPE_ERASER,
-                -> true
-                else -> false
-            }
+    fun stylusPointerIndex(event: MotionEvent): Int? {
+        // Pointer array order does not identify the pen that lifted. Returning
+        // the first pen on a multi-pen release can give the wrong end position.
+        when (event.actionMasked) {
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP ->
+                if (isPen(event, event.actionIndex)) return event.actionIndex
         }
+        // For a finger/palm release, keep the pen discoverable. The gesture
+        // owner decides whether that release finishes anything.
+        for (index in 0 until event.pointerCount) {
+            if (isPen(event, index)) return index
+        }
+        return null
+    }
+
+    fun isPen(event: MotionEvent, index: Int): Boolean = when (event.getToolType(index)) {
+        MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_ERASER -> true
+        else -> false
+    }
 
     fun isEraser(event: MotionEvent, pointerIndex: Int): Boolean =
         event.getToolType(pointerIndex) == MotionEvent.TOOL_TYPE_ERASER

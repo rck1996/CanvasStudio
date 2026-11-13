@@ -34,6 +34,10 @@ internal object BrushStrokeGeometry {
             settings.kind == BrushKind.CHALK
         ) {
             primaryRadius * (1.3f + settings.scatter.coerceIn(0f, 1f))
+        } else if (settings.kind == BrushKind.BRISTLE) {
+            primaryRadius * 1.16f + scatterExtent
+        } else if (settings.kind == BrushKind.OIL && settings.tipProfile.shape == BrushTipShape.CHISEL) {
+            primaryRadius * 1.15f + scatterExtent
         } else {
             primaryRadius
         }
@@ -51,5 +55,27 @@ internal object BrushStrokeGeometry {
         val wetExtent = settings.sizePx * settings.renderProfile.bleed.coerceIn(0f, 1f) * .28f
         return max(max(primaryRadius + scatterExtent, particleExtent), dualExtent) +
             blurExtent + wetExtent + 10f
+    }
+
+    /** Extra margin for distance dabs whose full segment was previously painted into the tile. */
+    fun distanceDabClipPadding(settings: BrushSettings): Float {
+        val maxRadius = settings.sizePx * .95f
+        val rotatedTipPadding = when {
+            settings.tipAssetPath != null -> .42f // A rotated square bitmap can reach sqrt(2) radii.
+            settings.kind == BrushKind.WATERCOLOR -> .05f
+            else -> .25f // Offset and rotated oil/bristle ovals.
+        }
+        val dual = settings.dualBrushProfile
+        val secondaryTipPadding = if (dual.enabled) {
+            val shapePadding = when (dual.tip.shape) {
+                BrushTipShape.BRISTLE -> .27f
+                BrushTipShape.PARTICLE -> .78f
+                else -> 0f
+            }
+            settings.scatter.coerceIn(0f, 1f) +
+                dual.sizeScale.coerceIn(.1f, 2f) * shapePadding
+        } else 0f
+        // The secondary tip starts at the primary tip's scattered center.
+        return maxRadius * max(rotatedTipPadding, secondaryTipPadding) + 1f
     }
 }

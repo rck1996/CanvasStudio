@@ -55,6 +55,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -63,6 +64,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +84,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
@@ -96,6 +99,7 @@ import com.orbyte.canvasstudio.R
 import com.orbyte.canvasstudio.ui.PreviewBitmapRepository
 import com.orbyte.canvasstudio.drawing.ShortcutPreferences
 import com.orbyte.canvasstudio.drawing.ShortcutProfile
+import com.orbyte.canvasstudio.drawing.BrushRepository
 import com.orbyte.canvasstudio.model.CanvasPreset
 import com.orbyte.canvasstudio.model.CanvasPresetRepository
 import com.orbyte.canvasstudio.model.EditorDocument
@@ -131,7 +135,16 @@ fun GalleryScreen(
 ) {
     val context = LocalContext.current
     val metadataStore = remember(context) { GalleryMetadataStore(context) }
-    var searchQuery by remember { mutableStateOf("") }
+    var showExamples by rememberSaveable { mutableStateOf(false) }
+    var projectSearch by rememberSaveable { mutableStateOf("") }
+    var exampleSearch by rememberSaveable { mutableStateOf("") }
+    val searchQuery = if (showExamples) exampleSearch else projectSearch
+    val updateSearch: (String) -> Unit = { query ->
+        if (showExamples) exampleSearch = query.take(60) else projectSearch = query.take(60)
+    }
+    val title = if (showExamples) "Ejemplos" else "Mis proyectos"
+    val subtitle = if (showExamples) "Abre un ejemplo para crear tu propia copia."
+        else "Tu estudio local de ilustración y pintura digital"
     var sortOrder by remember { mutableStateOf(GallerySortOrder.RECENT) }
     var favoriteIds by remember(metadataStore) { mutableStateOf(metadataStore.favoriteIds()) }
     var organizationById by remember(metadataStore, projects) {
@@ -141,16 +154,25 @@ fun GalleryScreen(
     var showTrash by remember { mutableStateOf(false) }
     var pendingPermanentDelete by remember { mutableStateOf<TrashedProject?>(null) }
     var shortcutProfile by remember { mutableStateOf(ShortcutPreferences.load(context)) }
-    val filteredProjects = remember(projects, searchQuery, sortOrder, favoriteIds, organizationById) {
-        sortGalleryProjects(projects, searchQuery, sortOrder, favoriteIds, organizationById)
+    var showExperimentalBrushes by remember { mutableStateOf(BrushRepository.loadExperimentalVisibility(context)) }
+    val hasLocalProjects = remember(projects) { projects.any { it.isLocal } }
+    val filteredProjects = remember(projects, showExamples, searchQuery, sortOrder, favoriteIds, organizationById) {
+        val section = projects.filter { it.isLocal != showExamples }
+        sortGalleryProjects(section, searchQuery, if (showExamples) GallerySortOrder.RECENT else sortOrder, favoriteIds, organizationById)
     }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(StudioPalette.Background)) {
         val compactLayout = maxWidth < 900.dp
         Row(Modifier.fillMaxSize()) {
-        GallerySidebar(onNewCanvas = onNewCanvas, compact = compactLayout, onSettings = { showSettings = true })
+        GallerySidebar(
+            onNewCanvas = onNewCanvas,
+            compact = compactLayout,
+            onSettings = { showSettings = true },
+            showingExamples = showExamples,
+            onSectionChanged = { showExamples = it },
+        )
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            GalleryTopBar(onSettings = { showSettings = true })
+            GalleryTopBar()
             Column(
                 Modifier.fillMaxSize().padding(
                     horizontal = if (compactLayout) 12.dp else 28.dp,
@@ -159,31 +181,31 @@ fun GalleryScreen(
             ) {
                 if (compactLayout) {
                     Column {
-                        Text("Mis proyectos", style = MaterialTheme.typography.headlineMedium, color = StudioPalette.Text)
+                        Text(title, style = MaterialTheme.typography.headlineMedium, color = StudioPalette.Text)
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "Tu estudio local de ilustración y pintura digital",
+                            subtitle,
                             style = MaterialTheme.typography.bodyMedium,
                             color = StudioPalette.TextMuted,
                         )
                         Spacer(Modifier.height(12.dp))
                         OutlinedTextField(
                             value = searchQuery,
-                            onValueChange = { searchQuery = it.take(60) },
+                            onValueChange = updateSearch,
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Outlined.Search, null, tint = StudioPalette.TextMuted) },
-                            placeholder = { Text("Buscar proyectos") },
+                            placeholder = { Text(if (showExamples) "Buscar ejemplos" else "Buscar proyectos") },
                             shape = RoundedCornerShape(12.dp),
                         )
                     }
                 } else {
                     Row(verticalAlignment = Alignment.Bottom) {
                         Column {
-                            Text("Mis proyectos", style = MaterialTheme.typography.displaySmall, color = StudioPalette.Text)
+                            Text(title, style = MaterialTheme.typography.displaySmall, color = StudioPalette.Text)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "Tu estudio local de ilustración y pintura digital",
+                                subtitle,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = StudioPalette.TextMuted,
                             )
@@ -191,17 +213,17 @@ fun GalleryScreen(
                         Spacer(Modifier.weight(1f))
                         OutlinedTextField(
                             value = searchQuery,
-                            onValueChange = { searchQuery = it.take(60) },
+                            onValueChange = updateSearch,
                             modifier = Modifier.width(260.dp),
                             singleLine = true,
                             leadingIcon = { Icon(Icons.Outlined.Search, null, tint = StudioPalette.TextMuted) },
-                            placeholder = { Text("Buscar proyectos") },
+                            placeholder = { Text(if (showExamples) "Buscar ejemplos" else "Buscar proyectos") },
                             shape = RoundedCornerShape(12.dp),
                         )
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Row(
+                if (!showExamples) Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -226,11 +248,12 @@ fun GalleryScreen(
                     ) {
                         Text("Sin resultados", style = MaterialTheme.typography.titleMedium, color = StudioPalette.Text)
                         Text(
-                            "Prueba otro nombre, resolución, colección o etiqueta.",
+                            if (showExamples) "Prueba otro nombre o resolución."
+                            else "Prueba otro nombre, resolución, colección o etiqueta.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = StudioPalette.TextMuted,
                         )
-                        TextButton(onClick = { searchQuery = "" }) { Text("Limpiar búsqueda") }
+                        TextButton(onClick = { updateSearch("") }) { Text("Limpiar búsqueda") }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
@@ -240,7 +263,7 @@ fun GalleryScreen(
                     verticalArrangement = Arrangement.spacedBy(if (compactLayout) 10.dp else 18.dp),
                     contentPadding = PaddingValues(bottom = 28.dp),
                 ) {
-                    item {
+                    if (!showExamples && !hasLocalProjects && searchQuery.isBlank()) item {
                         NewProjectCard(onClick = onNewCanvas)
                     }
                     items(filteredProjects, key = { it.id }) { project ->
@@ -371,6 +394,21 @@ fun GalleryScreen(
                             "1 pincel · 2 borrador · 3 mover · 8 selección."
                         },
                     )
+                    HorizontalDivider(color = StudioPalette.Border)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Pinceles experimentales", fontWeight = FontWeight.SemiBold)
+                            Text("Incluye materiales en desarrollo en la biblioteca.")
+                        }
+                        Switch(
+                            checked = showExperimentalBrushes,
+                            onCheckedChange = {
+                                showExperimentalBrushes = it
+                                BrushRepository.saveExperimentalVisibility(context, it)
+                            },
+                            modifier = Modifier.semantics { contentDescription = "Mostrar pinceles experimentales" },
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -395,6 +433,8 @@ private fun GallerySidebar(
     onNewCanvas: () -> Unit,
     compact: Boolean,
     onSettings: () -> Unit,
+    showingExamples: Boolean,
+    onSectionChanged: (Boolean) -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -432,7 +472,14 @@ private fun GallerySidebar(
         GalleryNavItem(
             icon = Icons.Outlined.Collections,
             label = "Mis proyectos",
-            selected = true,
+            selected = !showingExamples,
+            onClick = { onSectionChanged(false) },
+        )
+        GalleryNavItem(
+            icon = Icons.Outlined.Palette,
+            label = "Ejemplos",
+            selected = showingExamples,
+            onClick = { onSectionChanged(true) },
         )
         Spacer(Modifier.height(14.dp))
         HorizontalDivider(color = StudioPalette.Border)
@@ -463,7 +510,10 @@ private fun GalleryNavItem(
     selected: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
-    val interactionModifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    val interactionModifier = if (onClick != null) Modifier
+        .semantics { this.selected = selected }
+        .clickable(role = Role.Button, onClick = onClick)
+    else Modifier
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -479,7 +529,7 @@ private fun GalleryNavItem(
 }
 
 @Composable
-private fun GalleryTopBar(onSettings: () -> Unit) {
+private fun GalleryTopBar() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -490,20 +540,6 @@ private fun GalleryTopBar(onSettings: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("Galería", color = StudioPalette.Text, style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.weight(1f))
-        Surface(
-            color = Color(0xFF153326),
-            shape = RoundedCornerShape(20.dp),
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF285A45)),
-        ) {
-            Row(Modifier.padding(horizontal = 11.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).background(StudioPalette.Success, CircleShape))
-                Spacer(Modifier.width(7.dp))
-                Text("Guardado local activo", color = Color(0xFFA9E8CD), style = MaterialTheme.typography.labelMedium)
-            }
-        }
-        Spacer(Modifier.width(10.dp))
-        IconButton(onClick = onSettings) { Icon(Icons.Outlined.Settings, "Ajustes", tint = StudioPalette.TextMuted) }
     }
 }
 

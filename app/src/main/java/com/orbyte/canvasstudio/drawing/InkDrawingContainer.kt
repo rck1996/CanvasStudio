@@ -74,16 +74,9 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 endInk(event, canceled = true)
-                if (event.getToolType(index) == MotionEvent.TOOL_TYPE_STYLUS &&
-                    drawingView.hasActiveBrushStroke() && drawingView.supportsPlatformLowLatencyPreview()
-                ) {
-                    requestUnbufferedDispatch(event)
-                    val pointerId = event.getPointerId(index)
-                    activeInkStroke = inkView.startStroke(event, pointerId, previewBrush())
-                    activePointerId = pointerId
-                    drawingView.platformInkPreviewActive = true
-                }
+                startInkIfOwned(event, index)
             }
+            MotionEvent.ACTION_POINTER_DOWN -> startInkIfOwned(event, index)
             MotionEvent.ACTION_MOVE -> {
                 activeInkStroke?.let { stroke ->
                     if (event.findPointerIndex(activePointerId) >= 0 && drawingView.hasActiveBrushStroke()) {
@@ -108,6 +101,16 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
         drawingView.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
 
+    private fun startInkIfOwned(event: MotionEvent, index: Int) {
+        if (activeInkStroke != null || event.getToolType(index) != MotionEvent.TOOL_TYPE_STYLUS) return
+        val pointerId = event.getPointerId(index)
+        if (!drawingView.ownsBrushPointer(pointerId) || !drawingView.supportsPlatformLowLatencyPreview()) return
+        requestUnbufferedDispatch(event)
+        activeInkStroke = inkView.startStroke(event, pointerId, previewBrush())
+        activePointerId = pointerId
+        drawingView.platformInkPreviewActive = true
+    }
+
     private fun endInk(event: MotionEvent, canceled: Boolean) {
         val stroke = activeInkStroke ?: return
         val pointerId = activePointerId
@@ -120,7 +123,7 @@ class InkDrawingContainer(context: Context) : FrameLayout(context) {
 
     private fun previewBrush(): Brush {
         val settings = drawingView.brushSettings
-        val alpha = (settings.opacity.coerceIn(0.15f, 1f) * 255f).toInt()
+        val alpha = (settings.opacity * Color.alpha(settings.color)).toInt()
         val color = Color.argb(
             alpha,
             Color.red(settings.color),

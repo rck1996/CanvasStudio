@@ -103,7 +103,7 @@ object BrushRepository {
             .apply()
     }
 
-    private fun saveRecents(context: Context, ids: List<String>) {
+    internal fun saveRecents(context: Context, ids: List<String>) {
         val array = JSONArray()
         ids.take(MAX_RECENT_BRUSHES).forEach(array::put)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)

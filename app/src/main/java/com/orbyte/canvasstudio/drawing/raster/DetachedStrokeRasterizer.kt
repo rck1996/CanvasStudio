@@ -8,6 +8,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import com.orbyte.canvasstudio.drawing.BrushRasterSession
 import com.orbyte.canvasstudio.drawing.BrushStrokeGeometry
+import com.orbyte.canvasstudio.drawing.DistanceDabSegment
 import com.orbyte.canvasstudio.drawing.SparseTileSurface
 import com.orbyte.canvasstudio.drawing.StrokeCommand
 import com.orbyte.canvasstudio.drawing.StrokeCommandPainter
@@ -55,6 +56,7 @@ internal class DetachedStrokeRasterizer : Closeable {
         val expectedRevision = surface.rasterRevision()
         val output = ArrayList<Pair<TileStorage.Key, Bitmap>>(keys.size)
         val documentBounds = RectF(0f, 0f, surface.width.toFloat(), surface.height.toFloat())
+        val distancePlan = brushSession.planDistanceDabs(command)
         try {
             for (key in keys) {
                 val existing = surface.snapshotTile(key)
@@ -80,6 +82,7 @@ internal class DetachedStrokeRasterizer : Closeable {
                             renderIntoTile(
                                 scratch, rect.left, rect.top, command, documentBounds,
                                 clipToTile = false,
+                                distancePlan = distancePlan,
                             )
                             Canvas(result).drawBitmap(scratch, 0f, 0f, alphaCompositePaint)
                         } finally {
@@ -89,6 +92,7 @@ internal class DetachedStrokeRasterizer : Closeable {
                         renderIntoTile(
                             result, rect.left, rect.top, command, documentBounds,
                             clipToTile = true,
+                            distancePlan = distancePlan,
                         )
                     }
                     output += key to result
@@ -111,6 +115,7 @@ internal class DetachedStrokeRasterizer : Closeable {
         command: StrokeCommand,
         documentBounds: RectF,
         clipToTile: Boolean,
+        distancePlan: Array<DistanceDabSegment?>?,
     ) {
         val tileBounds = RectF(
             left.toFloat(), top.toFloat(),
@@ -129,6 +134,7 @@ internal class DetachedStrokeRasterizer : Closeable {
                 // alpha-locked strokes redraw full commands into scratch;
                 // normal replay culls segments outside the current tile.
                 renderClipBounds = if (clipToTile) tileBounds else null,
+                distancePlan = distancePlan,
             )
         } finally {
             canvas.restoreToCount(saved)

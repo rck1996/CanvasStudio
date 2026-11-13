@@ -58,8 +58,14 @@ class LargeCanvasExportTest {
                 brushSettings = brushSettings.copy(color = Color.RED)
                 drawDot(this, 7000f, 4200f)
                 drawDot(this, 7200f, 4200f)
+                drawDot(this, 7400f, 4200f)
                 addMaskToActiveLayer()
+                brushSettings = BrushSettings(kind = BrushKind.INK, sizePx = 96f, color = Color.BLACK,
+                    pressureSize = false, hardness = 1f, taperStart = 0f, taperEnd = 0f,
+                    renderProfile = BrushRenderProfile(BrushRenderMode.INTENSE_GLAZE, buildup = 1f))
                 drawDot(this, 7200f, 4200f)
+                brushSettings = brushSettings.copy(opacity = .5f)
+                drawDot(this, 7400f, 4200f)
                 finishMaskEditing()
                 var layerId = ""
                 onLayersChanged = { layers -> layerId = layers.first { it.isActive }.id }
@@ -93,8 +99,11 @@ class LargeCanvasExportTest {
             }
         }
         inspectPng("data/layer000.png") { bitmap ->
-            assertTrue(Color.alpha(bitmap.getPixel(7000 / 8, 4200 / 8)) > 127)
+            val unmasked = Color.alpha(bitmap.getPixel(7000 / 8, 4200 / 8))
+            assertTrue(unmasked > 127)
             assertEquals(Color.TRANSPARENT, bitmap.getPixel(7200 / 8, 4200 / 8))
+            val partial = Color.alpha(bitmap.getPixel(7400 / 8, 4200 / 8))
+            assertTrue("A soft mask must not erase all coverage", partial in 1 until unmasked)
         }
         inspectPng("mergedimage.png") { bitmap ->
             assertTrue(Color.alpha(bitmap.getPixel(800 / 8, 700 / 8)) > 0)

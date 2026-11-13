@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
+import android.graphics.ComposeShader
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
@@ -13,6 +14,9 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
 import com.orbyte.canvasstudio.drawing.brush.BrushEvaluator
+import com.orbyte.canvasstudio.drawing.brush.DabSpan
+import com.orbyte.canvasstudio.drawing.brush.DistanceDabCursor
+import com.orbyte.canvasstudio.drawing.brush.usesDistanceDabs
 import com.orbyte.canvasstudio.drawing.performance.DrawingPerformanceMetrics
 import java.io.Closeable
 import java.io.File
@@ -24,7 +28,16 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.round
 import kotlin.math.sin
+
+internal data class DistanceDabSegment(
+    val span: DabSpan,
+    val speedFactor: Float,
+    val startProgress: Float,
+    val endProgress: Float,
+)
 
 /**
  * Authoritative CPU brush painter, independent of DrawingView.
@@ -73,6 +86,12 @@ internal class BrushRasterSession(
             }
         }
     private val grainShaderMatrix = Matrix()
+    private val featheredTipMatrix = Matrix()
+    private data class FeatheredTipEntry(val bitmap: Bitmap, val shader: BitmapShader)
+    private val featheredTips = mutableMapOf<FeatheredBrushTip, FeatheredTipEntry>()
+    private val featheredComposites = mutableMapOf<FeatheredBrushTip, Pair<Shader, Shader>>()
+    private val materialTips = mutableMapOf<MaterialTip, Bitmap>()
+    private val materialBounds = RectF()
     private var lastTintColor = 0
     private var lastTintFilter: PorterDuffColorFilter? = null
     private var cachedMaskFilterKey: Int = Int.MIN_VALUE
@@ -99,22 +118,35 @@ internal class BrushRasterSession(
         speedFactor: Float,
         tool: DrawingTool,
     ): Float {
+        val featheredTip = if (tool == DrawingTool.BRUSH) FeatheredBrushTip.forSettings(settings) else null
         val requested = settings.spacing.coerceIn(0.025f, 0.5f)
         val floor = when (settings.kind) {
             BrushKind.CHARCOAL, BrushKind.CHALK, BrushKind.DRY_BRUSH -> 0.13f
             BrushKind.BRISTLE -> 0.1f
             BrushKind.PAINT, BrushKind.WATERCOLOR, BrushKind.OIL -> 0.09f
             BrushKind.AIRBRUSH -> 0.1f
-            BrushKind.MARKER -> 0.08f
+            BrushKind.MARKER -> 0.055f
             else -> requested
         }
-        val largeTipFloor = when (settings.kind) {
-            BrushKind.BRISTLE, BrushKind.WATERCOLOR, BrushKind.OIL -> .20f
+        val largeTipFloor = when {
+            featheredTip == FeatheredBrushTip.LOADED_OIL -> .13f
+            settings.kind == BrushKind.BRISTLE || settings.kind == BrushKind.WATERCOLOR ||
+                settings.kind == BrushKind.OIL -> .20f
             else -> floor
         }
         if (settings.sizePx <= 96f || largeTipFloor == floor || tool == DrawingTool.ERASER) {
             return max(requested, floor)
         }
+        val widthFactor = tipWidthFactor(settings, pressure, speedFactor)
+        // A nominally large brush can still produce a thin dab at light pressure.
+        val fullTipWeight = ((widthFactor - .55f) / .30f).coerceIn(0f, 1f)
+        // At large sizes these tips already overlap heavily. Keep their full
+        // geometry and grain, while limiting repeated overdraw of the same area.
+        val largeTipWeight = ((settings.sizePx - 96f) / 84f).coerceIn(0f, 1f)
+        return max(requested, floor + (largeTipFloor - floor) * largeTipWeight * fullTipWeight)
+    }
+
+    private fun tipWidthFactor(settings: BrushSettings, pressure: Float, speedFactor: Float): Float {
         val minimum = settings.minSize.coerceIn(.02f, 1f)
         val pressureWidth = if (settings.pressureSize) {
             val curved = applyInputCurve(
@@ -127,14 +159,95 @@ internal class BrushRasterSession(
         }
         val velocityWidth = 1f - max(settings.velocitySize, settings.dynamicsProfile.velocitySize)
             .coerceIn(0f, 1f) * speedFactor * .62f
-        val widthFactor = pressureWidth * velocityWidth
-        // A nominally large brush can still produce a thin dab at light pressure.
-        val fullTipWeight = ((widthFactor - .55f) / .30f).coerceIn(0f, 1f)
-        // At large sizes these tips already overlap heavily. Keep their full
-        // geometry and grain, while limiting repeated overdraw of the same area.
-        val largeTipWeight = ((settings.sizePx - 96f) / 84f).coerceIn(0f, 1f)
-        return max(requested, floor + (largeTipFloor - floor) * largeTipWeight * fullTipWeight)
+        return pressureWidth * velocityWidth
     }
+
+    internal fun planDistanceDabs(command: StrokeCommand): Array<DistanceDabSegment?>? {
+        if (!usesDistanceDabs(command.settings, command.tool)) return null
+        val points = command.points
+        val lengths = FloatArray((points.size - 1).coerceAtLeast(0)) { index ->
+            hypot(points[index + 1].x - points[index].x, points[index + 1].y - points[index].y)
+        }
+        val total = lengths.sum().coerceAtLeast(1f)
+        val cursor = DistanceDabCursor()
+        var traveled = 0f
+        return Array(lengths.size) { index ->
+            val length = lengths[index]
+            val start = traveled / total
+            traveled += length
+            nextDistanceDabs(cursor, points[index], points[index + 1], command.settings, start, traveled / total, length)
+        }
+    }
+
+    internal fun nextDistanceDabs(
+        cursor: DistanceDabCursor,
+        from: StrokePoint,
+        to: StrokePoint,
+        settings: BrushSettings,
+        startProgress: Float,
+        endProgress: Float,
+        length: Float = hypot(to.x - from.x, to.y - from.y),
+    ): DistanceDabSegment? {
+        if (!length.isFinite() || length <= 0f) return null
+        val elapsed = (to.timestampMillis - from.timestampMillis).coerceAtLeast(1L).toFloat()
+        val speed = (length / elapsed / 2.4f).coerceIn(0f, 1f)
+        val pressure = min(from.pressure, to.pressure)
+        val nominal = settings.sizePx * stampSpacing(settings, pressure, speed, DrawingTool.BRUSH)
+        // These three painters build their own envelope. The roundness of the
+        // individual tip profile is not the width of the combined brush mark.
+        val aspect = when (settings.kind) {
+            BrushKind.WATERCOLOR -> .78f
+            BrushKind.BRISTLE -> .73f
+            BrushKind.OIL -> if (settings.tipProfile.shape == BrushTipShape.CHISEL) .90f else .56f
+            BrushKind.MARKER -> settings.tipProfile.roundness.coerceIn(.12f, 1f)
+            else -> .56f
+        }
+        // Limit the gap by the narrow footprint under light pressure, not the
+        // selected size. Short/stationary segments no longer force an extra dab.
+        val footprint = settings.sizePx * tipWidthFactor(settings, pressure, speed) * aspect
+        val step = min(nominal.coerceAtLeast(1.5f), footprint * .52f).coerceAtLeast(.75f)
+        return cursor.advance(length, step)?.let { DistanceDabSegment(it, speed, startProgress, endProgress) }
+    }
+
+    internal fun drawDistanceDabs(
+        canvas: Canvas,
+        from: StrokePoint,
+        to: StrokePoint,
+        settings: BrushSettings,
+        segment: DistanceDabSegment,
+        sampledColor: Int? = null,
+        pigmentColorOverride: Int? = null,
+        dabCenterBounds: RectF? = null,
+    ) {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+        val angle = atan2(dy.toDouble(), dx.toDouble()).toFloat()
+        val pigment = pigmentColorOverride ?: mixPigmentColor(settings.color, sampledColor, settings.renderProfile.colorPickup)
+        repeat(segment.span.count) { index ->
+            val t = segment.span.fractionAt(index)
+            val x = snapDabCoordinate(from.x + dx * t)
+            val y = snapDabCoordinate(from.y + dy * t)
+            // The distance plan still consumes the same phase and seed. Avoid sending
+            // dabs with no tile coverage through texture, grain and blur setup.
+            if (dabCenterBounds != null && !dabCenterBounds.contains(x, y)) return@repeat
+            val progress = segment.startProgress + (segment.endProgress - segment.startProgress) * t
+            drawBrushStamp(
+                canvas = canvas,
+                x = x,
+                y = y,
+                pressure = (from.pressure + (to.pressure - from.pressure) * t) * taperFactor(settings, progress),
+                tilt = from.tilt + (to.tilt - from.tilt) * t,
+                drawingTool = DrawingTool.BRUSH, settings = settings,
+                stampIndex = segment.span.firstSeed + index, angleRadians = angle,
+                orientation = interpolateCircularRadians(from.orientation, to.orientation, t),
+                speedFactor = segment.speedFactor, resolvedColor = pigment, strokeProgress = progress,
+            )
+        }
+    }
+
+    // Equivalent interpolation across event partitions can differ by an ULP.
+    // Canonicalize well below a visible pixel before position-based grain and jitter.
+    private fun snapDabCoordinate(value: Float): Float = round(value * 256f) / 256f
 
     internal fun drawStrokeSegment(
         canvas: Canvas,
@@ -145,6 +258,7 @@ internal class BrushRasterSession(
         progress: Float = 1f,
         segmentIndex: Int = 0,
         sampledColor: Int? = null,
+        pigmentColorOverride: Int? = null,
     ) {
         val deltaX = to.x - from.x
         val deltaY = to.y - from.y
@@ -156,7 +270,7 @@ internal class BrushRasterSession(
         val effectivePressure = ((from.pressure + to.pressure) / 2f) * taper
         val angleRadians = atan2(deltaY.toDouble(), deltaX.toDouble()).toFloat()
         val stampBased = isStampBrush(settings.kind)
-        val pigmentColor = mixPigmentColor(
+        val pigmentColor = pigmentColorOverride ?: mixPigmentColor(
             settings.color,
             sampledColor,
             settings.renderProfile.colorPickup,
@@ -239,6 +353,9 @@ internal class BrushRasterSession(
             speedFactor = speedFactor,
             resolvedColor = resolvedColor,
         )
+        // Several textured branches keep a minimum alpha for visible pigment.
+        // A fully transparent color must not be lifted back to that minimum.
+        if (drawingTool != DrawingTool.ERASER && strokePaint.alpha == 0) return
         if (drawingTool != DrawingTool.ERASER && settings.renderProfile.wetness > .001f) {
             val charge = settings.renderProfile.charge.coerceIn(0f, 1f)
             val attack = settings.renderProfile.attack.coerceIn(0f, 1f)
@@ -248,7 +365,17 @@ internal class BrushRasterSession(
             strokePaint.alpha = (strokePaint.alpha * pigmentLoad.coerceIn(.08f, 1f))
                 .toInt().coerceIn(1, 255)
         }
-        if (drawingTool != DrawingTool.ERASER) {
+        val featheredTip = if (drawingTool == DrawingTool.BRUSH) FeatheredBrushTip.forSettings(settings) else null
+        if (featheredTip == FeatheredBrushTip.ROUND_FELT || featheredTip == FeatheredBrushTip.FLAT_FELT) {
+            // Keep felt translucent at close spacing: spread the pigment over
+            // the overlapping dabs instead of effectively turning it into ink.
+            val dose = .40f * (settings.spacing.coerceIn(.055f, .50f) / .055f)
+            val coverage = 1f - (1f - strokePaint.alpha / 255f).pow(dose)
+            strokePaint.alpha = (coverage * 255f).toInt().coerceIn(1, 255)
+        }
+        // The document-space shader carries all the tooth in these tips. Sampling
+        // a second scalar at each dab would print stripes along their length.
+        if (drawingTool != DrawingTool.ERASER && featheredTip == null) {
             strokePaint.alpha = (
                 strokePaint.alpha *
                     grainCoverage(settings.grainProfile, x, y, stampIndex)
@@ -321,7 +448,15 @@ internal class BrushRasterSession(
             resolvedColor = resolvedColor,
         )
 
-        when (settings.kind) {
+        if (featheredTip != null) {
+            val contact = if (settings.pressureSize) pressure.coerceIn(0f, 1f) else .8f
+            val height = when (featheredTip) {
+                FeatheredBrushTip.LOADED_OIL -> settings.tipProfile.roundness.coerceIn(.22f, .74f) *
+                    (.80f + contact * .20f)
+                else -> settings.tipProfile.roundness.coerceIn(.12f, 1f)
+            }
+            drawFeatheredTip(canvas, featheredTip, stampX, stampY, radius, radius * height, resolvedAngle, resolvedColor)
+        } else when (settings.kind) {
             BrushKind.PENCIL -> {
                 val baseAlpha = strokePaint.alpha
                 val roundness = settings.tipProfile.roundness.coerceIn(.08f, 1f)
@@ -383,7 +518,16 @@ internal class BrushRasterSession(
                 canvas.restore()
             }
 
-            BrushKind.CHARCOAL, BrushKind.CHALK -> {
+            BrushKind.CHARCOAL -> {
+                val contact = if (settings.pressureOpacity) pressure.coerceIn(0f, 1f) else 1f
+                drawMaterialTip(
+                    canvas, MaterialTip.CHARCOAL, stampX, stampY, radius * .94f,
+                    radius * (.48f + contact * .37f), resolvedAngle, resolvedColor,
+                    load = .76f + contact * .84f, drawingTool = drawingTool,
+                )
+            }
+
+            BrushKind.CHALK -> {
                 val adaptiveCount = when {
                     diameter >= 144f -> 2
                     diameter >= 96f -> 3
@@ -398,7 +542,7 @@ internal class BrushRasterSession(
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 strokePaint.alpha = (
-                    baseAlpha * if (settings.kind == BrushKind.CHARCOAL) .2f else .14f
+                    baseAlpha * .14f
                 ).toInt().coerceIn(1, 255)
                 canvas.drawOval(
                     stampX - radius * .82f,
@@ -443,7 +587,16 @@ internal class BrushRasterSession(
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 val roundness = settings.tipProfile.roundness.coerceIn(.12f, 1f)
-                canvas.drawOval(
+                if (settings.tipProfile.shape == BrushTipShape.CHISEL) {
+                    // Keep the corner radius small enough to read as a flat nib.
+                    val halfHeight = radius * roundness
+                    val corner = halfHeight * .24f
+                    canvas.drawRoundRect(
+                        stampX - radius * .92f, stampY - halfHeight,
+                        stampX + radius * .92f, stampY + halfHeight,
+                        corner, corner, strokePaint,
+                    )
+                } else canvas.drawOval(
                     stampX - radius,
                     stampY - radius * roundness,
                     stampX + radius,
@@ -455,7 +608,14 @@ internal class BrushRasterSession(
 
             BrushKind.PAINT -> {
                 val baseAlpha = strokePaint.alpha
-                canvas.drawCircle(stampX, stampY, radius, strokePaint)
+                if (settings.tipProfile.shape == BrushTipShape.OVAL) {
+                    val halfHeight = radius * settings.tipProfile.roundness.coerceIn(.12f, 1f)
+                    canvas.save()
+                    canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
+                    canvas.drawOval(stampX - radius, stampY - halfHeight,
+                        stampX + radius, stampY + halfHeight, strokePaint)
+                    canvas.restore()
+                } else canvas.drawCircle(stampX, stampY, radius, strokePaint)
                 if (settings.grain > 0f) {
                     val grainParticles = if (diameter >= 120f) 1 else 2
                     repeat(grainParticles) { particle ->
@@ -471,6 +631,13 @@ internal class BrushRasterSession(
 
             BrushKind.DRY_BRUSH -> {
                 val baseAlpha = strokePaint.alpha
+                val contact = if (settings.pressureOpacity) pressure.coerceIn(0f, 1f) else 1f
+                if (contact > .28f && drawingTool != DrawingTool.ERASER) {
+                    val body = ((contact - .28f) / .72f).coerceIn(0f, 1f)
+                    drawMaterialTip(canvas, MaterialTip.DRY_PAINT, stampX, stampY,
+                        radius * .85f, radius * (.26f + body * .31f), resolvedAngle, resolvedColor,
+                        load = body * 1.35f, drawingTool = drawingTool)
+                }
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 val bristleCount = settings.tipProfile.count.coerceIn(3, 12)
@@ -479,7 +646,7 @@ internal class BrushRasterSession(
                         val offset = (bristle - (bristleCount - 1) / 2f) *
                             radius * 1.12f / bristleCount
                         strokePaint.alpha = (
-                            baseAlpha * (.3f + bristle * .36f / bristleCount)
+                            baseAlpha * (.38f + bristle * .36f / bristleCount)
                             ).toInt().coerceIn(1, 255)
                         canvas.drawOval(
                             stampX - radius * .7f,
@@ -499,17 +666,42 @@ internal class BrushRasterSession(
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
                 val bristleCount = settings.tipProfile.count.coerceIn(3, 14)
+                val contact = if (settings.pressureSize) pressure.coerceIn(0f, 1f) else .7f
+                val load = if (drawingTool == DrawingTool.ERASER) 0f else {
+                    val input = if (settings.pressureOpacity) pressure else 1f
+                    ((input - .35f) / .65f).coerceIn(0f, 1f)
+                }
+                val variation = settings.tipProfile.countJitter.coerceIn(0f, 1f)
+                val spread = radius * (.83f + contact * .14f)
+                val laneSpacing = spread / (bristleCount - 1)
                 repeat(bristleCount) { bristle ->
-                    val offset = (bristle - (bristleCount - 1) / 2f) *
-                        radius * 1.05f / bristleCount
-                    strokePaint.alpha = (
-                        baseAlpha * (.42f + bristle * .4f / bristleCount)
-                        ).toInt().coerceIn(1, 255)
+                    // Give each tuft a persistent profile. Do not re-roll its position
+                    // per dab: that makes a clean fiber look like noise as the pen moves.
+                    val laneSeed = (bristle + 1) * 1103515245 + 12345
+                    val placement = ((laneSeed ushr 12) and 255) / 255f
+                    val thickness = ((laneSeed ushr 21) and 255) / 255f
+                    val length = ((laneSeed ushr 4) and 255) / 255f
+                    val across = bristle / (bristleCount - 1f)
+                    val edge = kotlin.math.abs(across * 2f - 1f)
+                    // Neighboring central tufts lean toward their bundle at firm
+                    // contact, leaving wider gaps between bundles rather than
+                    // making a regular comb of independent lines.
+                    val bundle = (if (bristle % 2 == 0) 1f else -1f) * load * (1f - edge) * .22f
+                    val offset = (across - .5f) * spread +
+                        ((placement - .5f) * (.20f + variation * .24f) + bundle) * laneSpacing
+                    val halfWidth = laneSpacing * (.20f + contact * .29f) * (.76f + thickness * .30f)
+                    val halfLength = radius * (.72f + length * .23f - edge * .16f)
+                    val lead = radius * (placement - .5f) * (.12f + variation * .16f)
+                    // Strong contact loads the central tufts; keep the edge tufts
+                    // drier and leave the geometric gaps between fibers intact.
+                    val coreLoad = 1f + load * load * (1f - edge * .72f) * 1.25f
+                    strokePaint.alpha = (baseAlpha * (.60f + thickness * .32f) * (1f - edge * .18f) * coreLoad)
+                        .toInt().coerceIn(1, 255)
                     canvas.drawOval(
-                        stampX - radius,
-                        stampY + offset - radius * .055f,
-                        stampX + radius,
-                        stampY + offset + radius * .055f,
+                        stampX + lead - halfLength,
+                        stampY + offset - halfWidth,
+                        stampX + lead + halfLength,
+                        stampY + offset + halfWidth,
                         strokePaint,
                     )
                 }
@@ -523,8 +715,12 @@ internal class BrushRasterSession(
                 val dilution = settings.renderProfile.dilution.coerceIn(0f, 1f)
                 val bleed = settings.renderProfile.bleed.coerceIn(0f, 1f)
                 val wetRadius = radius * (1f + bleed * .12f)
+                val granular = settings.grainProfile.source == BrushGrainSource.WATERCOLOR &&
+                    settings.grainProfile.mode == BrushGrainMode.TEXTURIZED && settings.grainProfile.depth >= .7f
                 strokePaint.alpha = (
-                    baseAlpha * (.64f - dilution * .24f)
+                    baseAlpha * if (granular) .38f + bleed * .14f else {
+                        .74f + settings.renderProfile.buildup * .22f - dilution * .18f
+                    }
                     ).toInt().coerceIn(1, 255)
                 canvas.drawOval(
                     stampX - wetRadius,
@@ -533,11 +729,15 @@ internal class BrushRasterSession(
                     stampY + wetRadius * (.78f + wetness * .18f),
                     strokePaint,
                 )
-                strokePaint.style = Paint.Style.STROKE
-                strokePaint.strokeWidth = max(1f, radius * (.035f + wetness * .055f))
-                strokePaint.alpha = (
-                    baseAlpha * (.1f + wetness * .18f + settings.grain * .12f)
-                    ).toInt().coerceIn(1, 255)
+                // The granulating wash uses a second, denser deposit instead
+                // of outlining every dab, which made a row of round blooms.
+                if (!granular) {
+                    strokePaint.style = Paint.Style.STROKE
+                    strokePaint.strokeWidth = max(1f, radius * (.035f + wetness * .055f))
+                }
+                val deposit = if (granular) .68f + settings.renderProfile.buildup * .20f
+                    else .15f + wetness * .28f + settings.grain * .19f
+                strokePaint.alpha = (baseAlpha * deposit).toInt().coerceIn(1, 255)
                 canvas.drawOval(
                     stampX - radius * .91f + noiseX * radius * .06f,
                     stampY - radius * .77f + noiseY * radius * .06f,
@@ -555,22 +755,45 @@ internal class BrushRasterSession(
                 val drag = settings.renderProfile.drag.coerceIn(0f, 1f)
                 canvas.save()
                 canvas.rotate(resolvedAngle * 180f / PI.toFloat(), stampX, stampY)
-                repeat(bristleCount) { bristle ->
-                    val unit = bristle / (bristleCount - 1f)
-                    val offset = (unit - .5f) * radius * 1.1f
-                    val bristleSeed = seed xor (bristle + 3) * 1103515245
-                    val lengthNoise = .72f + ((bristleSeed ushr 9) and 0xFF) / 255f * .28f
-                    val thickness = radius * (.035f + (1f - drag) * .035f)
-                    strokePaint.alpha = (
-                        baseAlpha * (.48f + ((bristleSeed ushr 18) and 0xFF) / 255f * .42f)
-                        ).toInt().coerceIn(1, 255)
-                    canvas.drawOval(
-                        stampX - radius * lengthNoise,
-                        stampY + offset - thickness,
-                        stampX + radius,
-                        stampY + offset + thickness,
-                        strokePaint,
+                if (settings.tipProfile.shape == BrushTipShape.CHISEL) {
+                    val contact = if (settings.pressureSize) pressure.coerceIn(0f, 1f) else .8f
+                    val halfHeight = radius * settings.tipProfile.roundness.coerceIn(.22f, .74f) *
+                        (.80f + contact * .20f)
+                    val corner = halfHeight * .22f
+                    canvas.drawRoundRect(
+                        stampX - radius * .86f, stampY - halfHeight,
+                        stampX + radius * .86f, stampY + halfHeight,
+                        corner, corner, strokePaint,
                     )
+                } else {
+                    // Loaded oil binds fibers together with a textured body. Keep the
+                    // outer tufts separate so its edge does not turn into a round stamp.
+                    val contact = if (settings.pressureSize) pressure.coerceIn(0f, 1f) else .8f
+                    val body = (settings.renderProfile.charge * drag).coerceIn(0f, 1f)
+                    val spread = radius * (.62f + .78f * contact)
+                    val lane = spread / (bristleCount - 1)
+                    repeat(bristleCount) { bristle ->
+                        val unit = bristle / (bristleCount - 1f)
+                        val edge = kotlin.math.abs(unit * 2f - 1f)
+                        // Loaded central tufts merge as pressure rises, while
+                        // long, drier edge fibers keep visible grooves.
+                        val tuft = (bristle + 3) * 1103515245
+                        val width = ((tuft ushr 18) and 0xFF) / 255f
+                        val length = ((tuft ushr 9) and 0xFF) / 255f
+                        val offset = (unit - .5f) * spread + (width - .5f) * lane * .34f
+                        val merge = contact * contact * body * (1f - edge * .90f)
+                        val thickness = lane * (.18f + width * .30f + merge * 1.05f)
+                        strokePaint.alpha = (
+                            baseAlpha * (.54f + width * .28f + merge * .36f)
+                            ).toInt().coerceIn(1, 255)
+                        canvas.drawOval(
+                            stampX - radius * (.78f + length * .23f + drag * .13f),
+                            stampY + offset - thickness,
+                            stampX + radius * (.74f + length * .22f),
+                            stampY + offset + thickness,
+                            strokePaint,
+                        )
+                    }
                 }
                 canvas.restore()
                 strokePaint.alpha = baseAlpha
@@ -593,6 +816,53 @@ internal class BrushRasterSession(
         strokePaint.shader = null
         strokePaint.colorFilter = null
         strokePaint.style = Paint.Style.STROKE
+    }
+
+    private fun drawFeatheredTip(
+        canvas: Canvas,
+        tip: FeatheredBrushTip,
+        x: Float,
+        y: Float,
+        radius: Float,
+        halfHeight: Float,
+        angle: Float,
+        pigment: Int,
+    ) {
+        val entry = featheredTips.getOrPut(tip) {
+            val bitmap = tip.createMask()
+            FeatheredTipEntry(bitmap, BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
+        }
+        val sx = radius * tip.length / FeatheredBrushTip.PIXEL_RADIUS
+        val sy = halfHeight / FeatheredBrushTip.PIXEL_RADIUS
+        val halfMask = FeatheredBrushTip.SIZE * .5f
+        featheredTipMatrix.setScale(sx, sy)
+        featheredTipMatrix.postTranslate(x - sx * halfMask, y - sy * halfMask)
+        featheredTipMatrix.postRotate(angle * 180f / PI.toFloat(), x, y)
+        entry.shader.setLocalMatrix(featheredTipMatrix)
+        val grain = strokePaint.shader
+        // Both shaders are evaluated in document coordinates, not the rotated
+        // canvas. Paper tooth stays in place when the tip turns or crosses a tile.
+        strokePaint.shader = if (grain == null) entry.shader else {
+            val cached = featheredComposites[tip]
+            if (cached?.first === grain) cached.second else {
+                ComposeShader(entry.shader, grain, PorterDuff.Mode.DST_IN).also {
+                    featheredComposites[tip] = grain to it
+                }
+            }
+        }
+        strokePaint.colorFilter = pigmentTint(pigment)
+        val wasFiltering = strokePaint.isFilterBitmap
+        strokePaint.isFilterBitmap = true
+        // The mask is transparent outside the oriented tip. Use its exact
+        // axis-aligned extent to avoid shading the corners of a large square.
+        val rx = sx * halfMask
+        val ry = sy * halfMask
+        val c = kotlin.math.abs(cos(angle))
+        val s = kotlin.math.abs(sin(angle))
+        val dx = rx * c + ry * s
+        val dy = rx * s + ry * c
+        canvas.drawRect(x - dx, y - dy, x + dx, y + dy, strokePaint)
+        strokePaint.isFilterBitmap = wasFiltering
     }
 
     private fun drawDualBrushStamp(
@@ -704,6 +974,41 @@ internal class BrushRasterSession(
         strokePaint.style = originalStyle
     }
 
+    private fun drawMaterialTip(
+        canvas: Canvas,
+        material: MaterialTip,
+        x: Float,
+        y: Float,
+        halfWidth: Float,
+        halfHeight: Float,
+        angle: Float,
+        pigment: Int,
+        load: Float,
+        drawingTool: DrawingTool,
+    ) {
+        val alpha = strokePaint.alpha
+        val shader = strokePaint.shader
+        val colorFilter = strokePaint.colorFilter
+        val filterBitmap = strokePaint.isFilterBitmap
+        val bitmap = materialTips.getOrPut(material) { createMaterialTip(material) }
+        val saved = canvas.save()
+        try {
+            canvas.rotate(angle * 180f / PI.toFloat(), x, y)
+            materialBounds.set(x - halfWidth, y - halfHeight, x + halfWidth, y + halfHeight)
+            strokePaint.shader = null
+            strokePaint.isFilterBitmap = true
+            strokePaint.colorFilter = if (drawingTool == DrawingTool.ERASER) null else pigmentTint(pigment)
+            strokePaint.alpha = (alpha * load).toInt().coerceIn(0, 255)
+            canvas.drawBitmap(bitmap, null, materialBounds, strokePaint)
+        } finally {
+            strokePaint.alpha = alpha
+            strokePaint.shader = shader
+            strokePaint.colorFilter = colorFilter
+            strokePaint.isFilterBitmap = filterBitmap
+            canvas.restoreToCount(saved)
+        }
+    }
+
     private fun applyGrainTexture(
         paint: Paint,
         settings: BrushSettings,
@@ -757,9 +1062,12 @@ internal class BrushRasterSession(
     }
 
     private fun pigmentTint(color: Int): PorterDuffColorFilter {
-        lastTintFilter?.takeIf { lastTintColor == color }?.let { return it }
-        return PorterDuffColorFilter(color, PorterDuff.Mode.SRC_IN).also {
-            lastTintColor = color
+        // The paint already carries the pigment alpha. Tint only the RGB so
+        // that textured and bitmap tips don't apply the color alpha twice.
+        val tint = color or 0xFF000000.toInt()
+        lastTintFilter?.takeIf { lastTintColor == tint }?.let { return it }
+        return PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_IN).also {
+            lastTintColor = tint
             lastTintFilter = it
         }
     }
@@ -857,8 +1165,15 @@ internal class BrushRasterSession(
         }
         val previewFactor = if (isPreview) 0.72f else 1f
         paint.strokeWidth = dab.radiusX * 2f
-        paint.alpha = (dab.opacity * previewFactor * 255f).toInt().coerceIn(1, 255)
+        // Paint.setColor sets the alpha channel as well. Apply evaluated
+        // coverage after assigning the pigment, or pressure/flow/opacity are lost.
         paint.color = resolvedColor
+        if (drawingTool != DrawingTool.ERASER) {
+            val colorAlpha = resolvedColor ushr 24
+            paint.alpha = if (colorAlpha == 0) 0 else {
+                (dab.opacity * previewFactor * colorAlpha).toInt().coerceIn(1, colorAlpha)
+            }
+        }
         paint.style = Paint.Style.STROKE
         paint.strokeCap = if (settings.kind == BrushKind.MARKER) Paint.Cap.SQUARE else Paint.Cap.ROUND
         paint.strokeJoin = Paint.Join.ROUND
@@ -881,6 +1196,11 @@ internal class BrushRasterSession(
         tipBitmapCache.clear()
         grainTextureCache.values.forEach { if (!it.bitmap.isRecycled) it.bitmap.recycle() }
         grainTextureCache.clear()
+        featheredComposites.clear()
+        featheredTips.values.forEach { it.bitmap.recycle() }
+        featheredTips.clear()
+        materialTips.values.forEach { it.recycle() }
+        materialTips.clear()
         cachedMaskFilterKey = Int.MIN_VALUE
         cachedMaskFilter = null
     }

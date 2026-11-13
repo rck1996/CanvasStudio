@@ -7,7 +7,7 @@ import java.util.concurrent.CancellationException
 internal enum class ExportFormat(val extension: String, val mimeType: String, val successMessage: String) {
     PNG("png", "image/png", "PNG exportado"),
     OPEN_RASTER("ora", "image/openraster", "OpenRaster exportado"),
-    PSD("psd", "image/vnd.adobe.photoshop", "PSD compuesto exportado"),
+    PSD("psd", "image/vnd.adobe.photoshop", "PSD por capas exportado"),
 }
 
 internal fun interface ExportWriter {

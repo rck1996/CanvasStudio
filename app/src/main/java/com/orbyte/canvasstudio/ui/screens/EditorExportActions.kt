@@ -58,7 +58,7 @@ internal fun rememberEditorExportActions(view: DrawingView?): EditorExportAction
                     when (selected) {
                         ExportFormat.PNG -> snapshot.writePngTo(open, includePaper = true)
                         ExportFormat.OPEN_RASTER -> snapshot.writeOpenRasterTo(open)
-                        ExportFormat.PSD -> snapshot.writeBasicPsdTo(open)
+                        ExportFormat.PSD -> snapshot.writeLayeredPsdTo(open)
                     }
                 }, destination)
             }

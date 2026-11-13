@@ -7,6 +7,7 @@ import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -15,6 +16,84 @@ import org.junit.runner.RunWith
 class BrushRetentionMatrixTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
+
+    @Test
+    fun authoredBrushPixelsSurviveCrossTileUndoAndRedo() {
+        instrumentation.runOnMainSyncWithResult {
+            val view = DrawingView(context).apply {
+                configureDocument(1024, 512)
+                debugPerformanceMetricsEnabled = true
+            }
+            val presets = listOf("pencil-hb", "technical-ink", "granulated-watercolor", "bristle", "impasto-bristle")
+                .map { requireNotNull(resolveBuiltInBrush(it)) }
+            try {
+                presets.forEachIndexed { index, preset ->
+                    view.brushSettings = preset.toSettings(Color.BLACK)
+                    view.debugDrawStrokeForTest(materialLine(96, 928, 58f + index * 97f))
+                }
+                val original = view.exportCompositeBitmap(includePaper = false)
+                try {
+                    presets.forEachIndexed { index, preset ->
+                        val y = 58 + index * 97
+                        for (x in listOf(480, 544)) {
+                            assertTrue("${preset.id} did not rasterize on both tiles at x=$x", (y - 10..y + 10).any {
+                                Color.alpha(original.getPixel(x, it)) > 0
+                            })
+                        }
+                    }
+                    // New pigment overlaps all five marks in the same tile rows.
+                    view.brushSettings = presets[1].toSettings(Color.RED).copy(sizePx = 22f)
+                    view.debugDrawStrokeForTest((35..470 step 7).mapIndexed { index, y ->
+                        StrokePoint(512f, y.toFloat(), .84f, 0f, index * 12L)
+                    })
+                    val edited = view.exportCompositeBitmap(includePaper = false)
+                    try {
+                        assertTrue("The edit must actually change the retained image", !original.sameAs(edited))
+                        view.undo()
+                        val undone = view.exportCompositeBitmap(includePaper = false)
+                        try {
+                            assertExactPixels("Undo changed an earlier authored brush pixel", original, undone)
+                        } finally {
+                            undone.recycle()
+                        }
+                        view.redo()
+                        val redone = view.exportCompositeBitmap(includePaper = false)
+                        try {
+                            assertExactPixels("Redo changed an authored brush pixel", edited, redone)
+                        } finally {
+                            redone.recycle()
+                        }
+                        assertEquals(0L, view.debugPerformanceMetrics().indexFallbacks)
+                    } finally {
+                        edited.recycle()
+                    }
+                } finally {
+                    original.recycle()
+                }
+            } finally {
+                view.configureDocument(256, 256)
+            }
+        }
+    }
+
+    private fun materialLine(start: Int, end: Int, y: Float): List<StrokePoint> =
+        (start..end step 8).mapIndexed { index, x ->
+            StrokePoint(x.toFloat(), y, .8f, .16f, index * 12L, .04f)
+        }
+
+    private fun assertExactPixels(message: String, expected: Bitmap, actual: Bitmap) {
+        if (expected.sameAs(actual)) return
+        var count = 0
+        var first = ""
+        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+            val before = expected.getPixel(x, y)
+            val after = actual.getPixel(x, y)
+            if (before != after) {
+                if (count++ == 0) first = "($x,$y) ARGB ${before.toUInt().toString(16)} → ${after.toUInt().toString(16)}"
+            }
+        }
+        throw AssertionError("$message · $count píxeles · primero: $first")
+    }
 
     @Test
     fun everyBrushFamilyRetainsEarlierThickStrokes() {
@@ -132,6 +211,7 @@ class BrushRetentionMatrixTest {
             "charcoal",
             "bristle",
             "granulated-watercolor",
+            "thick-oil",
             "impasto-bristle",
         ).map { id -> requireNotNull(resolveBuiltInBrush(id)) }
         val sentinels = listOf(
@@ -141,6 +221,7 @@ class BrushRetentionMatrixTest {
             TestPoint(1_740f, 72f),
         )
         val start = android.os.SystemClock.elapsedRealtime()
+        val perPresetMillis = LongArray(presets.size)
 
         try {
             instrumentation.runOnMainSync {
@@ -151,16 +232,19 @@ class BrushRetentionMatrixTest {
                 sentinels.forEachIndexed { index, point -> drawStroke(view, point, index) }
 
                 repeat(500) { stroke ->
-                    val preset = presets[stroke % presets.size]
+                    val slot = stroke % presets.size
+                    val preset = presets[slot]
                     view.brushSettings = preset.toStressSettings().copy(
                         sizePx = 180f,
                         color = Color.rgb(82, 92, 108),
                     )
+                    val strokeStart = android.os.SystemClock.elapsedRealtime()
                     drawLongStroke(
                         view = view,
                         y = 300f + (stroke % 45) * 35f,
                         index = sentinels.size + stroke,
                     )
+                    perPresetMillis[slot] += android.os.SystemClock.elapsedRealtime() - strokeStart
                 }
             }
             val result = instrumentation.runOnMainSyncWithResult {
@@ -176,6 +260,8 @@ class BrushRetentionMatrixTest {
                 result.recycle()
             }
             val elapsed = android.os.SystemClock.elapsedRealtime() - start
+            android.util.Log.i("CanvasStudioAudit", "500 mixed strokes: ${elapsed}ms; " +
+                presets.indices.joinToString { "${presets[it].id}=${perPresetMillis[it]}ms" })
             assertTrue("La prueba masiva tardó demasiado: ${elapsed}ms", elapsed < 120_000L)
         } finally {
             instrumentation.runOnMainSync { view.configureDocument(256, 256) }

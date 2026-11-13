@@ -362,7 +362,7 @@ internal fun guideFor(
             else -> EditorTutorialGuide("canvas", "Arrastra la selección; al soltar se confirmará el cambio real.")
         }
         StudioTutorialModule.SHAPES_FILL -> when {
-            missing(TutorialEvidence.SHAPE_CREATED) && activeTool != DrawingTool.RECTANGLE -> EditorTutorialGuide("tool_rectangle", "Selecciona Rectangulo.")
+            missing(TutorialEvidence.SHAPE_CREATED) && activeTool != DrawingTool.RECTANGLE -> EditorTutorialGuide("tool_rectangle", "Abre el menú de figuras y elige Rectángulo.")
             missing(TutorialEvidence.SHAPE_CREATED) -> EditorTutorialGuide("canvas", "Arrastra para crear un rectángulo grande.")
             activeTool != DrawingTool.FILL -> EditorTutorialGuide("tool_fill", "Selecciona Relleno.")
             else -> EditorTutorialGuide("canvas", "Toca el interior del rectangulo para rellenarlo.")

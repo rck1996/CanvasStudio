@@ -1,16 +1,18 @@
 # Changelog
 
-## 2.6.0 — candidata
+## 2.6.0
 
 - Guardado transaccional, recuperación de proyectos, papelera e historial visual.
 - Galería con favoritos, colecciones, etiquetas y ficha del documento.
 - Búsqueda de acciones, nuevos comandos para la rueda y controles de máscara durante la edición.
 - Vistas previas de pincel con el raster Canvas y seguimiento del S Pen durante el trazo.
-- PNG y OpenRaster por bandas para reducir memoria al exportar en 8K.
+- PNG, OpenRaster y PSD por bandas; intercambio de capas raster editables en PSD.
+- Uniones de tiles sin líneas blancas en el editor al ajustar la vista.
+- Marcadores, óleo, cerdas, carboncillo y acuarela refinados. Óleos y acuarelas disponibles desde la biblioteca del editor.
 - Optimización del raster de puntas grandes y correcciones de composición, entrada y validación de exportación.
 - El editor abre desde la galería. El tutorial anterior se retiró de la navegación.
 
-[Integración y evidencia de pruebas](TABLET_INTEGRATION_2026-11-11.md).
+[Notas y validación](RELEASE_2.6.0.md) · [Capturas reales](SCREENSHOTS.md) · [Integración técnica](TABLET_INTEGRATION_2026-11-11.md).
 
 ## 2.5.0
 

@@ -28,12 +28,21 @@ private val brushPreviewDispatcher = Dispatchers.IO.limitedParallelism(2)
 
 /** Decorative library swatch. The caller labels the brush and can supply a row or detail size. */
 @Composable
-internal fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifier) {
+internal fun BrushStrokePreview(
+    preset: BrushPreset,
+    modifier: Modifier = Modifier,
+    fixedFrame: Boolean = false,
+    pressure: BrushPreviewModel.Pressure = BrushPreviewModel.Pressure.NATURAL,
+    inkColor: Int? = null,
+    backgroundColor: Color = Color(0xFF1A1D22),
+) {
     // Keep the last frame while editing this preset, but never show a different brush's frame.
-    var image by remember(preset.id) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(preset) {
+    var image by remember(preset.id, fixedFrame, pressure) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(preset, fixedFrame, pressure, inkColor) {
         image = withContext(brushPreviewDispatcher) {
-            BrushPreviewModel.rasterize(preset).asImageBitmap()
+            (if (fixedFrame) {
+                BrushPreviewModel.rasterizeSwatch(preset, pressure, inkColor ?: android.graphics.Color.WHITE)
+            } else BrushPreviewModel.rasterize(preset)).asImageBitmap()
         }
     }
 
@@ -41,7 +50,7 @@ internal fun BrushStrokePreview(preset: BrushPreset, modifier: Modifier = Modifi
         modifier = modifier
             .defaultMinSize(minWidth = 96.dp, minHeight = 34.dp)
             .clip(RoundedCornerShape(9.dp))
-            .background(Color(0xFF1A1D22))
+            .background(backgroundColor)
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
         image?.let {

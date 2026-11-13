@@ -76,6 +76,9 @@ object BasicPsdCodec {
             require(width.toLong() * height <= MAX_PIXELS) {
                 "El PSD básico admite hasta 40 megapíxeles."
             }
+            require(width.toLong() * height * 8L <= Runtime.getRuntime().maxMemory() / 2L) {
+                "La imagen compuesta del PSD es demasiado grande para la memoria de este dispositivo."
+            }
             repeat(3) {
                 val sectionLength = data.readInt().toLong() and 0xffffffffL
                 skipFully(data, sectionLength)

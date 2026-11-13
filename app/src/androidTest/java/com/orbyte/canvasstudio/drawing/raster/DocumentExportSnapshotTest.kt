@@ -11,6 +11,7 @@ import com.orbyte.canvasstudio.drawing.BrushKind
 import com.orbyte.canvasstudio.drawing.BrushSettings
 import com.orbyte.canvasstudio.drawing.DrawingView
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
+import com.orbyte.canvasstudio.drawing.PsdLayerReader
 import com.orbyte.canvasstudio.drawing.StrokePoint
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -147,6 +148,103 @@ class DocumentExportSnapshotTest {
             }
         } finally {
             original.recycle()
+        }
+    }
+
+    @Test
+    fun partialMaskOnClippingBaseMatchesCompositeAndBandedExport() {
+        val view = DrawingView(context)
+        lateinit var snapshot: DocumentExportSnapshot
+        lateinit var original: android.graphics.Bitmap
+        instrumentation.runOnMainSync {
+            view.configureDocument(512, 640)
+            var activeId = ""
+            view.onLayersChanged = { activeId = it.single { layer -> layer.isActive }.id }
+            view.refreshLayerState()
+            view.brushSettings = BrushSettings(kind = BrushKind.INK, color = Color.RED, sizePx = 96f, pressureSize = false)
+            val horizontal = listOf(StrokePoint(125f, 512f, 1f, 0f, 0L), StrokePoint(390f, 512f, 1f, 0f, 44L))
+            view.debugDrawStrokeForTest(horizontal)
+            view.addMaskToActiveLayer()
+            view.debugDrawStrokeForTest(horizontal)
+            view.setLayerMaskStrength(activeId, 50)
+            view.finishMaskEditing()
+            view.addLayer()
+            view.brushSettings = view.brushSettings.copy(color = Color.BLUE)
+            view.debugDrawStrokeForTest(listOf(StrokePoint(256f, 410f, 1f, 0f, 0L), StrokePoint(256f, 600f, 1f, 0f, 44L)))
+            view.setLayerClipping(activeId, true)
+            original = view.exportCompositeBitmap(false)
+            snapshot = view.captureExportSnapshot()
+        }
+        try {
+            val png = ByteArrayOutputStream()
+            snapshot.writePng(png, includePaper = false)
+            val exported = requireNotNull(BitmapFactory.decodeByteArray(png.toByteArray(), 0, png.size()))
+            try {
+                assertEquals(Color.TRANSPARENT, exported.getPixel(256, 590))
+                assertTrue("Base mask should partially hide the red stroke", Color.alpha(exported.getPixel(145, 512)) in 126..128)
+                val overlap = exported.getPixel(256, 512)
+                assertTrue("Clipped blue should remain partially visible over the base", Color.blue(overlap) > Color.red(overlap))
+                assertTrue(Color.alpha(overlap) in 188..193)
+                assertTrue("The banded export changed masked clipping pixels", original.sameAs(exported))
+            } finally {
+                exported.recycle()
+            }
+            val psd = ByteArrayOutputStream()
+            snapshot.writeLayeredPsd(psd)
+            val psdBytes = psd.toByteArray()
+            BasicPsdCodec.read(ByteArrayInputStream(psdBytes)).let { composite ->
+                try { assertTrue("Layered PSD composite changed masked clipping pixels", original.sameAs(composite)) }
+                finally { composite.recycle() }
+            }
+            requireNotNull(PsdLayerReader.read(ByteArrayInputStream(psdBytes))).use { layers ->
+                val base = layers.layers.first()
+                assertTrue(Color.alpha(requireNotNull(base.bitmap).getPixel(145 - base.left, 512 - base.top)) in 126..128)
+            }
+        } finally {
+            original.recycle()
+            instrumentation.runOnMainSync { view.configureDocument(256, 256) }
+        }
+    }
+
+    @Test
+    fun invertedMaskCoversMissingTilesAndMatchesPngAndLayeredPsd() {
+        val view = DrawingView(context)
+        lateinit var snapshot: DocumentExportSnapshot
+        lateinit var original: android.graphics.Bitmap
+        instrumentation.runOnMainSync {
+            view.configureDocument(1024, 640)
+            var activeId = ""
+            view.onLayersChanged = { activeId = it.single { layer -> layer.isActive }.id }
+            view.refreshLayerState()
+            view.brushSettings = BrushSettings(kind = BrushKind.INK, color = Color.RED, sizePx = 76f, pressureSize = false)
+            fun stroke(from: Float, to: Float) = listOf(
+                StrokePoint(from, 512f, 1f, 0f, 0L), StrokePoint(to, 512f, 1f, 0f, 60L),
+            )
+            view.debugDrawStrokeForTest(stroke(100f, 900f))
+            view.addMaskToActiveLayer()
+            view.debugDrawStrokeForTest(stroke(130f, 320f))
+            view.toggleLayerMaskInverted(activeId)
+            original = view.exportCompositeBitmap(false)
+            snapshot = view.captureExportSnapshot()
+        }
+        try {
+            assertEquals(255, Color.alpha(original.getPixel(210, 512)))
+            assertEquals(0, Color.alpha(original.getPixel(800, 512)))
+            val png = ByteArrayOutputStream()
+            snapshot.writePng(png, includePaper = false)
+            val exported = requireNotNull(BitmapFactory.decodeByteArray(png.toByteArray(), 0, png.size()))
+            try { assertTrue(original.sameAs(exported)) } finally { exported.recycle() }
+            val psd = ByteArrayOutputStream()
+            snapshot.writeLayeredPsd(psd)
+            requireNotNull(PsdLayerReader.read(ByteArrayInputStream(psd.toByteArray()))).use { stack ->
+                val layer = stack.layers.single()
+                val pixels = requireNotNull(layer.bitmap)
+                assertEquals(255, Color.alpha(pixels.getPixel(210 - layer.left, 512 - layer.top)))
+                assertEquals(0, Color.alpha(pixels.getPixel(800 - layer.left, 512 - layer.top)))
+            }
+        } finally {
+            original.recycle()
+            instrumentation.runOnMainSync { view.configureDocument(256, 256) }
         }
     }
 

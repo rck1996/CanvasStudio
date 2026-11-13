@@ -13,16 +13,30 @@ class ProfessionalBrushProfilesTest {
     fun professionalFamiliesHaveDistinctTipGrainAndRenderingProfiles() {
         val pencil = premiumBrushes.first { it.kind == BrushKind.PENCIL }
         val marker = premiumBrushes.single { it.id == "flat-marker" }
-        val watercolor = allBuiltInBrushes.first { it.kind == BrushKind.WATERCOLOR }
+        val lightWash = requireNotNull(resolveBuiltInBrush("wet-round"))
+        val granularWash = requireNotNull(resolveBuiltInBrush("granulated-watercolor"))
         val oil = allBuiltInBrushes.first { it.kind == BrushKind.OIL }
 
         assertEquals(BrushTipShape.OVAL, pencil.tipProfile.shape)
         assertEquals(BrushRotationMode.STYLUS, pencil.tipProfile.rotationMode)
         assertEquals(BrushTipShape.CHISEL, marker.tipProfile.shape)
-        assertEquals(BrushGrainMode.TEXTURIZED, watercolor.grainProfile.mode)
-        assertEquals(BrushRenderMode.LIGHT_GLAZE, watercolor.renderProfile.mode)
+        assertEquals(BrushGrainMode.TEXTURIZED, granularWash.grainProfile.mode)
+        assertEquals(BrushRenderMode.LIGHT_GLAZE, lightWash.renderProfile.mode)
+        assertEquals(BrushRenderMode.UNIFORM_GLAZE, granularWash.renderProfile.mode)
+        assertTrue(granularWash.renderProfile.wetness > 0f && granularWash.renderProfile.dilution > 0f)
         assertEquals(BrushRenderMode.BLENDING, oil.renderProfile.mode)
         assertTrue(oil.tipProfile.count >= 5)
+    }
+
+    @Test
+    fun flatOilAndImpastoHaveDifferentTipsAndPigmentPickup() {
+        val flat = requireNotNull(resolveBuiltInBrush("thick-oil"))
+        val impasto = requireNotNull(resolveBuiltInBrush("impasto-bristle"))
+        assertEquals(BrushTipShape.CHISEL, flat.tipProfile.shape)
+        assertEquals(BrushTipShape.BRISTLE, impasto.tipProfile.shape)
+        assertEquals(BrushGrainMode.TEXTURIZED, flat.grainProfile.mode)
+        assertTrue(flat.flow > impasto.flow)
+        assertTrue(flat.renderProfile.colorPickup < impasto.renderProfile.colorPickup)
     }
 
     @Test

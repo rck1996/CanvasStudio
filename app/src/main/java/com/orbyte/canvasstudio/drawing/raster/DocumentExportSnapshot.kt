@@ -1,10 +1,16 @@
 package com.orbyte.canvasstudio.drawing.raster
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Rect
+import android.graphics.RectF
 import com.orbyte.canvasstudio.drawing.BasicPsdCodec
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
+import com.orbyte.canvasstudio.drawing.PsdLayerWriter
 import com.orbyte.canvasstudio.drawing.SparseTileSurface
 import com.orbyte.canvasstudio.drawing.TileStorage
+import com.orbyte.canvasstudio.drawing.layerMaskAlpha
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -45,6 +51,9 @@ internal class DocumentExportSnapshot(
         val blendMode: LayerBlendMode,
         val clipping: Boolean,
         val maskEnabled: Boolean,
+        val alphaLocked: Boolean = false,
+        val maskStrength: Int = 100,
+        val maskInverted: Boolean = false,
     )
 
     private data class PinnedSurface(val surface: SparseTileSurface, val revision: Long)
@@ -73,6 +82,8 @@ internal class DocumentExportSnapshot(
                 blendMode = layer.blendMode,
                 clipping = layer.clipping,
                 maskEnabled = layer.maskEnabled,
+                maskStrength = layer.maskStrength,
+                maskInverted = layer.maskInverted,
             )
         }
 
@@ -123,6 +134,43 @@ internal class DocumentExportSnapshot(
             } finally {
                 bitmap.recycle()
             }
+        }
+    }
+
+    fun writeLayeredPsd(destination: OutputStream) = writeLayeredPsdTo { destination }
+
+    fun writeLayeredPsdTo(openDestination: () -> OutputStream) {
+        stagedFile(".psd", openDestination) { file ->
+            val maskCompositor = RasterMaskCompositor()
+            val bandBounds = RectF()
+            val editableLayers = layers.map { layer ->
+                val bounds = layer.surface.occupiedTileBounds()
+                PsdLayerWriter.Layer(
+                    layer.name, layer.visible, layer.opacity, layer.blendMode, layer.clipping, layer.alphaLocked,
+                    PsdLayerWriter.Raster(bounds) { band, top, rows ->
+                        validateUnchanged()
+                        band.eraseColor(Color.TRANSPARENT)
+                        val canvas = Canvas(band)
+                        canvas.translate(-bounds.left.toFloat(), -top.toFloat())
+                        val row = top / TileStorage.TILE_SIZE
+                        layer.surface.drawAllDetached(canvas, null, row)
+                        layer.maskSurface?.let { mask ->
+                            val alpha = layerMaskAlpha(layer.maskEnabled, layer.maskStrength)
+                            bandBounds.set(bounds.left.toFloat(), top.toFloat(), bounds.right.toFloat(), (top + rows).toFloat())
+                            maskCompositor.apply(canvas, bandBounds, alpha, layer.maskInverted) { paint ->
+                                mask.drawAllDetached(canvas, paint, row)
+                            }
+                        }
+                    },
+                )
+            }
+            val compositor = PreviewCompositor()
+            val compositedLayers = composerLayers()
+            PsdLayerWriter.write(file, width, height, editableLayers,
+                PsdLayerWriter.Raster(Rect(0, 0, width, height)) { band, top, rows ->
+                    validateUnchanged()
+                    compositor.renderBand(band, top, rows, compositedLayers, includePaper = false)
+                })
         }
     }
 
@@ -204,13 +252,17 @@ internal class DocumentExportSnapshot(
     }
 
     private fun staged(extension: String, openDestination: () -> OutputStream, encode: (OutputStream) -> Unit) {
+        stagedFile(extension, openDestination) { file -> FileOutputStream(file).use(encode) }
+    }
+
+    private fun stagedFile(extension: String, openDestination: () -> OutputStream, encode: (File) -> Unit) {
         validateUnchanged()
         check(cacheDirectory.isDirectory || cacheDirectory.mkdirs()) {
             "No se pudo preparar el espacio temporal para exportar."
         }
         val temporary = File.createTempFile("canvas-export-", extension, cacheDirectory)
         try {
-            FileOutputStream(temporary).use(encode)
+            encode(temporary)
             // No destination bytes are released if a stroke/layer changed
             // during PNG encoding, PSD flattening or ORA ZIP construction.
             validateUnchanged()

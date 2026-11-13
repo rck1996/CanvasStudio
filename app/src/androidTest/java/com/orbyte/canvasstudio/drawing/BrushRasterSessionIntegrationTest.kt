@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -32,6 +33,87 @@ class BrushRasterSessionIntegrationTest {
     @Test
     fun charcoalPixelsMatchCommittedDocument() =
         assertBrushMatchesDocument(BrushKind.CHARCOAL)
+
+    @Test
+    fun translucentPigmentRetainsCombinedOpacityAndFlowInTheRaster() {
+        val settings = BrushSettings(
+            kind = BrushKind.INK,
+            color = Color.argb(128, 24, 60, 180),
+            sizePx = 20f,
+            opacity = .5f,
+            flow = .5f,
+            pressureSize = false,
+            pressureOpacity = false,
+            renderProfile = BrushRenderProfile(mode = BrushRenderMode.INTENSE_GLAZE, buildup = 1f),
+        )
+        BrushRasterSession().use { raster ->
+            val bitmap = Bitmap.createBitmap(40, 40, Bitmap.Config.ARGB_8888)
+            try {
+                raster.drawBrushStamp(Canvas(bitmap), 20f, 20f, 1f, 0f, DrawingTool.BRUSH, settings, 0, 0f)
+                assertEquals(32, Color.alpha(bitmap.getPixel(20, 20)))
+                assertEquals(128, Color.alpha(mixPigmentColor(settings.color, Color.RED, .8f)))
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    }
+
+    @Test
+    fun graphiteRespondsToPressureWhileTechnicalInkKeepsItsLine() {
+        val hb = requireNotNull(resolveBuiltInBrush("pencil-hb")).toSettings(Color.BLACK).copy(sizePx = 46f)
+        val technicalInk = requireNotNull(resolveBuiltInBrush("technical-ink")).toSettings(Color.BLACK)
+            .copy(sizePx = 46f)
+        val softGraphite = dabCoverage(hb, .2f)
+        val hardGraphite = dabCoverage(hb, .85f)
+        assertTrue("HB soft mark must be visible: $softGraphite", softGraphite > 0L)
+        assertTrue("HB must deposit more pigment with pressure: $softGraphite vs $hardGraphite",
+            hardGraphite > softGraphite * 2)
+        assertEquals(dabCoverage(technicalInk, .2f), dabCoverage(technicalInk, .85f))
+    }
+
+    @Test
+    fun granulatedWatercolorBuildsCoverageWithoutMakingSoftDabsOpaque() {
+        val brush = requireNotNull(resolveBuiltInBrush("granulated-watercolor")).toSettings(Color.BLACK)
+        fun mark(pressure: Float): Pair<Long, Int> {
+            val bitmap = Bitmap.createBitmap(160, 160, Bitmap.Config.ARGB_8888)
+            try {
+                BrushRasterSession().use {
+                    it.drawBrushStamp(Canvas(bitmap), 80f, 80f, pressure, .10f, DrawingTool.BRUSH, brush, 0, 0f)
+                }
+                val alpha = IntArray(bitmap.width * bitmap.height)
+                bitmap.getPixels(alpha, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                return alpha.sumOf { (it ushr 24).toLong() } to alpha.maxOf { it ushr 24 }
+            } finally {
+                bitmap.recycle()
+            }
+        }
+        val (soft, softPeak) = mark(.28f)
+        val (hard, hardPeak) = mark(.9f)
+        assertTrue("Soft watercolor must show pigment without opaque spots", soft > 0 && softPeak in 1..127)
+        assertTrue("Pressure must increase translucent coverage", hard > soft && hardPeak in softPeak..254)
+    }
+
+    @Test
+    fun transparentPigmentDoesNotLeaveAnArtificialWetOrTexturedMark() {
+        listOf("pencil-hb", "granulated-watercolor", "bristle", "impasto-bristle").forEach { id ->
+            val settings = requireNotNull(resolveBuiltInBrush(id)).toSettings(Color.TRANSPARENT)
+            assertEquals(id, 0L, dabCoverage(settings, .85f))
+        }
+    }
+
+    private fun dabCoverage(settings: BrushSettings, pressure: Float): Long {
+        val bitmap = Bitmap.createBitmap(140, 140, Bitmap.Config.ARGB_8888)
+        try {
+            BrushRasterSession().use { raster ->
+                raster.drawBrushStamp(Canvas(bitmap), 70f, 70f, pressure, 0f, DrawingTool.BRUSH, settings, 0, 0f)
+            }
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            return pixels.sumOf { (it ushr 24).toLong() }
+        } finally {
+            bitmap.recycle()
+        }
+    }
 
     @Test
     fun largeTipsKeepOriginalSpacingWhenDynamicsMakeTheMarkNarrow() {
@@ -136,8 +218,9 @@ class BrushRasterSessionIntegrationTest {
                 1f,
                 0f,
             )
-            assertEquals(Color.RED, first.strokePaint.color)
-            assertEquals(Color.BLUE, second.strokePaint.color)
+            // Paint now retains brush coverage as its alpha, independently of RGB.
+            assertEquals(Color.RED, first.strokePaint.color or 0xFF000000.toInt())
+            assertEquals(Color.BLUE, second.strokePaint.color or 0xFF000000.toInt())
         } finally {
             first.close()
             second.close()

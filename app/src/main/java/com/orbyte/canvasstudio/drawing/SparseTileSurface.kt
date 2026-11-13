@@ -61,6 +61,7 @@ internal class SparseTileSurface(
     private var diskLoads = 0L
     private var residentBytes = 0L
     private val renderDestination = RectF()
+    private val visibleTilePaint = Paint()
     // Tile drawing is serialized by lock; Canvas, clip and bounds stay reusable.
     private val tileCanvasScope = TileCanvasScope()
     // One reusable buffer per active surface: alpha-lock used to allocate and GC a full
@@ -179,19 +180,30 @@ internal class SparseTileSurface(
      */
     fun drawVisible(target: Canvas, visibleBounds: RectF, paint: Paint?) = synchronized(lock) {
         retainedVisibleBounds.set(visibleBounds)
+        if (paint == null) visibleTilePaint.reset() else visibleTilePaint.set(paint)
+        // A shared edge is not the edge of the artwork. HWUI anti-aliases each
+        // bitmap quad separately, so two partial coverages can let paper through
+        // even with opaque tiles. Keep the stored edge pixels and the caller's
+        // blend/opacity, but give each device pixel exactly one tile owner.
+        visibleTilePaint.isAntiAlias = false
+        // Bilinear filtering independently clamps at each tile's edge. Use
+        // one source pixel per sample to match a flattened nearest-pixel view.
+        visibleTilePaint.isFilterBitmap = false
         TileStorage.forEachKeyInBounds(visibleBounds, width, height) { key ->
             val bitmap = cache[key] ?: return@forEachKeyInBounds
             if (bitmap.isRecycled) return@forEachKeyInBounds
             // Inline tile bounds: no Rect allocations during compositing.
             val left = key.column * TileStorage.TILE_SIZE
             val top = key.row * TileStorage.TILE_SIZE
+            // A tile owns only these pixels. Inflating adjacent destinations
+            // blends translucent paint twice at seams and distorts the samples.
             renderDestination.set(
-                left - TILE_EDGE_BLEED_PX,
-                top - TILE_EDGE_BLEED_PX,
-                minOf(width, left + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
-                minOf(height, top + TileStorage.TILE_SIZE) + TILE_EDGE_BLEED_PX,
+                left.toFloat(),
+                top.toFloat(),
+                minOf(width, left + TileStorage.TILE_SIZE).toFloat(),
+                minOf(height, top + TileStorage.TILE_SIZE).toFloat(),
             )
-            target.drawBitmap(bitmap, null, renderDestination, paint)
+            target.drawBitmap(bitmap, null, renderDestination, visibleTilePaint)
         }
     }
 
@@ -285,6 +297,13 @@ internal class SparseTileSurface(
                     snapshot.recycle()
                 }
             }
+        }
+    }
+
+    /** Conservative PSD layer crop, aligned with the occupied tile grid. */
+    internal fun occupiedTileBounds(): Rect = synchronized(lock) {
+        Rect().apply {
+            allCurrentKeys().forEach { key -> union(TileStorage.tileRect(key, width, height)) }
         }
     }
 
@@ -770,6 +789,5 @@ internal class SparseTileSurface(
     private companion object {
         const val MIN_CACHE_BYTES = 1L * 1024L * 1024L
         const val MAX_SELECTION_BYTES = 64L * 1024L * 1024L
-        const val TILE_EDGE_BLEED_PX = 2f
     }
 }

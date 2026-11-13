@@ -64,3 +64,26 @@ Pasaron `check`, `assembleDebug` y `assembleDebugAndroidTest`. En la Tab S8 pasa
 - El runner de tablet exige resultado JUnit exitoso, pruebas ejecutadas y código de proceso cero. Guarda cada ejecución en un directorio de evidencia separado.
 
 En el emulador dedicado, el APK release firmado abrió, creó un proyecto de prueba, aceptó un trazo y reabrió el proyecto desde la galería tras guardar. Se regeneró la pareja APK/AAB para el ajuste de espaciado, se verificaron ambas firmas y el APK actualizado volvió a arrancar. Estas comprobaciones cubren instalación y arranque de la versión minificada.
+
+## Editor centrado en el lienzo
+
+- El editor abre con el panel de Capas cerrado en ambas orientaciones. Su botón en la barra superior abre Capas directamente. Al cambiar el ancho del área de dibujo se conserva el punto central del lienzo, el zoom y la rotación.
+- Los controles de tamaño y opacidad están en una franja inferior propia, fuera del área de dibujo. En anchuras reducidas se conserva el control deslizante y se ocultan los botones de incremento y reducción.
+- La barra lateral conserva acceso directo a Pincel, Borrador, Selección, Transformar y Cuentagotas. Figuras, relleno, degradado y las demás herramientas siguen disponibles en **Más herramientas**.
+- Las capturas de instrumentación usan los márgenes de la aplicación y excluyen las barras del sistema. La prueba del editor compara el ancho con Capas abierto y cerrado y comprueba que los controles de pincel quedan fuera del lienzo.
+
+La revisión compiló con `check`, `assembleDebug` y `assembleDebugAndroidTest`. En la Tab S8 (SM-X700, Android 16) pasaron 19 pruebas enfocadas en horizontal y 2 en vertical, ambas tandas con salida ADB 0. Los registros locales son `app/build/tab-s8-editor-safe-horizontal.log` y `app/build/tab-s8-editor-safe-vertical.log`. Estos resultados corresponden a pruebas dirigidas, no a una nueva certificación de la candidata.
+
+## Máscaras y recortes
+
+- En **Capas → Crear máscara**, el editor cierra el panel y muestra una barra fuera del lienzo con el nombre de la capa. **Ocultar** esconde solo lo que se pinta sobre la máscara. **Recuperar** vuelve a mostrarlo. **Listo** vuelve a pintar sobre la capa normal.
+- **Ver original** es una comparación temporal. No escribe trazos, no cambia la máscara guardada ni afecta a la exportación. **Ver resultado** regresa a la edición. **Usar máscara**, en los ajustes, permite pausarla sin borrarla.
+- Tocar el icono de máscara de otra capa selecciona esa capa antes de editar. El recorte identifica su capa base y se explica como un molde: limita dónde se ve la capa de arriba. No es una máscara pintada sobre esa capa.
+- La prueba del APK firmado en el emulador dedicado creó un lienzo, dibujó, creó una máscara, comparó el resultado, guardó y volvió a abrir el proyecto con su máscara. `apksigner` y `jarsigner` verificaron las firmas; `bundletool validate` verificó la estructura del AAB. Evidencia en `app/build/release-masks-smoke.log` y `app/build/release-mask-bundle-validation.log`.
+- En la Tab S8 pasaron 5 pruebas enfocadas en vertical (4,655 s) y 242 pruebas de la suite estándar en horizontal (219,217 s), incluidas retención de 500 trazos largos mixtos, historial de máscaras y exportación. Ambas ejecuciones terminaron con salida ADB 0. Evidencia en `app/build/tab-s8-masks-vertical.log` y `app/build/tab-s8-masks-full.log`.
+
+## Acceso directo a herramientas de pintura
+
+- El botón del pincel activo abre y cierra la paleta flotante desde la barra superior. La muestra del color activo abre directamente Color; Capas sigue teniendo su propio botón. Abrir Color o Capas cierra la paleta flotante para evitar superponer ambos paneles.
+- En las tabletas más anchas se muestra el nombre del pincel. En tamaños reducidos se conserva su nombre para lectores de pantalla y se dejan más controles solo con iconos. QuickShape y rotación permanecen en **Más opciones** cuando no se muestran en la barra.
+- Con la barra nueva pasaron 20 pruebas enfocadas en horizontal (33,075 s) y 3 en vertical (10,748 s), ambas tandas con salida ADB 0. Se reinstalaron el APK debug y el de instrumentación conservando los datos de la Tab S8. Registros en `app/build/tab-s8-direct-horizontal.log` y `app/build/tab-s8-direct-vertical.log`.

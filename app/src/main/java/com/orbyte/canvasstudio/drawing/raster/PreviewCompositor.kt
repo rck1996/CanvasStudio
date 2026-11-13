@@ -12,6 +12,7 @@ import android.os.Build
 import com.orbyte.canvasstudio.drawing.LayerBlendMode
 import com.orbyte.canvasstudio.drawing.SparseTileSurface
 import com.orbyte.canvasstudio.drawing.TileStorage
+import com.orbyte.canvasstudio.drawing.layerMaskAlpha
 import kotlin.math.max
 import kotlin.math.min
 
@@ -34,6 +35,8 @@ internal class PreviewCompositor {
         val blendMode: LayerBlendMode,
         val clipping: Boolean,
         val maskEnabled: Boolean,
+        val maskStrength: Int = 100,
+        val maskInverted: Boolean = false,
     )
 
     private val layerPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -41,9 +44,7 @@ internal class PreviewCompositor {
     private val clippingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
-    private val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-    }
+    private val maskCompositor = RasterMaskCompositor()
 
     fun render(width: Int, height: Int, layers: List<Layer>, maxSize: Int = 720, includePaper: Boolean = true): Bitmap {
         require(width > 0 && height > 0 && maxSize > 0)
@@ -78,7 +79,8 @@ internal class PreviewCompositor {
     private fun drawLayers(canvas: Canvas, bounds: RectF, layers: List<Layer>, tileRow: Int? = null) {
     layers.forEachIndexed { index, layer ->
         if (!layer.visible) return@forEachIndexed
-        val mask = layer.maskSurface.takeIf { layer.maskEnabled }
+        val maskAlpha = layerMaskAlpha(layer.maskEnabled, layer.maskStrength)
+        val mask = layer.maskSurface.takeIf { maskAlpha != 0 }
         val clippingBase = layers.getOrNull(index - 1).takeIf { layer.clipping }
         if (clippingBase != null && !clippingBase.visible) return@forEachIndexed
         if (mask == null && clippingBase == null) {
@@ -92,16 +94,20 @@ internal class PreviewCompositor {
         try {
             layer.surface.drawAllDetached(canvas, isolatedLayerContentPaint, tileRow)
             if (mask != null) {
-                maskPaint.alpha = 255
-                mask.drawAllDetached(canvas, maskPaint, tileRow)
+                maskCompositor.apply(canvas, bounds, maskAlpha, layer.maskInverted) { paint ->
+                    mask.drawAllDetached(canvas, paint, tileRow)
+                }
             }
             if (clippingBase != null && clippingBase.visible) {
                 clippingPaint.alpha = (clippingBase.opacity * 255f).toInt().coerceIn(0, 255)
                 val maskCheckpoint = canvas.saveLayer(bounds, clippingPaint)
                 try {
                     clippingBase.surface.drawAllDetached(canvas, isolatedLayerContentPaint, tileRow)
-                    if (clippingBase.maskEnabled) {
-                        clippingBase.maskSurface?.drawAllDetached(canvas, maskPaint, tileRow)
+                    clippingBase.maskSurface?.let { baseMask ->
+                        val alpha = layerMaskAlpha(clippingBase.maskEnabled, clippingBase.maskStrength)
+                        maskCompositor.apply(canvas, bounds, alpha, clippingBase.maskInverted) { paint ->
+                            baseMask.drawAllDetached(canvas, paint, tileRow)
+                        }
                     }
                 } finally {
                     canvas.restoreToCount(maskCheckpoint)

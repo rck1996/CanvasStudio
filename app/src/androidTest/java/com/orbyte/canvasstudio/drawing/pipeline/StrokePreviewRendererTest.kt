@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class StrokePreviewRendererTest {
     @Test
-    fun identityFastPathRetainsExactPressureSegmentPixels() {
+    fun identityFastPathMatchesMappedGeometryWithSameBrushDynamics() {
         val optimized = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
         val reference = Bitmap.createBitmap(96, 96, Bitmap.Config.ARGB_8888)
         val settings = BrushSettings(sizePx = 13f, color = Color.BLUE, opacity = .8f)
@@ -31,42 +31,42 @@ class StrokePreviewRendererTest {
                 Canvas(optimized), points, settings,
                 DrawingTool.BRUSH, listOf(Matrix()),
             )
-            val legacyCanvas = Canvas(reference)
-            val legacyMatrix = Matrix()
-            val legacyEndpoints = FloatArray(4)
-            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = settings.color
-                alpha = (settings.opacity.coerceIn(.15f, 1f) * 220f).toInt()
-                style = android.graphics.Paint.Style.STROKE
-                strokeCap = android.graphics.Paint.Cap.ROUND
-                strokeJoin = android.graphics.Paint.Join.ROUND
-            }
-            var previous = points.first()
-            for (index in 1 until points.size) {
-                val current = points[index]
-                legacyEndpoints[0] = previous.x
-                legacyEndpoints[1] = previous.y
-                legacyEndpoints[2] = current.x
-                legacyEndpoints[3] = current.y
-                legacyMatrix.mapPoints(legacyEndpoints)
-                paint.strokeWidth = settings.sizePx *
-                    ((previous.pressure + current.pressure) * 0.5f)
-                        .coerceIn(settings.minSize, 1f)
-                legacyCanvas.drawLine(
-                    legacyEndpoints[0], legacyEndpoints[1],
-                    legacyEndpoints[2], legacyEndpoints[3], paint,
-                )
-                previous = current
-            }
-            for (y in 0 until 96) for (x in 0 until 96) {
-                assertEquals(
-                    "Identity preview regression at $x,$y",
-                    reference.getPixel(x, y), optimized.getPixel(x, y),
-                )
-            }
+            StrokePreviewRenderer().draw(
+                Canvas(reference), points.map { it.copy(x = it.x - 8f, y = it.y + 4f) }, settings,
+                DrawingTool.BRUSH, listOf(Matrix().apply { setTranslate(8f, -4f) }),
+            )
+            assertTrue(optimized.sameAs(reference))
         } finally {
             optimized.recycle()
             reference.recycle()
+        }
+    }
+
+    @Test
+    fun previewHasNoOpacityFloorAndRespectsDisabledSizePressure() {
+        val renderer = StrokePreviewRenderer()
+        val bitmap = Bitmap.createBitmap(128, 64, Bitmap.Config.ARGB_8888)
+        val base = BrushSettings(sizePx = 28f, color = Color.BLUE, pressureSize = false, opacity = 1f)
+        fun sample(pressure: Float, settings: BrushSettings): Pair<Int, Int> {
+            bitmap.eraseColor(Color.TRANSPARENT)
+            val points = listOf(
+                StrokePoint(16f, 32f, pressure, 0f, 0L),
+                StrokePoint(112f, 32f, pressure, 0f, 120L),
+            )
+            renderer.draw(Canvas(bitmap), points, settings, DrawingTool.BRUSH, listOf(Matrix()))
+            return Color.alpha(bitmap.getPixel(64, 32)) to (0 until bitmap.height).count {
+                Color.alpha(bitmap.getPixel(64, it)) > 0
+            }
+        }
+        try {
+            val soft = sample(.12f, base)
+            assertEquals(soft, sample(.95f, base))
+            assertTrue(sample(.12f, base.copy(pressureSize = true)).second < soft.second)
+            val lowFlow = sample(.12f, base.copy(flow = .04f)).first
+            assertTrue(lowFlow in 1 until soft.first / 4)
+            assertEquals(0 to 0, sample(.8f, base.copy(color = Color.TRANSPARENT)))
+        } finally {
+            bitmap.recycle()
         }
     }
 

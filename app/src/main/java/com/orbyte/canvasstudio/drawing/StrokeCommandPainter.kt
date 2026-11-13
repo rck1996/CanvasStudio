@@ -25,11 +25,26 @@ import kotlin.math.min
  */
 internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
     private val documentBounds = RectF()
+    private val expandedDabClip = RectF()
 
-    fun draw(canvas: Canvas, command: StrokeCommand, documentBounds: RectF, pickupColors: IntArray? = null, renderClipBounds: RectF? = null) {
+    fun draw(
+        canvas: Canvas,
+        command: StrokeCommand,
+        documentBounds: RectF,
+        pickupColors: IntArray? = null,
+        renderClipBounds: RectF? = null,
+        distancePlan: Array<DistanceDabSegment?>? = brushes.planDistanceDabs(command),
+    ) {
         this.documentBounds.set(documentBounds)
         val brushExtent = if (renderClipBounds == null) 0f else {
             BrushStrokeGeometry.maximumBrushExtent(command.settings)
+        }
+        val dabCenterBounds = renderClipBounds?.takeIf { distancePlan != null }?.let {
+            val dabExtent = brushExtent + BrushStrokeGeometry.distanceDabClipPadding(command.settings)
+            expandedDabClip.apply {
+                set(it)
+                inset(-dabExtent, -dabExtent)
+            }
         }
         val clipPath = command.clipPoints.takeIf { it.isNotEmpty() }
             ?.let { pathFromPoints(it, close = true) }
@@ -56,6 +71,7 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
                 stampIndex = 0,
                 angleRadians = 0f,
                 orientation = first.orientation,
+                resolvedColor = command.pigmentTrace?.colorAt(0) ?: command.settings.color,
             )
         }
         val segmentCount = (command.points.size - 1).coerceAtLeast(0)
@@ -63,6 +79,17 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
             val from = command.points[index]
             val to = command.points[index + 1]
             if (renderClipBounds != null && !intersectsClip(from, to, brushExtent, renderClipBounds)) {
+                continue
+            }
+            if (distancePlan != null) {
+                distancePlan[index]?.let { segment ->
+                    brushes.drawDistanceDabs(
+                        canvas, from, to, command.settings, segment,
+                        sampledColor = pickupColors?.getOrNull(index),
+                        pigmentColorOverride = command.pigmentTrace?.colorAt(index + 1),
+                        dabCenterBounds = dabCenterBounds,
+                    )
+                }
                 continue
             }
             val progress = (index + 1f) / segmentCount.coerceAtLeast(1).toFloat()
@@ -75,6 +102,7 @@ internal class StrokeCommandPainter(private val brushes: BrushRasterSession) {
                 progress,
                 index,
                 pickupColors?.getOrNull(index),
+                pigmentColorOverride = command.pigmentTrace?.colorAt(index + 1),
             )
         }
         if (clipPath != null && clipSave != null) {
